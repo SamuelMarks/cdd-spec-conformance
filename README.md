@@ -1,7 +1,7 @@
 CDD Spec Conformance Tables
 ===========================
 
-A comprehensive collection of conformance tables designed to ensure your Contract-Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are fully compliant with their respective specifications.
+A comprehensive collection of conformance tables designed to ensure your Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are fully compliant with their respective specifications.
 
 ## Overview
 
@@ -40,17 +40,7 @@ Each table breaks down the specification object-by-object and field-by-field. Yo
 
 ### Legend & Tracking Guide
 
-Each row tracks the completeness of language integration:
-
-*   **To**: Language -> Spec (Generating the document from strongly typed code)
-*   **From**: Spec -> Language (Generating code, interfaces, and methods from the document)
-
-Columns indicate the state of support for each field:
-*   **Presence `[To, From]`**: The object is successfully parsed, validated, utilized, or generated.
-*   **Absence `[To, From]`**: The object is currently unsupported, dropped, or falls back to generic/`any` types.
-*   **Skipped `[To, From]`**: Intentionally ignored because it is irrelevant or unsupported by the target architecture.
-
-Simply mark `[x]` in the appropriate brackets as conformance is achieved.
+Each checklist contains its own specific legend and tracking guide at the top of the file. Simply mark `[x]` in the appropriate brackets as conformance is achieved.
 
 ---
 
