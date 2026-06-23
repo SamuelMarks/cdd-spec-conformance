@@ -27,12 +27,18 @@ We maintain conformance checklists for the following specifications and versions
 
 ## Available Checklists
 
+### Version-Specific Checklists
+
 Inside each version directory, you will find targeted checklists tailored for different types of integrations:
 
 *   **`client-sdk.md`**: Tracking for Client SDK generation (HTTP/Protocol Client + Mocks + Tests).
 *   **`client-sdk-cli.md` / `client-cli.md`**: Tracking for CLI tools generated from the specification.
 *   **`servers.md` / `server-gen.md`**: Tracking for Server-side scaffolding and routing generators.
 *   **Raw Spec Files**: The raw specification markdown for the respective version, kept for reference alongside the tables.
+
+### Architecture & Implementation Checklists
+
+*   **[`mock-server/mock-server-plan.md`](mock-server/mock-server-plan.md)**: An exhaustive, language-agnostic implementation checklist for building an orthogonal, multi-tiered CDD Server. This mandate covers everything from scaffolding Stub DAOs and Concrete ORM interactions to ephemeral database provisioning, fake data seeding, and advanced mock capabilities.
 
 ## How to Use the Tables
 
