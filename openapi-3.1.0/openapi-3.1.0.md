@@ -62,7 +62,7 @@ An OpenAPI definition can then be used by documentation generation tools to disp
 	- [Specification Extensions](#specification-extensions)
 	- [Security Filtering](#security-filtering)
 - [Appendix A: Revision History](#appendix-a-revision-history)
-	
+
 
 <!-- /TOC -->
 
@@ -696,7 +696,7 @@ The following may lead to ambiguous resolution:
     "get": {
       "description": "Returns all pets from the system that the user has access to",
       "responses": {
-        "200": {         
+        "200": {
           "description": "A list of pets.",
           "content": {
             "application/json": {
@@ -837,7 +837,7 @@ parameters:
   schema:
     type: array
     items:
-      type: string 
+      type: string
   style: simple
 ```
 
@@ -2030,14 +2030,14 @@ The presence of a link does not guarantee the caller's ability to successfully i
 
 Unlike _dynamic_ links (i.e. links provided **in** the response payload), the OAS linking mechanism does not require link information in the runtime response.
 
-For computing links, and providing instructions to execute them, a [runtime expression](#runtime-expressions) is used for accessing values in an operation and using them as parameters while invoking the linked operation. 
+For computing links, and providing instructions to execute them, a [runtime expression](#runtime-expressions) is used for accessing values in an operation and using them as parameters while invoking the linked operation.
 
 ##### Fixed Fields
 
 Field Name  |  Type  | Description
 ---|:---:|---
 <a name="linkOperationRef"></a>operationRef | `string` | A relative or absolute URI reference to an OAS operation. This field is mutually exclusive of the `operationId` field, and MUST point to an [Operation Object](#operation-object). Relative `operationRef` values MAY be used to locate an existing [Operation Object](#operation-object) in the OpenAPI definition. See the rules for resolving [Relative References](#relative-references-in-uris).
-<a name="linkOperationId"></a>operationId  | `string` | The name of an _existing_, resolvable OAS operation, as defined with a unique `operationId`.  This field is mutually exclusive of the `operationRef` field. 
+<a name="linkOperationId"></a>operationId  | `string` | The name of an _existing_, resolvable OAS operation, as defined with a unique `operationId`.  This field is mutually exclusive of the `operationRef` field.
 <a name="linkParameters"></a>parameters   | Map[`string`, Any \| [{expression}](#runtime-expressions)] | A map representing parameters to pass to an operation as specified with `operationId` or identified via `operationRef`. The key is the parameter name to be used, whereas the value can be a constant or an expression to be evaluated and passed to the linked operation.  The parameter name can be qualified using the [parameter location](#parameterIn) `[{in}.]{name}` for operations that use the same parameter name in different locations (e.g. path.id).
 <a name="linkRequestBody"></a>requestBody | Any \| [{expression}](#runtime-expressions) | A literal value or [{expression}](#runtime-expressions) to use as a request body when calling the target operation.
 <a name="linkDescription"></a>description  | `string` | A description of the link. [CommonMark syntax](https://spec.commonmark.org/) MAY be used for rich text representation.
@@ -2158,7 +2158,7 @@ The runtime expression is defined by the following [ABNF](https://tools.ietf.org
       expression = ( "$url" / "$method" / "$statusCode" / "$request." source / "$response." source )
       source = ( header-reference / query-reference / path-reference / body-reference )
       header-reference = "header." token
-      query-reference = "query." name 
+      query-reference = "query." name
       path-reference = "path." name
       body-reference = "body" ["#" json-pointer ]
       json-pointer    = *( "/" reference-token )
@@ -2184,10 +2184,10 @@ The table below provides examples of runtime expressions and examples of their u
 Source Location | example expression  | notes
 ---|:---|:---|
 HTTP Method            | `$method`         | The allowable values for the `$method` will be those for the HTTP operation.
-Requested media type | `$request.header.accept`        | 
+Requested media type | `$request.header.accept`        |
 Request parameter      | `$request.path.id`        | Request parameters MUST be declared in the `parameters` section of the parent operation or they cannot be evaluated. This includes request headers.
 Request body property   | `$request.body#/user/uuid`   | In operations which accept payloads, references may be made to portions of the `requestBody` or the entire body.
-Request URL            | `$url`            | 
+Request URL            | `$url`            |
 Response value         | `$response.body#/status`       |  In operations which return payloads, references may be made to portions of the response body or the entire body.
 Response header        | `$response.header.Server` |  Single header values only are available
 

@@ -1,0 +1,23 @@
+- id: cdd-conformance-check
+  name: Confirm CDD Specification Conformance
+  description: Validates checklists and verifies implemented standards for the repository
+  entry: cdd-conformance check
+  language: rust
+  files: ^(conformance/|compliance-|mcp-|mock-server|COMPLIANCE\.md|\.cdd-conformance\.ya?ml)
+  pass_filenames: false
+
+- id: cdd-conformance-claims
+  name: Verify COMPLIANCE.md Claims
+  description: Verifies documented claims in COMPLIANCE.md against checklist ground truth
+  entry: cdd-conformance check --claims-only
+  language: rust
+  files: ^(COMPLIANCE\.md)
+  pass_filenames: false
+
+- id: cdd-conformance-matrix
+  name: Update Ecosystem Conformance Matrix in README.md
+  description: Scans ecosystem repositories and updates the conformance matrix table in README.md
+  entry: python3 scripts/update_readme_matrix.py
+  language: system
+  files: ^(README\.md|conformance/|compliance-|mcp-|mock-server)
+  pass_filenames: false

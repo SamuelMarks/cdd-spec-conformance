@@ -1,0 +1,76 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+        exclude: \.(bat|cmd|ps1)$
+
+  - repo: local
+    hooks:
+      # 1. Format: Auto-code-format fix, then recheck formatting
+      - id: cargo-fmt-fix
+        name: cargo fmt (auto-format fix)
+        entry: cargo fmt
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-fmt-check
+        name: cargo fmt (check formatting)
+        entry: cargo fmt -- --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 2. Build
+      - id: cargo-build
+        name: cargo build
+        entry: cargo build --workspace --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 3. Lint
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 4. Test
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 5. Add / Update Doc and Test Coverage Badges in README.md
+      - id: update-coverage
+        name: Update '% doc coverage' and '% test coverage' Badges
+        entry: python3 scripts/update_coverage.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 6. Conformance Check
+      - id: cdd-conformance-check
+        name: Confirm CDD Specification Conformance
+        entry: cargo run -- check --path .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # 7. Update Ecosystem Conformance Matrix in README.md
+      - id: update-readme-matrix
+        name: Update Ecosystem Conformance Matrix in README.md
+        entry: python3 scripts/update_readme_matrix.py
+        language: system
+        pass_filenames: false
+        always_run: true
