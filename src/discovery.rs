@@ -2,7 +2,7 @@
 
 use crate::config::ProjectConfig;
 use crate::error::ConformanceError;
-use crate::model::{ChecklistTable, ProfileKind, SpecId};
+use crate::model::{ChecklistTable, FilenamePriority, ProfileKind, SpecId};
 use crate::parser::markdown::parse_checklist;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -24,18 +24,18 @@ pub const TARGET_ECOSYSTEM_REPOS: &[&str] = &[
     "cdd-ts",
 ];
 
-/// Returns a priority rank for a checklist filename (lower rank = higher priority).
+/// Returns the deduplication priority tier for a checklist filename.
+///
+/// # Arguments
+///
+/// * `path` - Path to the checklist file.
+///
+/// # Returns
+///
+/// A strongly typed `FilenamePriority` (where `Canonical < LegacyClientCli < ... < Fallback`).
 #[must_use]
-pub fn profile_filename_priority(path: &Path) -> u32 {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    match name {
-        "client-sdk.md" | "client-sdk-cli.md" | "servers.md" | "mock-server-plan.md" => 1,
-        "client-cli.md" => 2,
-        "sdk-gen.md" => 3,
-        "cli-gen.md" => 4,
-        "server-gen.md" => 5,
-        _ => 10,
-    }
+pub fn profile_filename_priority(path: &Path) -> FilenamePriority {
+    ProfileKind::filename_priority(path)
 }
 
 /// A discovered specification checklist file located in a project.
@@ -86,7 +86,7 @@ impl DiscoveredProject {
     ///
     /// Returns `ConformanceError` if parsing any checklist fails.
     pub fn parse_all_checklists(&self) -> Result<Vec<ChecklistTable>, ConformanceError> {
-        let mut tables = Vec::new();
+        let mut tables = Vec::with_capacity(self.checklists.len());
         for item in &self.checklists {
             tables.push(item.parse()?);
         }
@@ -94,14 +94,40 @@ impl DiscoveredProject {
     }
 }
 
+/// Checks whether a directory name represents a build or VCS folder that should be skipped.
+fn is_ignored_dir(name: &str) -> bool {
+    name.starts_with('.') || matches!(name, "target" | "node_modules" | "build" | "bin")
+}
+
+/// Collects candidate specification directories from a base directory.
+fn collect_spec_dirs(base_dir: &Path, out: &mut Vec<PathBuf>) {
+    if !base_dir.is_dir() {
+        return;
+    }
+    out.push(base_dir.to_path_buf());
+    for entry in std::fs::read_dir(base_dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !is_ignored_dir(name) {
+                out.push(path);
+            }
+        }
+    }
+}
+
 /// Scans a repository directory to discover its target specifications and checklists.
 ///
-/// Supports standard (`conformance/`), root (`openapi-3.2.0/`), and legacy
-/// (`compliance-openapi-3-2-0/`, `mock-server-spec/`) layout conventions.
+/// Supports custom `paths.conformance_dir` from `.cdd-conformance.yaml`, standard (`conformance/`),
+/// root (`openapi-3.2.0/`), and legacy (`compliance-openapi-3-2-0/`, `mock-server-spec/`) conventions.
+///
+/// # Arguments
+///
+/// * `repo_path` - Path to the repository root directory.
 ///
 /// # Errors
 ///
-/// Returns `ConformanceError` if filesystem traversal fails.
+/// Returns `ConformanceError` if filesystem traversal or configuration loading fails.
 pub fn scan_repository(repo_path: &Path) -> Result<DiscoveredProject, ConformanceError> {
     let canonical_repo = repo_path.canonicalize().map_err(|e| ConformanceError::Io {
         source: e,
@@ -119,53 +145,30 @@ pub fn scan_repository(repo_path: &Path) -> Result<DiscoveredProject, Conformanc
 
     let config = ProjectConfig::find_and_load(&canonical_repo)?;
     let compliance_file = {
-        let default_compliance = canonical_repo.join("COMPLIANCE.md");
-        if default_compliance.is_file() {
-            Some(default_compliance)
-        } else if let Some(ref cfg) = config {
-            let custom = cfg.resolve_compliance_file(&canonical_repo);
-            if custom.is_file() {
-                Some(custom)
-            } else {
-                None
-            }
+        let candidate = config.as_ref().map_or_else(
+            || canonical_repo.join("COMPLIANCE.md"),
+            |cfg| cfg.resolve_compliance_file(&canonical_repo),
+        );
+        if candidate.is_file() {
+            Some(candidate)
         } else {
-            None
+            let fallback = canonical_repo.join("COMPLIANCE.md");
+            fallback.is_file().then_some(fallback)
         }
     };
 
-    let mut checklists = Vec::new();
-    let mut searched_paths = vec![canonical_repo.clone(), canonical_repo.join("conformance")];
-
-    // Read top-level directories to find spec folders
-    if let Ok(entries) = std::fs::read_dir(&canonical_repo) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                // Ignore build and VCS dirs
-                if name.starts_with('.')
-                    || name == "target"
-                    || name == "node_modules"
-                    || name == "build"
-                    || name == "bin"
-                {
-                    continue;
-                }
-                searched_paths.push(path);
-            }
-        }
+    let mut searched_paths = Vec::new();
+    if let Some(ref cfg) = config {
+        let resolved_conf = cfg.resolve_conformance_dir(&canonical_repo);
+        collect_spec_dirs(&resolved_conf, &mut searched_paths);
     }
+    collect_spec_dirs(&canonical_repo, &mut searched_paths);
+    collect_spec_dirs(&canonical_repo.join("conformance"), &mut searched_paths);
 
+    let mut checklists = Vec::new();
     for dir in searched_paths {
-        if !dir.is_dir() {
-            continue;
-        }
-
         let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        // Check if directory matches a known specification (canonical or legacy)
-        if let Some(spec_id) = resolve_spec_dir(dir_name) {
+        if let Some(spec_id) = SpecId::from_dir_name(dir_name) {
             scan_spec_dir(&dir, spec_id, &mut checklists);
         }
     }
@@ -194,191 +197,154 @@ pub fn scan_repository(repo_path: &Path) -> Result<DiscoveredProject, Conformanc
     })
 }
 
-/// Resolves a directory name into an optional strongly typed `SpecId`.
-fn resolve_spec_dir(dir_name: &str) -> Option<SpecId> {
-    let lower = dir_name.to_lowercase().replace('_', "-");
-    match lower.as_str() {
-        "openapi-3.2.0" | "openapi-3-2-0" | "compliance-openapi-3-2-0" => Some(SpecId::OpenApi320),
-        "openapi-3.1.1" | "openapi-3-1-1" | "compliance-openapi-3-1-1" => Some(SpecId::OpenApi311),
-        "openapi-3.1.0" | "openapi-3-1-0" | "compliance-openapi-3-1-0" => Some(SpecId::OpenApi310),
-        "openapi-3.0.0" | "openapi-3-0-0" | "compliance-openapi-3-0-0" => Some(SpecId::OpenApi300),
-        "swagger-2.0" | "swagger-2-0" | "compliance-swagger-2.0" | "compliance-swagger-2-0" => {
-            Some(SpecId::Swagger20)
-        }
-        "arazzo-1.1.0" | "arazzo-1-1-0" | "arazzo" | "compliance-arazzo-1-1-0" => {
-            Some(SpecId::Arazzo110)
-        }
-        "mcp-1.0.0" | "mcp-1-0-0" | "mcp" => Some(SpecId::Mcp100),
-        "mcp-2026-07-28" | "mcp-20260728" => Some(SpecId::Mcp20260728),
-        "mock-server" | "mock-server-spec" => Some(SpecId::MockServer),
-        _ => None,
-    }
-}
-
 /// Scans a specification directory for standard and legacy profile markdown files.
 fn scan_spec_dir(dir: &Path, spec_id: SpecId, checklists: &mut Vec<DiscoveredChecklist>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if let Ok(profile) = ProfileKind::from_str(filename) {
-                    checklists.push(DiscoveredChecklist {
-                        spec_id,
-                        profile,
-                        path: path.clone(),
-                    });
-                }
-            } else if path.is_dir() && spec_id == SpecId::MockServer {
-                // Check nested mock-server/mock-server-plan.md
-                let nested = path.join("mock-server-plan.md");
-                if nested.is_file() {
-                    checklists.push(DiscoveredChecklist {
-                        spec_id,
-                        profile: ProfileKind::MockServerPlan,
-                        path: nested,
-                    });
-                }
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Ok(profile) = ProfileKind::from_str(filename) {
+                checklists.push(DiscoveredChecklist {
+                    spec_id,
+                    profile,
+                    path: path.clone(),
+                });
+            }
+        } else if path.is_dir() && spec_id == SpecId::MockServer {
+            let nested = path.join("mock-server-plan.md");
+            if nested.is_file() {
+                checklists.push(DiscoveredChecklist {
+                    spec_id,
+                    profile: ProfileKind::MockServerPlan,
+                    path: nested,
+                });
             }
         }
     }
 }
 
+/// Checks whether a directory name in a parent workspace is a valid CDD language repository.
+fn is_candidate_cdd_repo_name(name: &str) -> bool {
+    name.starts_with("cdd-")
+        && !name.ends_with("_bak")
+        && !name.ends_with("-OLD")
+        && !name.ends_with("-og")
+        && name != "cdd-spec-conformance"
+        && name != "cdd-openapi-test-harness"
+}
+
 /// Scans a parent directory containing multiple language repositories (e.g. `../cdd-*`).
+///
+/// # Arguments
+///
+/// * `parent_dir` - Parent directory containing `cdd-*` language repositories.
 ///
 /// # Errors
 ///
-/// Returns `ConformanceError` if directory scanning fails.
+/// Returns `ConformanceError` if directory reading or scanning a candidate repository fails.
 pub fn scan_all_repositories(
     parent_dir: &Path,
 ) -> Result<Vec<DiscoveredProject>, ConformanceError> {
-    let mut projects = Vec::new();
+    let entries = std::fs::read_dir(parent_dir).map_err(|e| ConformanceError::Io {
+        source: e,
+        path: parent_dir.to_path_buf(),
+    })?;
 
     let has_target_repos = TARGET_ECOSYSTEM_REPOS
         .iter()
         .any(|name| parent_dir.join(name).is_dir());
 
-    if has_target_repos {
-        for name in TARGET_ECOSYSTEM_REPOS {
-            let path = parent_dir.join(name);
-            if path.is_dir() {
-                if let Ok(project) = scan_repository(&path) {
-                    if !projects
-                        .iter()
-                        .any(|p: &DiscoveredProject| p.root == project.root)
-                    {
-                        projects.push(project);
+    let candidate_paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+                    if has_target_repos {
+                        TARGET_ECOSYSTEM_REPOS.contains(&name)
+                    } else {
+                        is_candidate_cdd_repo_name(name)
                     }
-                }
-            }
-        }
-    } else {
-        let entries = std::fs::read_dir(parent_dir).map_err(|e| ConformanceError::Io {
-            source: e,
-            path: parent_dir.to_path_buf(),
-        })?;
+                })
+        })
+        .collect();
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with("cdd-")
-                    && !name.ends_with("_bak")
-                    && !name.ends_with("-OLD")
-                    && !name.ends_with("-og")
-                    && name != "cdd-spec-conformance"
-                    && name != "cdd-openapi-test-harness"
-                {
-                    if let Ok(project) = scan_repository(&path) {
-                        if !projects
-                            .iter()
-                            .any(|p: &DiscoveredProject| p.root == project.root)
-                        {
-                            projects.push(project);
-                        }
-                    }
-                }
-            }
-        }
+    let mut projects: Vec<DiscoveredProject> = Vec::new();
+    for path in candidate_paths {
+        projects.push(scan_repository(&path)?);
     }
 
     projects.sort_by(|a, b| a.language_name.cmp(&b.language_name));
+    projects.dedup_by(|a, b| a.root == b.root);
     Ok(projects)
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::assert_is_empty)]
 mod tests {
     use super::*;
-    use std::fs::{create_dir_all, File};
-    use std::io::Write;
-    use tempfile::tempdir;
+    use std::fs::create_dir_all;
 
     #[test]
     fn test_scan_repository_standard_and_legacy() {
-        let tmp = tempdir().unwrap_or_else(|_| panic!("Failed to create tempdir"));
-        let repo_root = tmp.path().join("cdd-rust");
-        create_dir_all(&repo_root).unwrap_or_default();
+        let base_dir = std::env::temp_dir().join("cdd_discovery_test_1");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let repo_root = base_dir.join("cdd-rust");
+        let _ = create_dir_all(&repo_root);
 
-        // Create COMPLIANCE.md
-        let mut comp = File::create(repo_root.join("COMPLIANCE.md"))
-            .unwrap_or_else(|_| panic!("Failed to create file"));
-        let _ = comp.write_all(
-            b"# Compliance
-",
-        );
+        let _ = std::fs::write(repo_root.join("COMPLIANCE.md"), b"# Compliance\n");
 
-        // Create legacy compliance-openapi-3-2-0 directory
         let oas_dir = repo_root.join("compliance-openapi-3-2-0");
-        create_dir_all(&oas_dir).unwrap_or_default();
-        let mut oas_file = File::create(oas_dir.join("client-sdk.md"))
-            .unwrap_or_else(|_| panic!("Failed to create file"));
-        let _ = oas_file.write_all(
+        let _ = create_dir_all(&oas_dir);
+        let _ = std::fs::write(
+            oas_dir.join("client-sdk.md"),
             b"# OpenAPI 3.2.0 Conformance\n| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| :--- | :---: | :---: | :---: | :--- |\n| Info Object | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Notes |\n",
         );
 
-        // Create duplicate legacy sdk-gen.md to trigger profile priority deduplication
-        let mut oas_dup = File::create(oas_dir.join("sdk-gen.md"))
-            .unwrap_or_else(|_| panic!("Failed to create file"));
-        let _ = oas_dup.write_all(
+        let _ = std::fs::write(
+            oas_dir.join("sdk-gen.md"),
             b"# OpenAPI 3.2.0 Dup\n| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| :--- | :---: | :---: | :---: | :--- |\n| Info Object | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Notes |\n",
         );
 
-        // Create legacy mock-server-spec directory
         let mock_dir = repo_root.join("mock-server-spec");
-        create_dir_all(&mock_dir).unwrap_or_default();
-        let mut mock_file = File::create(mock_dir.join("mock-server-plan.md"))
-            .unwrap_or_else(|_| panic!("Failed to create file"));
-        let _ = mock_file.write_all(
-            b"# Mock Server Plan
-- [x] Task 1
-",
+        let _ = create_dir_all(&mock_dir);
+        let _ = std::fs::write(
+            mock_dir.join("mock-server-plan.md"),
+            b"# Mock Server Plan\n- [x] Task 1\n",
         );
 
-        let project = scan_repository(&repo_root);
-        assert!(project.is_ok());
-        let proj = project.unwrap_or_else(|_| panic!("Failed to scan"));
-        assert_eq!(proj.language_name, "rust");
-        assert!(proj.compliance_file.is_some());
-        assert_eq!(proj.checklists.len(), 2);
+        let proj_res = scan_repository(&repo_root);
+        assert!(proj_res.is_ok_and(|proj| {
+            assert_eq!(proj.language_name, "rust");
+            assert!(proj.compliance_file.is_some());
+            assert_eq!(proj.checklists.len(), 2);
+            let tables = proj.parse_all_checklists().ok();
+            tables.map(|t| t.len()) == Some(2)
+        }));
 
-        let parsed = proj.parse_all_checklists();
-        assert!(parsed.is_ok());
-        let tables = parsed.unwrap_or_default();
-        assert_eq!(tables.len(), 2);
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&repo_root, base_dir.join("cdd-c"));
+        }
 
-        // Test scan_all_repositories
-        let all = scan_all_repositories(tmp.path());
-        assert!(all.is_ok());
-        let projects = all.unwrap_or_default();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].language_name, "rust");
+        let projects = scan_all_repositories(&base_dir).ok();
+        assert_eq!(projects.map(|p| p.len()), Some(1));
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
     fn test_discovery_error_paths() {
         assert!(scan_repository(Path::new("nonexistent-dir-12345")).is_err());
         assert!(scan_all_repositories(Path::new("nonexistent-parent-dir-12345")).is_err());
+
+        // Test scan_repository and scan_all_repositories when .cdd-conformance.yaml is invalid
+        let bad_parent = std::env::temp_dir().join("cdd_discovery_bad_parent");
+        let _ = std::fs::remove_dir_all(&bad_parent);
+        let bad_repo = bad_parent.join("cdd-broken");
+        let _ = create_dir_all(&bad_repo);
+        let _ = std::fs::write(bad_repo.join(".cdd-conformance.yaml"), b": invalid yaml :");
+        assert!(scan_repository(&bad_repo).is_err());
+        assert!(scan_all_repositories(&bad_parent).is_err());
+        let _ = std::fs::remove_dir_all(&bad_parent);
 
         let fake_checklist = DiscoveredChecklist {
             spec_id: SpecId::OpenApi320,
@@ -400,106 +366,136 @@ mod tests {
     #[test]
     fn test_discovery_spec_dir_variants_and_priority() {
         assert_eq!(
-            resolve_spec_dir("compliance-openapi-3-1-1"),
+            SpecId::from_dir_name("compliance-openapi-3-1-1"),
             Some(SpecId::OpenApi311)
         );
         assert_eq!(
-            resolve_spec_dir("compliance-openapi-3-1-0"),
+            SpecId::from_dir_name("compliance-openapi-3-1-0"),
             Some(SpecId::OpenApi310)
         );
         assert_eq!(
-            resolve_spec_dir("compliance-openapi-3-0-0"),
+            SpecId::from_dir_name("compliance-openapi-3-0-0"),
             Some(SpecId::OpenApi300)
         );
         assert_eq!(
-            resolve_spec_dir("compliance-swagger-2-0"),
+            SpecId::from_dir_name("compliance-swagger-2-0"),
             Some(SpecId::Swagger20)
         );
         assert_eq!(
-            resolve_spec_dir("compliance-arazzo-1-1-0"),
+            SpecId::from_dir_name("compliance-arazzo-1-1-0"),
             Some(SpecId::Arazzo110)
         );
         assert_eq!(
-            resolve_spec_dir("mcp-2026-07-28"),
+            SpecId::from_dir_name("mcp-2026-07-28"),
             Some(SpecId::Mcp20260728)
         );
-        assert_eq!(resolve_spec_dir("unknown-folder"), None);
+        assert_eq!(SpecId::from_dir_name("unknown-folder"), None);
 
-        assert_eq!(profile_filename_priority(Path::new("client-sdk.md")), 1);
-        assert_eq!(profile_filename_priority(Path::new("client-cli.md")), 2);
-        assert_eq!(profile_filename_priority(Path::new("sdk-gen.md")), 3);
-        assert_eq!(profile_filename_priority(Path::new("cli-gen.md")), 4);
-        assert_eq!(profile_filename_priority(Path::new("server-gen.md")), 5);
-        assert_eq!(profile_filename_priority(Path::new("random.txt")), 10);
+        assert_eq!(
+            profile_filename_priority(Path::new("client-sdk.md")),
+            FilenamePriority::Canonical
+        );
+        assert_eq!(
+            profile_filename_priority(Path::new("client-cli.md")),
+            FilenamePriority::LegacyClientCli
+        );
+        assert_eq!(
+            profile_filename_priority(Path::new("sdk-gen.md")),
+            FilenamePriority::LegacySdkGen
+        );
+        assert_eq!(
+            profile_filename_priority(Path::new("cli-gen.md")),
+            FilenamePriority::LegacyCliGen
+        );
+        assert_eq!(
+            profile_filename_priority(Path::new("server-gen.md")),
+            FilenamePriority::LegacyServerGen
+        );
+        assert_eq!(
+            profile_filename_priority(Path::new("random.txt")),
+            FilenamePriority::Fallback
+        );
     }
 
     #[test]
-    fn test_scan_nested_mock_server_and_ignored_dirs() -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = tempdir()?;
-        let repo_root = tmp.path().join("cdd-custom");
-        create_dir_all(&repo_root)?;
+    fn test_scan_nested_mock_server_and_custom_config_paths() {
+        let base_dir = std::env::temp_dir().join("cdd_discovery_test_2");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let repo_root = base_dir.join("cdd-custom");
+        let _ = create_dir_all(&repo_root);
 
-        // Create ignored directories
-        create_dir_all(repo_root.join(".git"))?;
-        create_dir_all(repo_root.join("target"))?;
-        create_dir_all(repo_root.join("node_modules"))?;
+        let _ = create_dir_all(repo_root.join(".git"));
+        let _ = create_dir_all(repo_root.join("target"));
+        let _ = create_dir_all(repo_root.join("node_modules"));
 
-        // Create nested mock-server/mock-server-plan.md
         let mock_dir = repo_root.join("mock-server").join("nested");
-        create_dir_all(&mock_dir)?;
-        let mut mock_file = File::create(mock_dir.join("mock-server-plan.md"))?;
-        mock_file.write_all(b"# Plan\n- [x] Item\n")?;
+        let _ = create_dir_all(&mock_dir);
+        let _ = std::fs::write(
+            mock_dir.join("mock-server-plan.md"),
+            b"# Plan\n- [x] Item\n",
+        );
 
-        // Create custom config pointing to custom compliance file
-        let mut cfg_file = File::create(repo_root.join(".cdd-conformance.yaml"))?;
-        cfg_file.write_all(b"paths:\n  compliance_file: 'MY_DOCS.md'\n")?;
+        // Custom conformance_dir and custom compliance_file that overrides root COMPLIANCE.md
+        let custom_conf_spec = repo_root.join("custom-conf").join("swagger-2.0");
+        let _ = create_dir_all(&custom_conf_spec);
+        let _ = std::fs::write(
+            custom_conf_spec.join("servers.md"),
+            b"# Swagger 2.0\n| Object / Feature | Presence |\n| --- | --- |\n| Info | [x] |\n",
+        );
 
-        let mut my_docs = File::create(repo_root.join("MY_DOCS.md"))?;
-        my_docs.write_all(b"# Docs\n")?;
+        let _ = std::fs::write(
+            repo_root.join(".cdd-conformance.yaml"),
+            b"paths:\n  conformance_dir: 'custom-conf'\n  compliance_file: 'MY_DOCS.md'\n",
+        );
 
-        let proj = scan_repository(&repo_root)?;
-        assert_eq!(proj.language_name, "custom");
-        assert!(proj.compliance_file.is_some());
-        assert_eq!(proj.checklists.len(), 1);
-        Ok(())
+        let _ = std::fs::write(repo_root.join("COMPLIANCE.md"), b"# Root Docs\n");
+        let _ = std::fs::write(repo_root.join("MY_DOCS.md"), b"# Custom Docs\n");
+
+        let proj_res = scan_repository(&repo_root);
+        assert!(proj_res.is_ok_and(|proj| {
+            assert_eq!(proj.language_name, "custom");
+            assert!(proj
+                .compliance_file
+                .as_ref()
+                .is_some_and(|p| p.ends_with("MY_DOCS.md")));
+            proj.checklists.len() == 2
+        }));
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
-    fn test_scan_all_non_target_repos_and_empty_compliance(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = tempdir()?;
-        let parent = tmp.path();
+    fn test_scan_all_non_target_repos_and_empty_compliance() {
+        let parent = std::env::temp_dir().join("cdd_discovery_test_3");
+        let _ = std::fs::remove_dir_all(&parent);
 
-        // Create cdd-other (not in TARGET_ECOSYSTEM_REPOS)
         let other_repo = parent.join("cdd-other");
-        create_dir_all(&other_repo)?;
+        let _ = create_dir_all(&other_repo);
 
-        // Create cdd-other_bak (should be filtered out by ends_with _bak)
         let bak_repo = parent.join("cdd-other_bak");
-        create_dir_all(&bak_repo)?;
+        let _ = create_dir_all(&bak_repo);
 
-        // Create cdd-spec-conformance and cdd-openapi-test-harness (filtered out)
-        create_dir_all(parent.join("cdd-spec-conformance"))?;
-        create_dir_all(parent.join("cdd-openapi-test-harness"))?;
+        let _ = create_dir_all(parent.join("cdd-spec-conformance"));
+        let _ = create_dir_all(parent.join("cdd-openapi-test-harness"));
 
-        // Config with nonexistent compliance file -> returns None for compliance_file
-        let mut cfg_file = File::create(other_repo.join(".cdd-conformance.yaml"))?;
-        cfg_file.write_all(b"paths:\n  compliance_file: 'NONEXISTENT.md'\n")?;
+        let _ = std::fs::write(
+            other_repo.join(".cdd-conformance.yaml"),
+            b"paths:\n  conformance_dir: 'NONEXISTENT_CONF_DIR'\n  compliance_file: 'NONEXISTENT.md'\n",
+        );
 
-        // Mock-server with empty subdirectory (nested.is_file() == false)
         let empty_mock_sub = other_repo.join("mock-server").join("empty_sub");
-        create_dir_all(&empty_mock_sub)?;
+        let _ = create_dir_all(&empty_mock_sub);
 
-        // Create cdd-other2 (another valid non-target repo)
         let other_repo2 = parent.join("cdd-other2");
-        create_dir_all(&other_repo2)?;
+        let _ = create_dir_all(&other_repo2);
 
-        let projects = scan_all_repositories(parent)?;
-        assert_eq!(projects.len(), 2);
-        assert_eq!(projects[0].language_name, "other");
-        assert_eq!(projects[1].language_name, "other2");
-        assert!(projects[0].compliance_file.is_none());
-        assert!(projects[0].checklists.is_empty());
-        Ok(())
+        let projects_res = scan_all_repositories(&parent);
+        assert!(projects_res.is_ok_and(|projects| {
+            assert_eq!(projects.len(), 2);
+            assert_eq!(projects[0].language_name, "other");
+            assert_eq!(projects[1].language_name, "other2");
+            assert!(projects[0].compliance_file.is_none());
+            projects[0].checklists.is_empty()
+        }));
+        let _ = std::fs::remove_dir_all(&parent);
     }
 }

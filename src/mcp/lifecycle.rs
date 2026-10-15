@@ -29,7 +29,7 @@ pub struct ClientCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
-    /// Protocol version requested by client (e.g. "2024-11-05" or "2026-07-28").
+    /// Protocol version requested by client (e.g. `"2024-11-05"` or `"2026-07-28"`).
     pub protocol_version: String,
     /// Declared client capabilities.
     pub capabilities: ClientCapabilities,
@@ -41,7 +41,7 @@ pub struct InitializeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolsCapability {
-    /// Whether the server emits listChanged notifications.
+    /// Whether the server emits `listChanged` notifications.
     #[serde(default)]
     pub list_changed: bool,
 }
@@ -53,7 +53,7 @@ pub struct ResourcesCapability {
     /// Whether the server supports subscription notifications.
     #[serde(default)]
     pub subscribe: bool,
-    /// Whether the server emits listChanged notifications.
+    /// Whether the server emits `listChanged` notifications.
     #[serde(default)]
     pub list_changed: bool,
 }
@@ -62,7 +62,7 @@ pub struct ResourcesCapability {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptsCapability {
-    /// Whether the server emits listChanged notifications.
+    /// Whether the server emits `listChanged` notifications.
     #[serde(default)]
     pub list_changed: bool,
 }
@@ -102,9 +102,16 @@ pub struct InitializeResult {
 
 impl InitializeResult {
     /// Constructs default server initialization result supporting MCP 1.0.0 and 2026-07-28.
+    ///
+    /// # Arguments
+    ///
+    /// * `requested_version` - Protocol version string requested by the client.
+    ///
+    /// # Returns
+    ///
+    /// Negotiated `InitializeResult` containing server capabilities and crate version metadata.
     #[must_use]
     pub fn new(requested_version: &str) -> Self {
-        // Negotiate protocol version
         let version = if requested_version == "2026-07-28" {
             "2026-07-28".to_string()
         } else {
@@ -125,8 +132,8 @@ impl InitializeResult {
                 logging: Some(LoggingCapability {}),
             },
             server_info: Implementation {
-                name: "cdd-conformance".to_string(),
-                version: "0.1.0".to_string(),
+                name: env!("CARGO_PKG_NAME").to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
             },
         }
     }
@@ -141,6 +148,7 @@ mod tests {
         let res_old = InitializeResult::new("2024-11-05");
         assert_eq!(res_old.protocol_version, "2024-11-05");
         assert!(res_old.capabilities.tools.is_some());
+        assert_eq!(res_old.server_info.version, env!("CARGO_PKG_VERSION"));
 
         let res_new = InitializeResult::new("2026-07-28");
         assert_eq!(res_new.protocol_version, "2026-07-28");

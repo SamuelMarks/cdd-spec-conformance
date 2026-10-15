@@ -2,6 +2,17 @@
 
 use crate::error::ConformanceError;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Parameter payload for `prompts/get`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetPromptParams {
+    /// Name of the prompt template to retrieve.
+    pub name: String,
+    /// Optional key-value map of template arguments.
+    #[serde(default)]
+    pub arguments: Option<HashMap<String, String>>,
+}
 
 /// Role of an authored message in a prompt sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +73,10 @@ pub struct GetPromptResult {
 }
 
 /// Lists all prompt templates exposed by the server.
+///
+/// # Returns
+///
+/// A `ListPromptsResult` containing all available prompt templates.
 #[must_use]
 pub fn list_prompts() -> ListPromptsResult {
     ListPromptsResult {
@@ -102,29 +117,29 @@ pub fn list_prompts() -> ListPromptsResult {
     }
 }
 
-/// Retrieves and formats an instantiated prompt template.
+/// Retrieves and formats an instantiated prompt template using strongly typed `GetPromptParams`.
+///
+/// # Arguments
+///
+/// * `params` - Strongly typed `GetPromptParams` containing prompt name and string arguments.
 ///
 /// # Errors
 ///
 /// Returns `ConformanceError::JsonRpcMethodNotFound` if the prompt does not exist.
-pub fn get_prompt(
-    name: &str,
-    arguments: Option<&serde_json::Value>,
-) -> Result<GetPromptResult, ConformanceError> {
-    match name {
+pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, ConformanceError> {
+    let args = params.arguments.as_ref();
+    match params.name.as_str() {
         "audit_repo_conformance" => {
-            let repo = arguments
+            let repo = args
                 .and_then(|a| a.get("repo_path"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
-            let spec = arguments
+                .map_or(".", String::as_str);
+            let spec = args
                 .and_then(|a| a.get("spec_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("all specifications");
+                .map_or("all specifications", String::as_str);
 
             let prompt_text = format!(
-                "You are an expert compiler and API toolchain engineer. Please audit the CDD language repository located at '{repo}'. \
-                Review the conformance checklists for '{spec}', compare them with the implementation AST and tests, \
+                "You are an expert compiler and API toolchain engineer. Please audit the CDD language repository located at '{repo}'.
+                Review the conformance checklists for '{spec}', compare them with the implementation AST and tests,
                 and identify any missing features, false claims, or regressions."
             );
 
@@ -138,17 +153,15 @@ pub fn get_prompt(
         }
 
         "implement_conformance_feature" => {
-            let feature = arguments
+            let feature = args
                 .and_then(|a| a.get("feature_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown Feature");
-            let spec = arguments
+                .map_or("Unknown Feature", String::as_str);
+            let spec = args
                 .and_then(|a| a.get("spec_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("OpenAPI");
+                .map_or("OpenAPI", String::as_str);
 
             let prompt_text = format!(
-                "Please implement the feature '{feature}' according to the '{spec}' specification. \
+                "Please implement the feature '{feature}' according to the '{spec}' specification.
                 Ensure 100% test coverage and 100% documentation coverage. Update the relevant conformance checklist row from [ ] to [x] once tested."
             );
 
@@ -161,19 +174,47 @@ pub fn get_prompt(
             })
         }
 
-        _ => Err(ConformanceError::JsonRpcMethodNotFound {
-            method: format!("Prompt '{name}' not found"),
+        other => Err(ConformanceError::JsonRpcMethodNotFound {
+            method: format!("Prompt '{other}' not found"),
         }),
     }
 }
 
+/// Retrieves and formats an instantiated prompt template.
+///
+/// # Arguments
+///
+/// * `name` - Prompt identifier name.
+/// * `arguments` - Optional JSON object containing prompt arguments.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::JsonRpcMethodNotFound` if the prompt does not exist,
+/// or `ConformanceError::JsonRpcInvalidParams` if arguments are malformed.
+pub fn get_prompt(
+    name: &str,
+    arguments: Option<&serde_json::Value>,
+) -> Result<GetPromptResult, ConformanceError> {
+    let typed_args: Option<HashMap<String, String>> = match arguments {
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
+            ConformanceError::JsonRpcInvalidParams {
+                message: format!("Invalid prompt arguments: {e}"),
+            }
+        })?),
+        None => None,
+    };
+    get_prompt_typed(&GetPromptParams {
+        name: name.to_string(),
+        arguments: typed_args,
+    })
+}
+
 #[cfg(test)]
-#[allow(clippy::panic, clippy::assert_is_empty)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_list_and_get_prompts() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_list_and_get_prompts() {
         let list = list_prompts();
         assert_eq!(list.prompts.len(), 2);
 
@@ -181,25 +222,27 @@ mod tests {
             "repo_path": "../cdd-rust",
             "spec_id": "openapi-3.2.0"
         });
-        let p = get_prompt("audit_repo_conformance", Some(&args))?;
-        assert!(p.messages[0].content.contains("../cdd-rust"));
+        let p = get_prompt("audit_repo_conformance", Some(&args)).ok();
+        assert!(p.is_some_and(|res| res.messages[0].content.contains("../cdd-rust")));
 
         let impl_args = serde_json::json!({
             "feature_name": "Webhooks",
             "spec_id": "openapi-3.2.0"
         });
-        let impl_prompt = get_prompt("implement_conformance_feature", Some(&impl_args))?;
-        assert!(!impl_prompt.messages.is_empty());
+        let impl_prompt = get_prompt("implement_conformance_feature", Some(&impl_args)).ok();
+        assert!(impl_prompt.is_some_and(|res| !res.messages.is_empty()));
 
         let assistant_msg = PromptMessage {
             role: PromptRole::Assistant,
             content: "Implementation response".to_string(),
         };
-        let msg_str = serde_json::to_string(&assistant_msg)?;
+        let msg_str = serde_json::to_string(&assistant_msg).unwrap_or_default();
         assert!(msg_str.contains("assistant"));
+
+        let bad_args = serde_json::json!("not-a-map");
+        assert!(get_prompt("audit_repo_conformance", Some(&bad_args)).is_err());
 
         let bad_prompt = get_prompt("unknown_prompt", None);
         assert!(bad_prompt.is_err());
-        Ok(())
     }
 }

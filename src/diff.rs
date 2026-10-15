@@ -18,10 +18,12 @@ pub struct DiffReport {
     pub missing_features: Vec<String>,
     /// Spurious features present in the project checklist that do not exist in the canonical standard.
     pub extra_features: Vec<String>,
-    /// Contradictory rows (e.g. marked as both Present and Absent in the same direction).
+    /// Contradictory rows (e.g. more than one of Present, Absent, or Skipped checked in the same direction).
     pub contradictions: Vec<String>,
     /// Rows marked as Skipped without required explanatory notes.
     pub invalid_skips: Vec<String>,
+    /// Rows with at least one direction completely unreviewed (`[ ]` across Presence, Absence, and Skipped).
+    pub unreviewed_features: Vec<String>,
     /// Aggregated score metrics for the evaluated checklist.
     pub score: ProfileScore,
 }
@@ -29,8 +31,12 @@ pub struct DiffReport {
 impl DiffReport {
     /// Validates the report, returning `Ok(score)` if valid or an appropriate `ConformanceError`.
     ///
-    /// If `strict` is true, any missing features, extra features, contradictions, or invalid skips
-    /// result in an immediate error.
+    /// If `strict` is true, any missing features, extra features, contradictions, invalid skips,
+    /// or unreviewed features result in an immediate error.
+    ///
+    /// # Arguments
+    ///
+    /// * `strict` - Whether strict mode (complete canonical schema parity and zero unreviewed items) is enabled.
     ///
     /// # Errors
     ///
@@ -50,7 +56,7 @@ impl DiffReport {
                 path: std::path::PathBuf::from(self.profile.filename()),
                 line: 0,
                 raw: self.contradictions.join(", "),
-                reason: "Contradictory presence and absence markers".to_string(),
+                reason: "Contradictory presence, absence, or skipped markers".to_string(),
             });
         }
 
@@ -63,11 +69,52 @@ impl DiffReport {
             });
         }
 
+        if strict && !self.unreviewed_features.is_empty() {
+            return Err(ConformanceError::InvalidChecklistRow {
+                path: std::path::PathBuf::from(self.profile.filename()),
+                line: 0,
+                raw: self.unreviewed_features.join(", "),
+                reason: "Strict mode requires zero unreviewed features".to_string(),
+            });
+        }
+
         Ok(self.score)
+    }
+
+    /// Checks whether the current checklist score regressed relative to a baseline score.
+    ///
+    /// # Arguments
+    ///
+    /// * `baseline` - The previous baseline `ProfileScore` to compare against.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::RegressionDetected` if overall coverage decreased.
+    pub fn check_regression(&self, baseline: ProfileScore) -> Result<(), ConformanceError> {
+        let prev = baseline.total_percentage();
+        let curr = self.score.total_percentage();
+        if curr + f64::EPSILON < prev {
+            return Err(ConformanceError::RegressionDetected {
+                spec: self.spec_id.to_string(),
+                profile: self.profile.to_string(),
+                previous_coverage: prev,
+                current_coverage: curr,
+            });
+        }
+        Ok(())
     }
 }
 
 /// Compares a target project checklist against the canonical reference table.
+///
+/// # Arguments
+///
+/// * `target` - The project's parsed `ChecklistTable`.
+/// * `canonical` - The canonical reference `ChecklistTable`.
+///
+/// # Returns
+///
+/// A `DiffReport` detailing schema parity, contradictions, invalid skips, unreviewed rows, and score.
 #[must_use]
 pub fn compare_checklists(target: &ChecklistTable, canonical: &ChecklistTable) -> DiffReport {
     let canonical_features: HashSet<&str> = canonical
@@ -92,6 +139,7 @@ pub fn compare_checklists(target: &ChecklistTable, canonical: &ChecklistTable) -
     let mut extra_features = Vec::new();
     let mut contradictions = Vec::new();
     let mut invalid_skips = Vec::new();
+    let mut unreviewed_features = Vec::new();
 
     for t_row in &target.rows {
         let name = t_row.feature_name.as_str();
@@ -99,14 +147,10 @@ pub fn compare_checklists(target: &ChecklistTable, canonical: &ChecklistTable) -
             extra_features.push(t_row.feature_name.clone());
         }
 
-        // Check for contradiction: presence and absence in same direction
-        let to_contradiction = t_row.status.is_to_present() && t_row.status.is_to_absent();
-        let from_contradiction = t_row.status.is_from_present() && t_row.status.is_from_absent();
-        if to_contradiction || from_contradiction {
+        if t_row.status.has_any_contradiction() {
             contradictions.push(format!("{name} (line {})", t_row.line_number));
         }
 
-        // Check for invalid skip: marked skipped without notes
         let is_skipped = t_row.status.is_to_skipped() || t_row.status.is_from_skipped();
         let has_note = t_row
             .notes
@@ -114,6 +158,10 @@ pub fn compare_checklists(target: &ChecklistTable, canonical: &ChecklistTable) -
             .is_some_and(|n| !n.trim().is_empty() && n.trim() != "TODO");
         if is_skipped && !has_note {
             invalid_skips.push(format!("{name} (line {})", t_row.line_number));
+        }
+
+        if t_row.status.is_unreviewed() {
+            unreviewed_features.push(format!("{name} (line {})", t_row.line_number));
         }
     }
 
@@ -130,12 +178,12 @@ pub fn compare_checklists(target: &ChecklistTable, canonical: &ChecklistTable) -
         extra_features,
         contradictions,
         invalid_skips,
+        unreviewed_features,
         score: target.score(),
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::assert_is_empty)]
 mod tests {
     use super::*;
     use crate::model::{ChecklistRow, FeatureStatus};
@@ -149,18 +197,14 @@ mod tests {
     ) -> ChecklistRow {
         ChecklistRow {
             feature_name: name.to_string(),
-            status: FeatureStatus {
-                presence,
-                absence,
-                skipped,
-            },
+            status: FeatureStatus::from_arrays(presence, absence, skipped),
             notes: notes.map(String::from),
             line_number: 1,
         }
     }
 
     #[test]
-    fn test_compare_checklists_matching() {
+    fn test_compare_checklists_matching_and_regression() {
         let canonical = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
@@ -211,9 +255,33 @@ mod tests {
         assert!(diff.extra_features.is_empty());
         assert!(diff.contradictions.is_empty());
         assert!(diff.invalid_skips.is_empty());
+        assert!(diff.unreviewed_features.is_empty());
 
-        let res = diff.into_result(true);
-        assert!(res.is_ok());
+        // Regression check against lower or equal baseline succeeds
+        assert!(diff.check_regression(diff.score).is_ok());
+
+        // Regression check against higher baseline fails with RegressionDetected
+        let higher_baseline = ProfileScore {
+            total_items: 2,
+            implemented_to: 2,
+            implemented_from: 2,
+            ..ProfileScore::default()
+        };
+        let reg_res = diff.check_regression(higher_baseline);
+        assert_eq!(
+            reg_res.as_ref().err().map(std::mem::discriminant),
+            Some(std::mem::discriminant(
+                &ConformanceError::RegressionDetected {
+                    spec: String::new(),
+                    profile: String::new(),
+                    previous_coverage: 0.0,
+                    current_coverage: 0.0,
+                }
+            ))
+        );
+
+        let score = diff.into_result(true);
+        assert_eq!(score.map(|s| s.implemented_to).ok(), Some(1));
     }
 
     #[test]
@@ -267,12 +335,23 @@ mod tests {
         assert_eq!(diff.missing_features, vec!["Feature B"]);
         assert_eq!(diff.extra_features, vec!["Feature C"]);
 
-        assert!(diff.clone().into_result(true).is_err());
+        let strict_res = diff.clone().into_result(true);
+        assert_eq!(
+            strict_res.as_ref().err().map(std::mem::discriminant),
+            Some(std::mem::discriminant(
+                &ConformanceError::ChecklistSchemaMismatch {
+                    spec: String::new(),
+                    profile: String::new(),
+                    missing_items: Vec::new(),
+                    extra_items: Vec::new(),
+                }
+            ))
+        );
         assert!(diff.into_result(false).is_ok());
     }
 
     #[test]
-    fn test_compare_checklists_contradiction_and_invalid_skip() {
+    fn test_compare_checklists_contradiction_skip_and_unreviewed() {
         let canonical = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
@@ -300,20 +379,20 @@ mod tests {
             profile: ProfileKind::ClientSdk,
             title: "Target".to_string(),
             rows: vec![
-                // Contradiction: both present and absent for To
+                // Contradiction: both present and skipped for To
                 make_test_row(
                     "Feature A",
-                    [true, false],
-                    [true, false],
+                    [true, true],
                     [false, false],
-                    None,
+                    [true, false],
+                    Some("note"),
                 ),
                 // Invalid skip: marked skipped without notes
                 make_test_row(
                     "Feature B",
                     [false, false],
                     [false, false],
-                    [true, false],
+                    [true, true],
                     None,
                 ),
             ],
@@ -323,10 +402,9 @@ mod tests {
         assert!(!diff.is_valid);
         assert_eq!(diff.contradictions.len(), 1);
         assert_eq!(diff.invalid_skips.len(), 1);
-
         assert!(diff.into_result(false).is_err());
 
-        // Test invalid skip with strict mode (no contradictions)
+        // Invalid skip without contradiction fails in strict mode
         let target_only_skip = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
@@ -334,7 +412,7 @@ mod tests {
             rows: vec![
                 make_test_row(
                     "Feature A",
-                    [true, false],
+                    [true, true],
                     [false, false],
                     [false, false],
                     None,
@@ -343,7 +421,7 @@ mod tests {
                     "Feature B",
                     [false, false],
                     [false, false],
-                    [true, false],
+                    [true, true],
                     None,
                 ),
             ],
@@ -353,5 +431,33 @@ mod tests {
         assert!(diff_skip.contradictions.is_empty());
         assert_eq!(diff_skip.invalid_skips.len(), 1);
         assert!(diff_skip.into_result(true).is_err());
+
+        // Unreviewed item fails in strict mode
+        let target_unreviewed = ChecklistTable {
+            spec_id: SpecId::OpenApi320,
+            profile: ProfileKind::ClientSdk,
+            title: "Target".to_string(),
+            rows: vec![
+                make_test_row(
+                    "Feature A",
+                    [true, true],
+                    [false, false],
+                    [false, false],
+                    None,
+                ),
+                make_test_row(
+                    "Feature B",
+                    [true, false],
+                    [false, false],
+                    [false, false],
+                    None,
+                ),
+            ],
+        };
+        let diff_unrev = compare_checklists(&target_unreviewed, &canonical);
+        assert!(diff_unrev.is_valid);
+        assert_eq!(diff_unrev.unreviewed_features.len(), 1);
+        assert!(diff_unrev.clone().into_result(false).is_ok());
+        assert!(diff_unrev.into_result(true).is_err());
     }
 }

@@ -1,7 +1,7 @@
 CDD Spec Conformance Tables
 ===========================
 
-[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-96.60%25-brightgreen.svg)](README.md)
+[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-97.39%25-brightgreen.svg)](README.md)
 
 A comprehensive collection of conformance tables designed to ensure your Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are fully compliant with their respective specifications.
 
@@ -74,9 +74,9 @@ The table below tracks live specification compliance across all 13 core language
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | servers | 426/426 | **100.0%** |
-| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk | 686/686 | **100.0%** |
-| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk-cli | 700/700 | **100.0%** |
-| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | servers | 698/698 | **100.0%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk | 686/712 | **96.3%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk-cli | 700/712 | **98.3%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | servers | 698/712 | **98.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | openapi-3.2.0 | client-sdk | 410/410 | **100.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | openapi-3.2.0 | client-sdk-cli | 410/410 | **100.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | openapi-3.2.0 | servers | 410/410 | **100.0%** |

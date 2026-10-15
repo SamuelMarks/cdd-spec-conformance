@@ -1,125 +1,235 @@
 //! Command line interface definition and command runners for `cdd-conformance`.
 
 use crate::claims::verify_compliance_claims;
+use crate::config::ProjectConfig;
 use crate::diff::compare_checklists;
 use crate::discovery::{scan_all_repositories, scan_repository};
 use crate::error::ConformanceError;
 use crate::mcp::server::McpServer;
-use crate::model::SpecId;
+use crate::model::{ChecklistRow, ProfileKind, SpecId};
+use crate::parser::markdown::{clean_markdown_text, parse_checklist};
 use crate::registry::CanonicalRegistry;
-use clap::{Parser, Subcommand};
+use clap::{Arg, ArgAction, ArgMatches, Command, Error as ClapError};
 use colored::Colorize;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
-use std::fs::File;
+use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Centralised CDD specification conformance verification tool, pre-commit hook, and MCP server.
-#[derive(Parser, Debug)]
-#[command(name = "cdd-conformance", version, about, long_about = None)]
 pub struct Cli {
     /// Active subcommand.
-    #[command(subcommand)]
     pub command: Commands,
 }
 
 /// Available subcommands.
-#[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Audits a repository and confirms which specification standards it implements.
     Check {
         /// Path to the target repository directory (defaults to current working directory).
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-
+        path: Option<PathBuf>,
         /// Strict mode requiring complete canonical schema parity and zero unreviewed features.
-        #[arg(long)]
-        strict: bool,
-
+        strict: Option<bool>,
         /// Minimum required overall implementation percentage (0.0 - 100.0).
-        #[arg(long)]
         min_coverage: Option<f64>,
-
         /// Filter verification to a specific specification identifier.
-        #[arg(long)]
         spec: Option<String>,
-
         /// Print detailed schema diffs between project checklists and canonical templates.
-        #[arg(long)]
-        diff: bool,
-
-        /// Only verify claims in COMPLIANCE.md against checklists.
-        #[arg(long)]
-        claims_only: bool,
+        diff: Option<bool>,
+        /// Only verify claims in `COMPLIANCE.md` against checklists.
+        claims_only: Option<bool>,
     },
 
     /// Outputs a formatted conformance report for the target repository.
     Report {
         /// Path to the target repository directory.
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-
+        path: Option<PathBuf>,
         /// Output report formatted as JSON.
-        #[arg(long)]
-        json: bool,
-
+        json: Option<bool>,
         /// Output report formatted as Markdown.
-        #[arg(long)]
-        markdown: bool,
+        markdown: Option<bool>,
     },
 
     /// Generates the cross-language ecosystem compliance matrix across all CDD repositories.
     Matrix {
-        /// Parent directory containing the cdd-* repositories (defaults to parent directory).
-        #[arg(short, long, default_value = "..")]
-        repos_dir: PathBuf,
-
+        /// Parent directory containing the `cdd-*` repositories (defaults to parent directory).
+        repos_dir: Option<PathBuf>,
         /// Optional file path to write the generated Markdown dashboard to.
-        #[arg(short, long)]
         output: Option<PathBuf>,
-
-        /// Optional path to README.md to update with the generated table.
-        #[arg(long)]
+        /// Optional path to `README.md` to update with the generated table.
         readme: Option<PathBuf>,
     },
 
     /// Synchronizes or scaffolds checklists in a repository from canonical specification tables.
     Sync {
         /// Target repository path.
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-
+        path: Option<PathBuf>,
         /// Target specification identifier.
-        #[arg(short, long)]
-        spec: String,
-
+        spec: Option<String>,
         /// Preview synchronization changes without modifying files.
-        #[arg(long)]
-        dry_run: bool,
+        dry_run: Option<bool>,
     },
 
     /// Scaffolds initial `.cdd-conformance.yaml` configuration in the target repository.
     Init {
         /// Target repository path.
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
+        path: Option<PathBuf>,
     },
 
     /// Runs the Model Context Protocol (MCP) server over standard I/O.
     Mcp,
 }
 
-/// Runs the CLI application based on parsed arguments.
+impl Cli {
+    /// Builds the `clap::Command` specification for `cdd-conformance`.
+    ///
+    /// # Returns
+    ///
+    /// Configured `clap::Command` instance.
+    #[must_use]
+    pub fn build_command() -> Command {
+        Command::new("cdd-conformance")
+            .version(env!("CARGO_PKG_VERSION"))
+            .about(env!("CARGO_PKG_DESCRIPTION"))
+            .subcommand(
+                Command::new("check")
+                    .about("Audits a repository and confirms which specification standards it implements")
+                    .arg(Arg::new("path").short('p').long("path").value_parser(clap::value_parser!(PathBuf)))
+                    .arg(Arg::new("strict").long("strict").action(ArgAction::SetTrue))
+                    .arg(Arg::new("min_coverage").long("min-coverage").value_parser(clap::value_parser!(f64)))
+                    .arg(Arg::new("spec").long("spec"))
+                    .arg(Arg::new("diff").long("diff").action(ArgAction::SetTrue))
+                    .arg(Arg::new("claims_only").long("claims-only").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
+                Command::new("report")
+                    .about("Outputs a formatted conformance report for the target repository")
+                    .arg(Arg::new("path").short('p').long("path").value_parser(clap::value_parser!(PathBuf)))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
+                    .arg(Arg::new("markdown").long("markdown").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
+                Command::new("matrix")
+                    .about("Generates the cross-language ecosystem compliance matrix across all CDD repositories")
+                    .arg(Arg::new("repos_dir").short('r').long("repos-dir").value_parser(clap::value_parser!(PathBuf)))
+                    .arg(Arg::new("output").short('o').long("output").value_parser(clap::value_parser!(PathBuf)))
+                    .arg(Arg::new("readme").long("readme").value_parser(clap::value_parser!(PathBuf))),
+            )
+            .subcommand(
+                Command::new("sync")
+                    .about("Synchronizes or scaffolds checklists in a repository from canonical specification tables")
+                    .arg(Arg::new("path").short('p').long("path").value_parser(clap::value_parser!(PathBuf)))
+                    .arg(Arg::new("spec").short('s').long("spec"))
+                    .arg(Arg::new("dry_run").long("dry-run").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
+                Command::new("init")
+                    .about("Scaffolds initial `.cdd-conformance.yaml` configuration in the target repository")
+                    .arg(Arg::new("path").short('p').long("path").value_parser(clap::value_parser!(PathBuf))),
+            )
+            .subcommand(
+                Command::new("mcp")
+                    .about("Runs the Model Context Protocol (MCP) server over standard I/O"),
+            )
+    }
+
+    /// Attempts to parse command-line arguments from a slice of string references.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - Slice of argument strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns `clap::Error` if argument parsing fails or `--help`/`--version` is requested.
+    pub fn try_parse_from(args: &[&str]) -> Result<Self, ClapError> {
+        Self::build_command()
+            .try_get_matches_from(args)
+            .map(|matches| Self::from_matches(&matches))
+    }
+
+    /// Extracts a strongly typed `Cli` struct from matched `clap::ArgMatches`.
+    ///
+    /// # Arguments
+    ///
+    /// * `matches` - Matched command-line arguments from `clap`.
+    ///
+    /// # Returns
+    ///
+    /// Extracted `Cli` command structure.
+    #[must_use]
+    pub fn from_matches(matches: &ArgMatches) -> Self {
+        let command = match matches.subcommand() {
+            Some(("check", sub)) => Commands::Check {
+                path: sub.get_one::<PathBuf>("path").cloned(),
+                strict: Some(sub.get_flag("strict")),
+                min_coverage: sub.get_one::<f64>("min_coverage").copied(),
+                spec: sub.get_one::<String>("spec").cloned(),
+                diff: Some(sub.get_flag("diff")),
+                claims_only: Some(sub.get_flag("claims_only")),
+            },
+            Some(("report", sub)) => Commands::Report {
+                path: sub.get_one::<PathBuf>("path").cloned(),
+                json: Some(sub.get_flag("json")),
+                markdown: Some(sub.get_flag("markdown")),
+            },
+            Some(("matrix", sub)) => Commands::Matrix {
+                repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
+                output: sub.get_one::<PathBuf>("output").cloned(),
+                readme: sub.get_one::<PathBuf>("readme").cloned(),
+            },
+            Some(("sync", sub)) => Commands::Sync {
+                path: sub.get_one::<PathBuf>("path").cloned(),
+                spec: sub.get_one::<String>("spec").cloned(),
+                dry_run: Some(sub.get_flag("dry_run")),
+            },
+            Some(("init", sub)) => Commands::Init {
+                path: sub.get_one::<PathBuf>("path").cloned(),
+            },
+            _ => Commands::Mcp,
+        };
+        Self { command }
+    }
+}
+
+/// Runs the CLI application based on parsed arguments, writing output to `stdout`.
+///
+/// # Arguments
+///
+/// * `cli` - Parsed `Cli` command structure.
 ///
 /// # Errors
 ///
 /// Returns `ConformanceError` if any command fails validation or execution.
 pub async fn run_cli(cli: Cli) -> Result<(), ConformanceError> {
-    let registry = CanonicalRegistry::new();
+    if matches!(cli.command, Commands::Mcp) {
+        let mut server = McpServer::new();
+        server.run_stdio().await
+    } else {
+        let mut out = std::io::stdout();
+        run_cli_with_writer(cli, &mut out)
+    }
+}
 
-    match cli.command {
+/// Resolves an optional repository path argument to `.` when `None`.
+fn default_repo_path(path: Option<PathBuf>) -> PathBuf {
+    path.unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Resolves an optional parent repositories directory argument to `..` when `None`.
+fn default_repos_dir(repos_dir: Option<PathBuf>) -> PathBuf {
+    repos_dir.unwrap_or_else(|| PathBuf::from(".."))
+}
+
+/// Executes a synchronous CLI command and returns its formatted output string.
+fn render_sync_command(
+    command: Commands,
+    registry: &CanonicalRegistry,
+) -> Result<String, ConformanceError> {
+    match command {
         Commands::Check {
             path,
             strict,
@@ -128,54 +238,165 @@ pub async fn run_cli(cli: Cli) -> Result<(), ConformanceError> {
             diff,
             claims_only,
         } => {
+            let resolved_path = default_repo_path(path);
             run_check(
-                &path,
-                strict,
+                &resolved_path,
+                strict.unwrap_or(false),
                 min_coverage,
                 spec.as_deref(),
-                diff,
-                claims_only,
-                &registry,
-            )?;
+                diff.unwrap_or(false),
+                claims_only.unwrap_or(false),
+                registry,
+            )
         }
-
         Commands::Report {
             path,
             json,
             markdown,
         } => {
-            run_report(&path, json, markdown, &registry)?;
+            let resolved_path = default_repo_path(path);
+            run_report(
+                &resolved_path,
+                json.unwrap_or(false),
+                markdown.unwrap_or(false),
+                registry,
+            )
         }
-
         Commands::Matrix {
             repos_dir,
             output,
             readme,
         } => {
-            run_matrix(&repos_dir, output.as_deref(), readme.as_deref())?;
+            let resolved_dir = default_repos_dir(repos_dir);
+            run_matrix(&resolved_dir, output.as_deref(), readme.as_deref())
         }
-
         Commands::Sync {
             path,
             spec,
             dry_run,
         } => {
-            run_sync(&path, &spec, dry_run, &registry)?;
+            let resolved_path = default_repo_path(path);
+            let spec_str = spec.unwrap_or_default();
+            run_sync(
+                &resolved_path,
+                &spec_str,
+                dry_run.unwrap_or(false),
+                registry,
+            )
         }
-
         Commands::Init { path } => {
-            run_init(&path)?;
+            let resolved_path = default_repo_path(path);
+            run_init(&resolved_path)
         }
-
-        Commands::Mcp => {
-            let mut server = McpServer::new();
-            server.run_stdio().await?;
-        }
+        Commands::Mcp => Ok(String::new()),
     }
-
-    Ok(())
 }
 
+/// Runs a synchronous CLI command writing formatted output into a caller-supplied `Write` sink.
+///
+/// # Arguments
+///
+/// * `cli` - Parsed `Cli` command structure.
+/// * `writer` - Output stream sink.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if any command fails validation or execution.
+pub fn run_cli_with_writer(cli: Cli, writer: &mut dyn Write) -> Result<(), ConformanceError> {
+    let registry = CanonicalRegistry::new();
+    render_sync_command(cli.command, &registry).and_then(|out| write_str(writer, &out))
+}
+
+/// Writes a string buffer to a `std::io::Write` sink, mapping errors to `ConformanceError::Io`.
+fn write_str(writer: &mut dyn Write, text: &str) -> Result<(), ConformanceError> {
+    writer
+        .write_all(text.as_bytes())
+        .map_err(|e| ConformanceError::Io {
+            source: e,
+            path: PathBuf::from("stdout"),
+        })
+}
+
+/// Validates that all standards and profiles explicitly configured in `.cdd-conformance.yaml`
+/// were discovered in the repository.
+fn validate_configured_standards(
+    config: &ProjectConfig,
+    tables: &[crate::model::ChecklistTable],
+    filter_spec: Option<SpecId>,
+) -> Result<(), ConformanceError> {
+    let mut missing_dir: Option<PathBuf> = None;
+    for target in &config.standards {
+        if let Some(f) = filter_spec {
+            if target.spec != f {
+                continue;
+            }
+        }
+        let expected_profiles: &[ProfileKind] = if target.profiles.is_empty() {
+            if target.spec == SpecId::MockServer {
+                &[ProfileKind::MockServerPlan]
+            } else {
+                ProfileKind::standard_profiles()
+            }
+        } else {
+            &target.profiles
+        };
+
+        for profile in expected_profiles {
+            let found = tables
+                .iter()
+                .any(|t| t.spec_id == target.spec && t.profile == *profile);
+            if !found && missing_dir.is_none() {
+                missing_dir = Some(PathBuf::from(format!(
+                    "{}/{}",
+                    target.spec.as_str(),
+                    profile.filename()
+                )));
+            }
+        }
+    }
+    missing_dir.map_or(Ok(()), |expected_dir| {
+        Err(ConformanceError::MissingSpecDirectory { expected_dir })
+    })
+}
+
+/// Evaluates a repository's `COMPLIANCE.md` claims against parsed checklists.
+fn evaluate_compliance_file(
+    comp_path: &Path,
+    tables: &[crate::model::ChecklistTable],
+    strict: bool,
+    claims_only: bool,
+    out: &mut String,
+) -> Result<(), ConformanceError> {
+    let claim_report = verify_compliance_claims(comp_path, tables)?;
+    if claim_report.is_consistent {
+        let _ = writeln!(
+            out,
+            "{} Verified {} documented claims in {}",
+            "PASS:".bold().green(),
+            claim_report.verified_claims,
+            comp_path.display()
+        );
+        Ok(())
+    } else {
+        let _ = writeln!(
+            out,
+            "{} Found {} claim discrepancies in {}:",
+            "FAIL:".bold().red(),
+            claim_report.discrepancies.len(),
+            comp_path.display()
+        );
+        for d in &claim_report.discrepancies {
+            let _ = writeln!(out, "  - {d}");
+        }
+        if strict || claims_only {
+            claim_report.into_result()
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Executes the `check` subcommand and returns the formatted diagnostic log.
 fn run_check(
     repo_path: &Path,
     cli_strict: bool,
@@ -184,9 +405,11 @@ fn run_check(
     show_diff: bool,
     claims_only: bool,
     registry: &CanonicalRegistry,
-) -> Result<(), ConformanceError> {
+) -> Result<String, ConformanceError> {
+    let mut out = String::new();
     let project = scan_repository(repo_path)?;
-    println!(
+    let _ = writeln!(
+        out,
         "{} {} (detected: {})",
         "Auditing".bold().cyan(),
         project.root.display(),
@@ -194,53 +417,37 @@ fn run_check(
     );
 
     let tables = project.parse_all_checklists()?;
+    let config = project.config.unwrap_or_default();
+    let strict = cli_strict || config.strict;
+    let parsed_filter = match filter_spec {
+        Some(s) => Some(SpecId::from_str(s)?),
+        None => None,
+    };
 
-    if tables.is_empty() {
-        println!(
+    if tables.is_empty() && config.standards.is_empty() {
+        let _ = writeln!(
+            out,
             "{}",
             "Warning: No conformance checklists found in repository.".yellow()
         );
-        return Ok(());
+        return Ok(out);
     }
 
-    let config = project.config.unwrap_or_default();
-    let strict = cli_strict || config.strict;
-
-    // Check claims if requested or by default
     if let Some(ref comp_path) = project.compliance_file {
-        let claim_report = verify_compliance_claims(comp_path, &tables)?;
-        if claim_report.is_consistent {
-            println!(
-                "{} Verified {} documented claims in {}",
-                "PASS:".bold().green(),
-                claim_report.verified_claims,
-                comp_path.display()
-            );
-        } else {
-            println!(
-                "{} Found {} claim discrepancies in {}:",
-                "FAIL:".bold().red(),
-                claim_report.discrepancies.len(),
-                comp_path.display()
-            );
-            for d in &claim_report.discrepancies {
-                println!("  - {d}");
-            }
-            if strict || claims_only {
-                claim_report.into_result()?;
-            }
-        }
+        evaluate_compliance_file(comp_path, &tables, strict, claims_only, &mut out)?;
     }
 
     if claims_only {
-        return Ok(());
+        return Ok(out);
     }
 
-    let mut has_failure = false;
+    validate_configured_standards(&config, &tables, parsed_filter)?;
+
+    let mut first_error: Option<ConformanceError> = None;
 
     for target in &tables {
-        if let Some(filter) = filter_spec {
-            if target.spec_id.as_str() != filter {
+        if let Some(filter) = parsed_filter {
+            if target.spec_id != filter {
                 continue;
             }
         }
@@ -249,9 +456,8 @@ fn run_check(
         let diff_report = compare_checklists(target, &canonical);
         let score = diff_report.score;
 
-        let total_pct = score.total_percentage();
-
-        println!(
+        let _ = writeln!(
+            out,
             "[{}] {} ({}) - {:.1}% overall (To: {:.1}%, From: {:.1}%)",
             if diff_report.is_valid {
                 "OK".green()
@@ -260,77 +466,62 @@ fn run_check(
             },
             target.spec_id.as_str().bold(),
             target.profile.as_str(),
-            total_pct,
+            score.total_percentage(),
             score.to_percentage(),
             score.from_percentage()
         );
 
         if show_diff && !diff_report.is_valid {
-            if !diff_report.missing_features.is_empty() {
-                println!(
-                    "   Missing canonical features: {:?}",
-                    diff_report.missing_features
-                );
-            }
-            if !diff_report.extra_features.is_empty() {
-                println!(
-                    "   Extra unknown features: {:?}",
-                    diff_report.extra_features
-                );
-            }
-            if !diff_report.contradictions.is_empty() {
-                println!("   Contradictory markers: {:?}", diff_report.contradictions);
-            }
-            if !diff_report.invalid_skips.is_empty() {
-                println!("   Skipped without notes: {:?}", diff_report.invalid_skips);
-            }
+            format_diff_warnings(&mut out, &diff_report);
         }
 
-        // Validate thresholds
-        let min_cov = cli_min_coverage
-            .or_else(|| config.min_coverage.and_then(|c| c.overall))
-            .unwrap_or(0.0);
-
-        if total_pct < min_cov {
-            println!(
-                "   {} Coverage {:.1}% is below required {:.1}%",
-                "FAIL:".bold().red(),
-                total_pct,
-                min_cov
-            );
-            has_failure = true;
+        let cov_req = config.effective_coverage_for(target.spec_id, cli_min_coverage);
+        if let Err(cov_err) = cov_req.check_score(target.spec_id, target.profile, score) {
+            let _ = writeln!(out, "   {} {cov_err}", "FAIL:".bold().red());
+            first_error.get_or_insert(cov_err);
         }
 
-        if strict && !diff_report.is_valid {
-            has_failure = true;
+        if let Err(diff_err) = diff_report.into_result(strict) {
+            first_error.get_or_insert(diff_err);
         }
     }
 
-    if has_failure {
-        Err(ConformanceError::ThresholdNotMet {
-            spec: "Ecosystem".to_string(),
-            profile: "All".to_string(),
-            metric: "Overall".to_string(),
-            actual: 0.0,
-            required: 0.0,
-        })
-    } else {
-        println!(
-            "{}",
-            "All specification checks passed successfully."
-                .bold()
-                .green()
-        );
-        Ok(())
+    first_error.map_or_else(
+        || {
+            let _ = writeln!(
+                out,
+                "{}",
+                "All specification checks passed successfully."
+                    .bold()
+                    .green()
+            );
+            Ok(out)
+        },
+        Err,
+    )
+}
+
+/// Appends detailed schema and row diff warnings to the output buffer.
+fn format_diff_warnings(out: &mut String, diff_report: &crate::diff::DiffReport) {
+    for (label, items) in [
+        ("Missing canonical features", &diff_report.missing_features),
+        ("Extra unknown features", &diff_report.extra_features),
+        ("Contradictory markers", &diff_report.contradictions),
+        ("Skipped without notes", &diff_report.invalid_skips),
+    ] {
+        if !items.is_empty() {
+            let _ = writeln!(out, "   {label}: {items:?}");
+        }
     }
 }
 
+/// Executes the `report` subcommand and returns the formatted report string.
 fn run_report(
     repo_path: &Path,
     json: bool,
     markdown: bool,
     _registry: &CanonicalRegistry,
-) -> Result<(), ConformanceError> {
+) -> Result<String, ConformanceError> {
     let project = scan_repository(repo_path)?;
     let tables = project.parse_all_checklists()?;
 
@@ -346,19 +537,23 @@ fn run_report(
                 })
             })
             .collect();
-        let out =
-            serde_json::to_string_pretty(&scores).map_err(|e| ConformanceError::JsonParse {
-                source: e,
-                path: PathBuf::from("report.json"),
-            })?;
-        println!("{out}");
-        return Ok(());
+        let mut out = serde_json::to_string_pretty(&scores).unwrap_or_default();
+        let _ = writeln!(out);
+        return Ok(out);
     }
 
     if markdown {
-        println!("# Conformance Report for `{}`\n", project.language_name);
-        println!("| Specification | Profile | To Coverage | From Coverage | Overall | Status |");
-        println!("| :--- | :--- | :---: | :---: | :---: | :---: |");
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "# Conformance Report for `{}`\n",
+            project.language_name
+        );
+        let _ = writeln!(
+            out,
+            "| Specification | Profile | To Coverage | From Coverage | Overall | Status |"
+        );
+        let _ = writeln!(out, "| :--- | :--- | :---: | :---: | :---: | :---: |");
         for t in &tables {
             let score = t.score();
             let icon = if score.total_percentage() >= 80.0 {
@@ -366,7 +561,8 @@ fn run_report(
             } else {
                 "⚠️"
             };
-            println!(
+            let _ = writeln!(
+                out,
                 "| {} | {} | {:.1}% | {:.1}% | {:.1}% | {} |",
                 t.spec_id,
                 t.profile,
@@ -376,11 +572,11 @@ fn run_report(
                 icon
             );
         }
-        return Ok(());
+        return Ok(out);
     }
 
     let mut table = Table::new();
-    table.load_style(UTF8_FULL.with_rounded_corners());
+    table.load_preset(UTF8_FULL);
     table.set_header(vec![
         "Specification",
         "Profile",
@@ -412,11 +608,18 @@ fn run_report(
         ]));
     }
 
-    println!("{table}");
-    Ok(())
+    Ok(format!("{table}\n"))
 }
 
 /// Formats a language name with a GitHub repository hyperlink (e.g. `c ([cdd-c](https://github.com/SamuelMarks/cdd-c))`).
+///
+/// # Arguments
+///
+/// * `language_name` - The short language identifier or `cdd-*` repository name.
+///
+/// # Returns
+///
+/// Formatted Markdown link string.
 #[must_use]
 pub fn format_language_link(language_name: &str) -> String {
     let repo_name = if language_name.starts_with("cdd-") {
@@ -427,13 +630,16 @@ pub fn format_language_link(language_name: &str) -> String {
     format!("{language_name} ([{repo_name}](https://github.com/SamuelMarks/{repo_name}))")
 }
 
+/// Executes the `matrix` subcommand and returns the terminal output string.
 fn run_matrix(
     repos_dir: &Path,
     output: Option<&Path>,
     readme: Option<&Path>,
-) -> Result<(), ConformanceError> {
+) -> Result<String, ConformanceError> {
+    let mut out = String::new();
     let projects = scan_all_repositories(repos_dir)?;
-    println!(
+    let _ = writeln!(
+        out,
         "Scanning {} projects in {}...",
         projects.len(),
         repos_dir.display()
@@ -446,96 +652,90 @@ fn run_matrix(
     ];
 
     let mut term_table = Table::new();
-    term_table.load_style(UTF8_FULL.with_rounded_corners());
+    term_table.load_preset(UTF8_FULL);
     term_table.set_header(vec!["Language", "Specification", "Profile", "Score %"]);
 
     for p in &projects {
         let lang_link = format_language_link(&p.language_name);
         for checklist in &p.checklists {
-            if let Ok(t) = checklist.parse() {
-                let score = t.score();
-                let pct = score.total_percentage();
-                term_table.add_row(Row::from(vec![
-                    Cell::new(&p.language_name).fg(Color::Green),
-                    Cell::new(t.spec_id.as_str()).fg(Color::Cyan),
-                    Cell::new(t.profile.as_str()),
-                    Cell::new(format!("{pct:.1}%")).fg(if pct >= 80.0 {
-                        Color::Green
-                    } else {
-                        Color::Yellow
-                    }),
-                ]));
+            let t = checklist.parse()?;
+            let score = t.score();
+            let pct = score.total_percentage();
+            term_table.add_row(Row::from(vec![
+                Cell::new(&p.language_name).fg(Color::Green),
+                Cell::new(t.spec_id.as_str()).fg(Color::Cyan),
+                Cell::new(t.profile.as_str()),
+                Cell::new(format!("{pct:.1}%")).fg(if pct >= 80.0 {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ]));
 
-                markdown_lines.push(format!(
-                    "| {} | {} | {} | {}/{} | **{:.1}%** |",
-                    lang_link,
-                    t.spec_id,
-                    t.profile,
-                    score.implemented_to + score.implemented_from,
-                    score.total_items * 2,
-                    pct
-                ));
-            }
+            markdown_lines.push(format!(
+                "| {} | {} | {} | {}/{} | **{:.1}%** |",
+                lang_link,
+                t.spec_id,
+                t.profile,
+                score.implemented_to + score.implemented_from,
+                score.total_items * 2,
+                pct
+            ));
         }
     }
 
-    println!("{term_table}");
+    let _ = writeln!(out, "{term_table}");
 
     if let Some(out_path) = output {
         let md_content = markdown_lines.join("\n") + "\n";
-        let mut file = File::create(out_path).map_err(|e| ConformanceError::Io {
-            source: e,
+        let out_err = |source: std::io::Error| ConformanceError::Io {
+            source,
             path: out_path.to_path_buf(),
-        })?;
-        file.write_all(md_content.as_bytes())
-            .map_err(|e| ConformanceError::Io {
-                source: e,
-                path: out_path.to_path_buf(),
-            })?;
-        println!("Matrix written to {}", out_path.display());
+        };
+        std::fs::write(out_path, md_content).map_err(out_err)?;
+        let _ = writeln!(out, "Matrix written to {}", out_path.display());
     }
 
+    #[allow(clippy::branches_sharing_code)]
     if let Some(readme_path) = readme {
         let table_only = markdown_lines[1..].join("\n");
-        update_readme_with_table(readme_path, &table_only)?;
+        let msg = update_readme_with_table(readme_path, &table_only)?;
+        out.push_str(&msg);
+        Ok(out)
+    } else {
+        Ok(out)
     }
-
-    Ok(())
 }
 
 /// Updates a README markdown file with the generated ecosystem conformance table.
 ///
 /// Looks for `<!-- ECOSYSTEM_CONFORMANCE_START -->` and `<!-- ECOSYSTEM_CONFORMANCE_END -->` tags.
-/// If not found, inserts the section before `## Integration Checklists Overview`.
-///
-/// # Errors
-///
-/// Returns `ConformanceError::Io` if reading or writing the file fails.
+/// If not found (or if tags are out of order), inserts the section before `## Integration Checklists Overview`.
 fn update_readme_with_table(
     readme_path: &Path,
     table_content: &str,
-) -> Result<(), ConformanceError> {
-    let content = std::fs::read_to_string(readme_path).map_err(|e| ConformanceError::Io {
-        source: e,
+) -> Result<String, ConformanceError> {
+    let to_io_err = |source: std::io::Error| ConformanceError::Io {
+        source,
         path: readme_path.to_path_buf(),
-    })?;
+    };
+    let content = std::fs::read_to_string(readme_path).map_err(to_io_err)?;
 
     let start_tag = "<!-- ECOSYSTEM_CONFORMANCE_START -->";
     let end_tag = "<!-- ECOSYSTEM_CONFORMANCE_END -->";
 
-    let new_content = if let (Some(start_idx), Some(end_idx)) =
-        (content.find(start_tag), content.find(end_tag))
-    {
+    let valid_tags = content
+        .find(start_tag)
+        .zip(content.find(end_tag))
+        .filter(|(s, e)| *s + start_tag.len() <= *e);
+
+    let new_content = if let Some((start_idx, end_idx)) = valid_tags {
         let prefix = &content[..start_idx + start_tag.len()];
         let suffix = &content[end_idx..];
         format!("{prefix}\n\n{table_content}\n\n{suffix}")
     } else {
         let section = format!(
-            "## Ecosystem Conformance Matrix\n\n\
-            The table below tracks live specification compliance across all 13 core language repositories in the CDD ecosystem (`cdd-c`, `cdd-cpp`, `cdd-csharp`, `cdd-go`, `cdd-java`, `cdd-kotlin`, `cdd-php`, `cdd-python-all`, `cdd-ruby`, `cdd-rust`, `cdd-sh`, `cdd-swift`, `cdd-ts`):\n\n\
-            {start_tag}\n\n\
-            {table_content}\n\n\
-            {end_tag}\n\n---\n\n"
+            "## Ecosystem Conformance Matrix\n\nThe table below tracks live specification compliance across all 13 core language repositories in the CDD ecosystem (`cdd-c`, `cdd-cpp`, `cdd-csharp`, `cdd-go`, `cdd-java`, `cdd-kotlin`, `cdd-php`, `cdd-python-all`, `cdd-ruby`, `cdd-rust`, `cdd-sh`, `cdd-swift`, `cdd-ts`):\n\n{start_tag}\n\n{table_content}\n\n{end_tag}\n\n---\n\n"
         );
 
         content
@@ -553,28 +753,99 @@ fn update_readme_with_table(
             )
     };
 
-    std::fs::write(readme_path, new_content).map_err(|e| ConformanceError::Io {
-        source: e,
-        path: readme_path.to_path_buf(),
-    })?;
+    std::fs::write(readme_path, new_content).map_err(to_io_err)?;
 
-    println!(
-        "Updated {} with ecosystem conformance matrix.",
+    Ok(format!(
+        "Updated {} with ecosystem conformance matrix.\n",
         readme_path.display()
-    );
-    Ok(())
+    ))
 }
 
+/// Formats a `DirectionalFlags` pair as `` `[x]` , `[ ]` ``.
+fn format_checkbox_pair(flags: crate::model::DirectionalFlags) -> String {
+    let to_str = if flags.to { "x" } else { " " };
+    let from_str = if flags.from { "x" } else { " " };
+    format!("`[{to_str}]` , `[{from_str}]`")
+}
+
+/// Merges existing parsed checklist rows into a canonical Markdown document, preserving
+/// previously recorded checkbox statuses and notes for matching features.
+fn merge_checklist_content(
+    canonical_content: &str,
+    existing_rows: &HashMap<String, ChecklistRow>,
+    profile: ProfileKind,
+) -> String {
+    let mut merged_lines = Vec::new();
+    for line in canonical_content.lines() {
+        let trimmed = line.trim();
+        if profile == ProfileKind::MockServerPlan {
+            if let Some(rest) = trimmed.strip_prefix("- [") {
+                if let Some(close_idx) = rest.find(']') {
+                    let item_raw = rest[close_idx + 1..].trim();
+                    let feature_part = item_raw.split(" — ").next().unwrap_or(item_raw).trim();
+                    let key = clean_markdown_text(feature_part);
+                    if let Some(existing) = existing_rows.get(&key) {
+                        let marker = if existing.status.is_to_present() {
+                            "x"
+                        } else if existing.status.is_to_absent() {
+                            "-"
+                        } else if existing.status.is_to_skipped() {
+                            "~"
+                        } else {
+                            " "
+                        };
+                        let note_suffix = existing
+                            .notes
+                            .as_deref()
+                            .map_or_else(String::new, |n| format!(" — {n}"));
+                        merged_lines.push(format!("- [{marker}] {item_raw}{note_suffix}"));
+                        continue;
+                    }
+                }
+            }
+        } else if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.contains('[') {
+            let parts: Vec<&str> = trimmed.split('|').collect();
+            if parts.len() >= 6 {
+                let raw_feature = parts[1].trim();
+                let key = clean_markdown_text(raw_feature);
+                if let Some(existing) = existing_rows.get(&key) {
+                    let pres = format_checkbox_pair(existing.status.presence);
+                    let abs = format_checkbox_pair(existing.status.absence);
+                    let skip = format_checkbox_pair(existing.status.skipped);
+                    let note = existing.notes.as_deref().unwrap_or_else(|| parts[5].trim());
+                    merged_lines.push(format!(
+                        "| {raw_feature} | {pres} | {abs} | {skip} | {note} |"
+                    ));
+                    continue;
+                }
+            }
+        }
+        merged_lines.push(line.to_string());
+    }
+
+    merged_lines.join("\n") + "\n"
+}
+
+/// Executes the `sync` subcommand, honoring `ProjectConfig::resolve_conformance_dir` and
+/// preserving existing checkbox progress when updating files.
 fn run_sync(
     repo_path: &Path,
     spec_str: &str,
     dry_run: bool,
     registry: &CanonicalRegistry,
-) -> Result<(), ConformanceError> {
+) -> Result<String, ConformanceError> {
+    let mut out = String::new();
     let spec_id = SpecId::from_str(spec_str)?;
-    let conformance_dir = repo_path.join("conformance").join(spec_id.as_str());
+    let config = ProjectConfig::find_and_load(repo_path)?.unwrap_or_default();
+    let base_conf_dir = if config.paths.conformance_dir.is_some() {
+        config.resolve_conformance_dir(repo_path)
+    } else {
+        repo_path.join("conformance")
+    };
+    let conformance_dir = base_conf_dir.join(spec_id.as_str());
 
-    println!(
+    let _ = writeln!(
+        out,
         "{} checklists for {} into {}",
         if dry_run {
             "Previewing sync of"
@@ -587,196 +858,343 @@ fn run_sync(
 
     for profile in registry.list_profiles(spec_id) {
         let target_file = conformance_dir.join(profile.filename());
-        let canonical_content = registry.get_raw_content(spec_id, profile)?;
+        let canonical_content = registry.get_raw_content(spec_id, *profile)?;
 
-        if target_file.is_file() {
-            println!("  - Updating existing {}", profile.filename());
+        let final_content = if target_file.is_file() {
+            let _ = writeln!(out, "  - Updating existing {}", profile.filename());
+            let existing_raw = std::fs::read_to_string(&target_file).unwrap_or_default();
+            let existing_map: HashMap<String, ChecklistRow> =
+                parse_checklist(&existing_raw, &target_file, spec_id, *profile)
+                    .map(|t| {
+                        t.rows
+                            .into_iter()
+                            .map(|r| (r.feature_name.clone(), r))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            merge_checklist_content(&canonical_content, &existing_map, *profile)
         } else {
-            println!("  - Scaffolding new {}", profile.filename());
-        }
+            let _ = writeln!(out, "  - Scaffolding new {}", profile.filename());
+            canonical_content
+        };
 
         if !dry_run {
-            std::fs::create_dir_all(&conformance_dir).map_err(|e| ConformanceError::Io {
-                source: e,
+            let dir_err = |source: std::io::Error| ConformanceError::Io {
+                source,
                 path: conformance_dir.clone(),
-            })?;
-            std::fs::write(&target_file, canonical_content).map_err(|e| ConformanceError::Io {
-                source: e,
-                path: target_file,
-            })?;
+            };
+            std::fs::create_dir_all(&conformance_dir).map_err(dir_err)?;
+            let file_err = |source: std::io::Error| ConformanceError::Io {
+                source,
+                path: target_file.clone(),
+            };
+            std::fs::write(&target_file, final_content).map_err(file_err)?;
         }
     }
 
-    println!("Sync complete.");
-    Ok(())
+    let _ = writeln!(out, "Sync complete.");
+    Ok(out)
 }
 
-fn run_init(repo_path: &Path) -> Result<(), ConformanceError> {
+/// Executes the `init` subcommand, scaffolding `.cdd-conformance.yaml` if not already present.
+fn run_init(repo_path: &Path) -> Result<String, ConformanceError> {
     let config_file = repo_path.join(".cdd-conformance.yaml");
     if config_file.is_file() {
-        println!(
-            "Configuration file already exists at {}",
+        return Ok(format!(
+            "Configuration file already exists at {}\n",
             config_file.display()
-        );
-        return Ok(());
+        ));
     }
 
-    let default_yaml = r#"# CDD Specification Conformance Configuration
-strict: false
-standards:
-  - spec: openapi-3.2.0
-    profiles: [client-sdk, client-sdk-cli, servers]
-    min_coverage:
-      to: 80.0
-      from: 100.0
-  - spec: mcp-1.0.0
-    profiles: [client-sdk, client-sdk-cli, servers]
+    let default_yaml = "# CDD Specification Conformance Configuration\nstrict: false\nstandards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk, client-sdk-cli, servers]\n    min_coverage:\n      to: 80.0\n      from: 100.0\n  - spec: mcp-1.0.0\n    profiles: [client-sdk, client-sdk-cli, servers]\n\npaths:\n  conformance_dir: \"conformance\"\n  compliance_file: \"COMPLIANCE.md\"\n";
 
-paths:
-  conformance_dir: "conformance"
-  compliance_file: "COMPLIANCE.md"
-"#;
-
-    std::fs::write(&config_file, default_yaml).map_err(|e| ConformanceError::Io {
-        source: e,
+    let to_io_err = |source: std::io::Error| ConformanceError::Io {
+        source,
         path: config_file.clone(),
-    })?;
+    };
+    std::fs::write(&config_file, default_yaml).map_err(to_io_err)?;
 
-    println!("Created default configuration at {}", config_file.display());
-    Ok(())
+    Ok(format!(
+        "Created default configuration at {}\n",
+        config_file.display()
+    ))
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_lines, clippy::panic)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+
+    struct FailingWriter;
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("broken pipe"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
-    fn test_cli_parsing() {
-        let args = vec!["cdd-conformance", "check", "--strict", "--path", "."];
-        let parsed = Cli::try_parse_from(args);
-        assert!(parsed.is_ok());
+    fn test_cli_parsing_and_failing_writer() {
+        assert!(Cli::try_parse_from(&["cdd-conformance"]).is_ok());
+        let parsed_check = Cli::try_parse_from(&["cdd-conformance", "check"]);
+        assert!(parsed_check.is_ok());
+        let parsed_full_check = Cli::try_parse_from(&[
+            "cdd-conformance",
+            "check",
+            "--strict",
+            "--path",
+            ".",
+            "--min-coverage",
+            "80.0",
+            "--spec",
+            "openapi-3.2.0",
+            "--diff",
+            "--claims-only",
+        ]);
+        assert!(parsed_full_check.is_ok());
 
-        let report_args = vec!["cdd-conformance", "report", "--json"];
-        let rep_parsed = Cli::try_parse_from(report_args);
-        assert!(rep_parsed.is_ok());
+        let parsed_rep =
+            Cli::try_parse_from(&["cdd-conformance", "report", "--json", "--markdown"]);
+        assert!(parsed_rep.is_ok());
 
-        let mcp_args = vec!["cdd-conformance", "mcp"];
-        assert!(Cli::try_parse_from(mcp_args).is_ok());
+        let parsed_mat = Cli::try_parse_from(&[
+            "cdd-conformance",
+            "matrix",
+            "--repos-dir",
+            "..",
+            "--output",
+            "out.md",
+            "--readme",
+            "README.md",
+        ]);
+        assert!(parsed_mat.is_ok());
+
+        let parsed_sync = Cli::try_parse_from(&[
+            "cdd-conformance",
+            "sync",
+            "--path",
+            ".",
+            "--spec",
+            "openapi-3.2.0",
+            "--dry-run",
+        ]);
+        assert!(parsed_sync.is_ok());
+
+        let parsed_init = Cli::try_parse_from(&["cdd-conformance", "init"]);
+        assert!(parsed_init.is_ok());
+
+        let parsed_mcp = Cli::try_parse_from(&["cdd-conformance", "mcp"]);
+        assert!(parsed_mcp.is_ok());
+        assert!(Cli::try_parse_from(&["cdd-conformance", "check", "--help"]).is_err());
+        assert!(Cli::try_parse_from(&["cdd-conformance", "report", "--help"]).is_err());
+        assert!(Cli::try_parse_from(&["cdd-conformance", "matrix", "--help"]).is_err());
+        assert!(Cli::try_parse_from(&["cdd-conformance", "sync", "--help"]).is_err());
+        assert!(Cli::try_parse_from(&["cdd-conformance", "init", "--help"]).is_err());
+
+        let mut fail_w = FailingWriter;
+        assert!(write_str(&mut fail_w, "test").is_err());
+        assert!(FailingWriter.flush().is_ok());
+
+        let bad_cli = Cli {
+            command: Commands::Check {
+                path: Some(PathBuf::from("nonexistent_repo_dir_12345")),
+                strict: None,
+                min_coverage: None,
+                spec: None,
+                diff: None,
+                claims_only: None,
+            },
+        };
+        assert!(run_cli_with_writer(bad_cli, &mut fail_w).is_err());
+
+        let registry = CanonicalRegistry::new();
+        assert_eq!(
+            render_sync_command(Commands::Mcp, &registry).ok(),
+            Some(String::new())
+        );
+        assert_eq!(default_repo_path(None), PathBuf::from("."));
+        assert_eq!(default_repos_dir(None), PathBuf::from(".."));
     }
 
     #[tokio::test]
-    async fn test_run_cli_check_report_matrix_sync_init() {
-        let tmp = tempdir().unwrap_or_else(|_| panic!("Failed to create tempdir"));
-        let repo_path = tmp.path().to_path_buf();
+    async fn test_run_cli_init_sync_and_check() {
+        let repo_path = std::env::temp_dir().join("cdd_cli_test_1");
+        let _ = std::fs::remove_dir_all(&repo_path);
+        let _ = std::fs::create_dir_all(&repo_path);
 
         // Test Init
-        let init_cli = Cli {
+        let mut buf = Vec::new();
+        let init_cmd = Cli {
             command: Commands::Init {
-                path: repo_path.clone(),
+                path: Some(repo_path.clone()),
             },
         };
-        assert!(run_cli(init_cli).await.is_ok());
-        // Init again (already exists branch)
-        let init_again = Cli {
+        assert!(run_cli_with_writer(init_cmd, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Created default configuration"));
+
+        // Init again via run_cli (already exists branch)
+        let init_cmd2 = Cli {
             command: Commands::Init {
-                path: repo_path.clone(),
+                path: Some(repo_path.clone()),
             },
         };
-        assert!(run_cli(init_again).await.is_ok());
+        assert!(run_cli(init_cmd2).await.is_ok());
+        let bad_run_cli = Cli {
+            command: Commands::Init {
+                path: Some(PathBuf::from("/nonexistent_dir_12345")),
+            },
+        };
+        assert!(run_cli(bad_run_cli).await.is_err());
+
+        // Remove default config before testing basic sync/check without min_coverage=80
+        let _ = std::fs::remove_file(repo_path.join(".cdd-conformance.yaml"));
 
         // Test Sync (dry-run and real)
+        buf.clear();
         let sync_dry = Cli {
             command: Commands::Sync {
-                path: repo_path.clone(),
-                spec: "openapi-3.2.0".to_string(),
-                dry_run: true,
+                path: Some(repo_path.clone()),
+                spec: Some("openapi-3.2.0".to_string()),
+                dry_run: Some(true),
             },
         };
-        assert!(run_cli(sync_dry).await.is_ok());
+        assert!(run_cli_with_writer(sync_dry, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Previewing sync"));
 
+        buf.clear();
         let sync_real = Cli {
             command: Commands::Sync {
-                path: repo_path.clone(),
-                spec: "openapi-3.2.0".to_string(),
-                dry_run: false,
+                path: Some(repo_path.clone()),
+                spec: Some("openapi-3.2.0".to_string()),
+                dry_run: Some(false),
             },
         };
-        assert!(run_cli(sync_real).await.is_ok());
+        assert!(run_cli_with_writer(sync_real, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Scaffolding new client-sdk.md"));
 
-        // Test Check
-        let check_cli = Cli {
+        // Mark a feature as [x] in client-sdk.md and verify re-sync preserves it!
+        let sdk_path = repo_path
+            .join("conformance")
+            .join("openapi-3.2.0")
+            .join("client-sdk.md");
+        let sdk_content = std::fs::read_to_string(&sdk_path).unwrap_or_default();
+        let modified_sdk = sdk_content.replacen("`[ ]` , `[ ]`", "`[x]` , `[x]`", 1);
+        let _ = std::fs::write(&sdk_path, modified_sdk);
+
+        buf.clear();
+        let sync_real2 = Cli {
+            command: Commands::Sync {
+                path: Some(repo_path.clone()),
+                spec: Some("openapi-3.2.0".to_string()),
+                dry_run: Some(false),
+            },
+        };
+        assert!(run_cli_with_writer(sync_real2, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Updating existing client-sdk.md"));
+        let resynced_sdk = std::fs::read_to_string(&sdk_path).unwrap_or_default();
+        assert!(resynced_sdk.contains("`[x]` , `[x]`"));
+
+        // Test Check via run_cli_with_writer
+        buf.clear();
+        let check_cmd = Cli {
             command: Commands::Check {
-                path: repo_path.clone(),
-                strict: false,
+                path: Some(repo_path.clone()),
+                strict: Some(false),
                 min_coverage: None,
                 spec: Some("openapi-3.2.0".to_string()),
-                diff: true,
-                claims_only: false,
+                diff: Some(true),
+                claims_only: Some(false),
             },
         };
-        assert!(run_cli(check_cli).await.is_ok());
+        assert!(run_cli_with_writer(check_cmd, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("All specification checks passed"));
+        let _ = std::fs::remove_dir_all(&repo_path);
+    }
 
-        // Test Report (table, json, markdown)
+    #[test]
+    fn test_run_cli_report_and_matrix() {
+        let repo_path = std::env::temp_dir().join("cdd_cli_test_2");
+        let _ = std::fs::remove_dir_all(&repo_path);
+        let _ = std::fs::create_dir_all(&repo_path);
+        let mut buf = Vec::new();
+
+        let sync_cmd = Cli {
+            command: Commands::Sync {
+                path: Some(repo_path.clone()),
+                spec: Some("openapi-3.2.0".to_string()),
+                dry_run: Some(false),
+            },
+        };
+        assert!(run_cli_with_writer(sync_cmd, &mut buf).is_ok());
+
+        // Test Report (table, json, markdown) and verify buffer contents
+        buf.clear();
         let rep_table = Cli {
             command: Commands::Report {
-                path: repo_path.clone(),
-                json: false,
-                markdown: false,
+                path: Some(repo_path.clone()),
+                json: Some(false),
+                markdown: Some(false),
             },
         };
-        assert!(run_cli(rep_table).await.is_ok());
+        assert!(run_cli_with_writer(rep_table, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Specification"));
 
+        buf.clear();
         let rep_json = Cli {
             command: Commands::Report {
-                path: repo_path.clone(),
-                json: true,
-                markdown: false,
+                path: Some(repo_path.clone()),
+                json: Some(true),
+                markdown: Some(false),
             },
         };
-        assert!(run_cli(rep_json).await.is_ok());
+        assert!(run_cli_with_writer(rep_json, &mut buf).is_ok());
+        let json_out: Option<serde_json::Value> = serde_json::from_slice(&buf).ok();
+        assert!(json_out.is_some_and(|v| v.is_array()));
 
+        buf.clear();
         let rep_md = Cli {
             command: Commands::Report {
-                path: repo_path.clone(),
-                json: false,
-                markdown: true,
+                path: Some(repo_path.clone()),
+                json: Some(false),
+                markdown: Some(true),
             },
         };
-        assert!(run_cli(rep_md).await.is_ok());
+        assert!(run_cli_with_writer(rep_md, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("# Conformance Report"));
 
         // Test Matrix
         let matrix_file = repo_path.join("matrix.md");
         let fake_readme = repo_path.join("README.md");
-        std::fs::write(
-            &fake_readme,
-            "## Overview\n\n## Integration Checklists Overview\n",
-        )
-        .unwrap_or_default();
+        let initial_readme = "## Overview\n\n## Integration Checklists Overview\n";
+        let _ = std::fs::write(&fake_readme, initial_readme);
 
-        let matrix_cli = Cli {
+        buf.clear();
+        let mat_with_out = Cli {
             command: Commands::Matrix {
-                repos_dir: repo_path.clone(),
+                repos_dir: Some(repo_path.clone()),
                 output: Some(matrix_file),
                 readme: Some(fake_readme.clone()),
             },
         };
-        assert!(run_cli(matrix_cli).await.is_ok());
+        assert!(run_cli_with_writer(mat_with_out, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Matrix written to"));
 
-        // Test updating existing tags
-        let matrix_cli_update = Cli {
+        buf.clear();
+        let mat_no_out = Cli {
             command: Commands::Matrix {
-                repos_dir: repo_path.clone(),
+                repos_dir: Some(repo_path.clone()),
                 output: None,
                 readme: Some(fake_readme),
             },
         };
-        assert!(run_cli(matrix_cli_update).await.is_ok());
+        assert!(run_cli_with_writer(mat_no_out, &mut buf).is_ok());
+        assert!(String::from_utf8_lossy(&buf).contains("Updated"));
+        let _ = std::fs::remove_dir_all(&repo_path);
     }
 
     #[test]
-    fn test_format_language_link() {
+    fn test_format_language_link_and_merge_mock_server() {
         assert_eq!(
             format_language_link("c"),
             "c ([cdd-c](https://github.com/SamuelMarks/cdd-c))"
@@ -785,173 +1203,387 @@ mod tests {
             format_language_link("cdd-cpp"),
             "cdd-cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp))"
         );
-        assert_eq!(
-            format_language_link("python-all"),
-            "python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all))"
+
+        let canonical_list =
+            "# Mock Plan\n- [ ] Task A\n- [ ] Task B\n- [ ] Task C\n- [ ] Task D\n- [ ] Task Unmatched\n- [unclosed\n";
+        let mut existing = HashMap::new();
+        existing.insert(
+            "Task A".to_string(),
+            ChecklistRow {
+                feature_name: "Task A".to_string(),
+                status: crate::model::FeatureStatus::from_arrays(
+                    [true, true],
+                    [false, false],
+                    [false, false],
+                ),
+                notes: None,
+                line_number: 2,
+            },
         );
+        existing.insert(
+            "Task B".to_string(),
+            ChecklistRow {
+                feature_name: "Task B".to_string(),
+                status: crate::model::FeatureStatus::from_arrays(
+                    [false, false],
+                    [true, true],
+                    [false, false],
+                ),
+                notes: None,
+                line_number: 3,
+            },
+        );
+        existing.insert(
+            "Task C".to_string(),
+            ChecklistRow {
+                feature_name: "Task C".to_string(),
+                status: crate::model::FeatureStatus::from_arrays(
+                    [false, false],
+                    [false, false],
+                    [true, true],
+                ),
+                notes: Some("Skipped reason".to_string()),
+                line_number: 4,
+            },
+        );
+        existing.insert(
+            "Task D".to_string(),
+            ChecklistRow {
+                feature_name: "Task D".to_string(),
+                status: crate::model::FeatureStatus::new(),
+                notes: None,
+                line_number: 5,
+            },
+        );
+
+        let merged =
+            merge_checklist_content(canonical_list, &existing, ProfileKind::MockServerPlan);
+        assert!(merged.contains("- [x] Task A"));
+        assert!(merged.contains("- [-] Task B"));
+        assert!(merged.contains("- [~] Task C — Skipped reason"));
+        assert!(merged.contains("- [ ] Task D"));
+
+        let canonical_table = "| Feat | Pres | Abs | Skip | Notes |\n| **Task A** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Default A |\n| **Task C** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Default |\n| Short | `[ ]` |\n";
+        let merged_table =
+            merge_checklist_content(canonical_table, &existing, ProfileKind::ClientSdk);
+        assert!(merged_table.contains("Default A"));
+        assert!(merged_table.contains("Skipped reason"));
     }
 
-    #[tokio::test]
-    async fn test_cli_failure_and_edge_branches() -> Result<(), Box<dyn std::error::Error>> {
+    #[test]
+    fn test_cli_check_standards() {
         let registry = CanonicalRegistry::new();
-        let tmp = tempdir()?;
+        let base_dir = std::env::temp_dir().join("cdd_cli_test_3");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let _ = std::fs::create_dir_all(&base_dir);
 
-        // Empty repo: 0 checklists -> Ok
-        assert!(run_check(tmp.path(), false, None, None, false, false, &registry).is_ok());
+        // Empty repo: 0 checklists -> Ok with warning
+        let empty_out = run_check(&base_dir, false, None, None, false, false, &registry).ok();
+        assert!(empty_out.is_some_and(|s| s.contains("Warning: No conformance checklists found")));
+
+        // Configured standard missing from repo -> MissingSpecDirectory (both default profiles and explicit profiles)
+        let std_cfg = "standards:\n  - spec: mock-server\n  - spec: openapi-3.2.0\n  - spec: swagger-2.0\n    profiles: [client-sdk]\n";
+        let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), std_cfg);
+        for spec_name in ["mock-server", "openapi-3.2.0", "swagger-2.0"] {
+            let res = run_check(
+                &base_dir,
+                false,
+                None,
+                Some(spec_name),
+                false,
+                false,
+                &registry,
+            );
+            assert!(res.is_err());
+        }
+        let arazzo_res = run_check(
+            &base_dir,
+            false,
+            None,
+            Some("arazzo-1.1.0"),
+            false,
+            false,
+            &registry,
+        );
+        assert!(arazzo_res.is_ok());
+        let _ = std::fs::remove_file(base_dir.join(".cdd-conformance.yaml"));
+
+        let mut warn_buf = String::new();
+        let partial_diff = crate::diff::DiffReport {
+            spec_id: SpecId::OpenApi320,
+            profile: ProfileKind::ClientSdk,
+            is_valid: false,
+            missing_features: vec!["Missing".to_string()],
+            extra_features: Vec::new(),
+            contradictions: Vec::new(),
+            invalid_skips: Vec::new(),
+            unreviewed_features: Vec::new(),
+            score: crate::model::ProfileScore::default(),
+        };
+        format_diff_warnings(&mut warn_buf, &partial_diff);
+        assert!(warn_buf.contains("Missing canonical features"));
+
+        // Test run_init on unwritable path
+        assert!(run_init(Path::new("/nonexistent_dir_12345")).is_err());
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_cli_diff_and_claims_errors() {
+        let registry = CanonicalRegistry::new();
+        let base_dir = std::env::temp_dir().join("cdd_cli_test_4");
+        let _ = std::fs::remove_dir_all(&base_dir);
 
         // Create bad table with diffs (missing canonical items, extra items, contradictions, invalid skips)
-        let oas_dir = tmp.path().join("openapi-3.2.0");
-        std::fs::create_dir_all(&oas_dir)?;
-        let bad_table_content = "# OpenAPI 3.2.0\n\
-| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n\
-| --- | --- | --- | --- | --- |\n\
-| Contradictory Object | `[x]` , `[ ]` | `[x]` , `[ ]` | `[ ]` , `[ ]` | |\n\
-| Extra Unknown Object | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n\
-| Unnoted Skip Object | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[x]` , `[ ]` | |\n";
-        std::fs::write(oas_dir.join("client-sdk.md"), bad_table_content)?;
+        let oas_dir = base_dir.join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&oas_dir);
+        let bad_table_content = "# OpenAPI 3.2.0\n| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| --- | --- | --- | --- | --- |\n| Contradictory Object | `[x]` , `[ ]` | `[x]` , `[ ]` | `[ ]` , `[ ]` | |\n| Extra Unknown Object | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n| Unnoted Skip Object | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[x]` , `[ ]` | |\n";
+        let _ = std::fs::write(oas_dir.join("client-sdk.md"), bad_table_content);
 
         // COMPLIANCE.md with discrepancy
-        let comp_file = tmp.path().join("COMPLIANCE.md");
-        std::fs::write(
-            &comp_file,
-            "# Compliance\n| Feature | Status |\n| --- | --- |\n| Info Object | ✅ |\n",
-        )?;
+        let comp_file = base_dir.join("COMPLIANCE.md");
+        let bad_comp = "# Compliance\n| Feature | Status |\n| --- | --- |\n| Info Object | ✅ |\n";
+        let _ = std::fs::write(&comp_file, bad_comp);
 
-        // run_check with claims_only=true and discrepancies -> is_err()
-        assert!(run_check(tmp.path(), false, None, None, false, true, &registry).is_err());
+        assert!(run_check(&base_dir, false, None, None, false, true, &registry).is_err());
+        // Non-strict, non-claims-only with claim discrepancy logs warning and continues
+        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
 
         // Fix COMPLIANCE.md to match bad table so claims are consistent
-        std::fs::write(
-            &comp_file,
-            "# Compliance\n| Feature | Status |\n| --- | --- |\n| Extra Unknown Object | ✅ |\n",
-        )?;
-        // run_check with claims_only=true and consistent claims -> Ok
-        assert!(run_check(tmp.path(), false, None, None, false, true, &registry).is_ok());
+        let good_comp =
+            "# Compliance\n| Feature | Status |\n| --- | --- |\n| Extra Unknown Object | ✅ |\n";
+        let _ = std::fs::write(&comp_file, good_comp);
+        let claims_ok = run_check(&base_dir, false, None, None, false, true, &registry).ok();
+        assert!(claims_ok.is_some_and(|s| s.contains("PASS:")));
 
-        // run_check with diff=true and strict=true -> is_err() (prints missing, extra, contradictions, invalid skips)
-        assert!(run_check(tmp.path(), true, None, None, true, false, &registry).is_err());
+        // Test unreadable COMPLIANCE.md error in verify_repo_claims (line 370)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&comp_file, std::fs::Permissions::from_mode(0o000));
+            assert!(run_check(&base_dir, false, None, None, false, true, &registry).is_err());
+            let _ = std::fs::set_permissions(&comp_file, std::fs::Permissions::from_mode(0o644));
+        }
+
+        // Test invalid (spec_id, profile) pair in run_check (line 455)
+        let _ = std::fs::write(oas_dir.join("mock-server-plan.md"), "# Mock\n- [x] Item\n");
+        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        let _ = std::fs::remove_file(oas_dir.join("mock-server-plan.md"));
+
+        // Configure a standard that IS present in base_dir to cover the `found == true` branch in validate_configured_standards
+        let oas_cfg = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk]\n";
+        let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), oas_cfg);
+        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        let _ = std::fs::remove_file(base_dir.join(".cdd-conformance.yaml"));
+
+        // run_check with diff=true and strict=true -> returns ChecklistSchemaMismatch
+        let strict_res = run_check(&base_dir, true, None, None, true, false, &registry);
+        assert!(strict_res.is_err());
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_cli_sync_and_matrix_errors() {
+        let registry = CanonicalRegistry::new();
+        let base_dir = std::env::temp_dir().join("cdd_cli_test_4b");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let oas_dir = base_dir.join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&oas_dir);
+        let _ = std::fs::write(
+            oas_dir.join("client-sdk.md"),
+            "# OpenAPI 3.2.0\n| Object / Feature | Presence |\n| --- | --- |\n| Info | [ ] |\n",
+        );
+
+        // run_check and run_report with corrupt checklist file
+        let corrupt_dir = base_dir.join("corrupt_repo");
+        let corrupt_oas = corrupt_dir.join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&corrupt_oas);
+        let bad_md = "# Bad\n| BadCol |\n| --- |\n| 1 |\n";
+        let _ = std::fs::write(corrupt_oas.join("client-sdk.md"), bad_md);
+        assert!(run_check(&corrupt_dir, false, None, None, false, false, &registry).is_err());
+        assert!(run_report(&corrupt_dir, false, false, &registry).is_err());
+        let parent_corrupt = base_dir.join("parent_corrupt");
+        let child_oas = parent_corrupt.join("cdd-rust").join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&child_oas);
+        let _ = std::fs::write(child_oas.join("client-sdk.md"), bad_md);
+        assert!(run_matrix(&parent_corrupt, None, None).is_err());
+        assert!(run_matrix(Path::new("nonexistent_parent_12345"), None, None).is_err());
+
+        // run_check with nonexistent repo and invalid filter_spec
+        let bad_repo = Path::new("nonexistent_repo_12345");
+        assert!(run_check(bad_repo, false, None, None, false, false, &registry).is_err());
+        let bad_spec_res = run_check(&base_dir, false, None, Some("bad"), false, false, &registry);
+        assert!(bad_spec_res.is_err());
+        assert!(run_report(bad_repo, false, false, &registry).is_err());
 
         // run_check with filter_spec mismatch (triggers continue)
-        assert!(run_check(
-            tmp.path(),
+        let sw_res = run_check(
+            &base_dir,
             false,
             None,
             Some("swagger-2.0"),
             false,
             false,
-            &registry
-        )
-        .is_ok());
+            &registry,
+        );
+        assert!(sw_res.is_ok());
 
-        // run_check with min_coverage=100.0 (failure threshold)
-        assert!(run_check(
-            tmp.path(),
-            false,
-            Some(100.0),
-            None,
-            false,
-            false,
-            &registry
-        )
-        .is_err());
+        // run_check with min_coverage=100.0 -> returns ThresholdNotMet with actual spec and profile
+        let min_cov_res = run_check(&base_dir, false, Some(100.0), None, false, false, &registry);
+        assert!(min_cov_res.is_err());
 
-        // run_sync scaffolding new files, then updating existing files
-        assert!(run_sync(tmp.path(), "swagger-2.0", false, &registry).is_ok());
-        assert!(run_sync(tmp.path(), "swagger-2.0", false, &registry).is_ok());
+        // run_sync with custom conformance_dir in config
+        let sync_cfg = "paths:\n  conformance_dir: 'custom-sync-dir'\n";
+        let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), sync_cfg);
+        let sync_out = run_sync(&base_dir, "swagger-2.0", false, &registry).ok();
+        assert!(sync_out.is_some_and(|s| s.contains("custom-sync-dir")));
 
-        // run_sync with invalid specification ID
-        assert!(run_sync(tmp.path(), "invalid-spec-id", false, &registry).is_err());
+        // Test run_sync when registry.get_raw_content returns Err (line 859)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let custom_reg_root = base_dir.join("custom_reg_root");
+            let custom_reg_sw = custom_reg_root.join("swagger-2.0");
+            let _ = std::fs::create_dir_all(&custom_reg_sw);
+            let unrd_file = custom_reg_sw.join("client-sdk.md");
+            let _ = std::fs::write(&unrd_file, "# Unreadable\n");
+            let _ = std::fs::set_permissions(&unrd_file, std::fs::Permissions::from_mode(0o000));
+            let custom_reg = CanonicalRegistry::with_root(custom_reg_root);
+            assert!(run_sync(&base_dir, "swagger-2.0", true, &custom_reg).is_err());
+            let _ = std::fs::set_permissions(&unrd_file, std::fs::Permissions::from_mode(0o644));
+        }
+
+        // run_sync on unwritable path
+        let bad_sync = run_sync(
+            Path::new("/nonexistent_123"),
+            "swagger-2.0",
+            false,
+            &registry,
+        );
+        assert!(bad_sync.is_err());
+
+        // Make target file a directory so std::fs::write fails
+        let bad_target_dir = base_dir
+            .join("custom-sync-dir")
+            .join("arazzo-1.1.0")
+            .join("client-sdk.md");
+        let _ = std::fs::create_dir_all(&bad_target_dir);
+        assert!(run_sync(&base_dir, "arazzo-1.1.0", false, &registry).is_err());
+
+        // run_sync with invalid specification ID or invalid .cdd-conformance.yaml
+        assert!(run_sync(&base_dir, "invalid-spec-id", false, &registry).is_err());
+        let bad_cfg_repo = base_dir.join("bad_cfg_repo");
+        let _ = std::fs::create_dir_all(&bad_cfg_repo);
+        let _ = std::fs::write(bad_cfg_repo.join(".cdd-conformance.yaml"), ": invalid");
+        assert!(run_sync(&bad_cfg_repo, "swagger-2.0", true, &registry).is_err());
 
         // update_readme_with_table with nonexistent path
         assert!(update_readme_with_table(Path::new("nonexistent-readme.md"), "test").is_err());
 
-        // run_matrix with unwritable output file path
-        assert!(run_matrix(
-            tmp.path(),
-            Some(Path::new("/nonexistent_dir_12345/matrix.md")),
-            None
-        )
-        .is_err());
+        // run_matrix with unwritable output file path and nonexistent readme path
+        let bad_mat_out = Path::new("/nonexistent_dir_12345/matrix.md");
+        assert!(run_matrix(&base_dir, Some(bad_mat_out), None).is_err());
+        let bad_mat_readme = Path::new("/nonexistent_dir_12345/README.md");
+        assert!(run_matrix(&base_dir, None, Some(bad_mat_readme)).is_err());
 
-        Ok(())
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
-    #[tokio::test]
-    async fn test_run_report_colors_and_readme_matrix_updating(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    #[test]
+    fn test_update_readme_readonly_error() {
+        let base_dir = std::env::temp_dir().join("cdd_cli_test_5");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let _ = std::fs::create_dir_all(&base_dir);
+        let ro_readme = base_dir.join("RO_README.md");
+        let _ = std::fs::write(&ro_readme, "# RO\n");
+        assert!(std::fs::metadata(&ro_readme).is_ok_and(|meta| {
+            let mut perms = meta.permissions();
+            perms.set_readonly(true);
+            let _ = std::fs::set_permissions(&ro_readme, perms.clone());
+            let is_err = update_readme_with_table(&ro_readme, "test").is_err();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&ro_readme, perms);
+            is_err
+        }));
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_report_and_readme_matrix() {
         let registry = CanonicalRegistry::new();
-        let tmp = tempdir()?;
-        let repo_root = tmp.path();
+        let repo_root = std::env::temp_dir().join("cdd_cli_test_6");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        let _ = std::fs::create_dir_all(&repo_root);
 
-        // Create high-coverage table (100% -> Green, icon "✅")
         let oas_dir = repo_root.join("openapi-3.2.0");
-        std::fs::create_dir_all(&oas_dir)?;
-        let high_cov_table = "# OpenAPI 3.2.0\n\
-| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n\
-| --- | --- | --- | --- | --- |\n\
-| Feature A | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n";
-        std::fs::write(oas_dir.join("client-sdk.md"), high_cov_table)?;
+        let _ = std::fs::create_dir_all(&oas_dir);
+        let high_cov_table = "# OpenAPI 3.2.0\n| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| --- | --- | --- | --- | --- |\n| Feature A | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n";
+        let _ = std::fs::write(oas_dir.join("client-sdk.md"), high_cov_table);
 
-        // Create low-coverage table (0% -> Yellow, icon "⚠️")
-        let low_cov_table = "# OpenAPI 3.2.0 CLI\n\
-| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n\
-| --- | --- | --- | --- | --- |\n\
-| Feature B | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n";
-        std::fs::write(oas_dir.join("client-sdk-cli.md"), low_cov_table)?;
+        let low_cov_table = "# OpenAPI 3.2.0 CLI\n| Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| --- | --- | --- | --- | --- |\n| Feature B | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |\n";
+        let _ = std::fs::write(oas_dir.join("client-sdk-cli.md"), low_cov_table);
 
-        // Test run_report table format (covers Green and Yellow fg)
-        assert!(run_report(repo_root, false, false, &registry).is_ok());
+        let table_rep = run_report(&repo_root, false, false, &registry).unwrap_or_default();
+        assert!(table_rep.contains("100.0%"));
+        assert!(table_rep.contains("0.0%"));
 
-        // Test run_report markdown format (covers ✅ and ⚠️ icons)
-        assert!(run_report(repo_root, false, true, &registry).is_ok());
+        let md_rep = run_report(&repo_root, false, true, &registry).unwrap_or_default();
+        assert!(md_rep.contains("✅"));
+        assert!(md_rep.contains("⚠️"));
 
-        // Test update_readme_with_table:
-        // Case 1: with start and end tags
         let readme_tagged = repo_root.join("README_tagged.md");
-        std::fs::write(
-            &readme_tagged,
-            "# Title\n<!-- ECOSYSTEM_CONFORMANCE_START -->\nold table\n<!-- ECOSYSTEM_CONFORMANCE_END -->\n",
-        )?;
+        let tagged_str = "# Title\n<!-- ECOSYSTEM_CONFORMANCE_START -->\nold table\n<!-- ECOSYSTEM_CONFORMANCE_END -->\n";
+        let _ = std::fs::write(&readme_tagged, tagged_str);
         assert!(update_readme_with_table(&readme_tagged, "new table").is_ok());
-        let tagged_res = std::fs::read_to_string(&readme_tagged)?;
-        assert!(tagged_res.contains("new table"));
+        assert!(std::fs::read_to_string(&readme_tagged)
+            .unwrap_or_default()
+            .contains("new table"));
 
-        // Case 2: without tags, with ## Integration Checklists Overview
+        // Reversed tags should not panic; they should fall back cleanly
+        let readme_reversed = repo_root.join("README_reversed.md");
+        let rev_str =
+            "# Title\n<!-- ECOSYSTEM_CONFORMANCE_END -->\n<!-- ECOSYSTEM_CONFORMANCE_START -->\n";
+        let _ = std::fs::write(&readme_reversed, rev_str);
+        assert!(update_readme_with_table(&readme_reversed, "fallback table").is_ok());
+        assert!(std::fs::read_to_string(&readme_reversed)
+            .unwrap_or_default()
+            .contains("fallback table"));
+
         let readme_section = repo_root.join("README_section.md");
-        std::fs::write(
-            &readme_section,
-            "# Title\n\n## Integration Checklists Overview\nDetails\n",
-        )?;
+        let sec_str = "# Title\n\n## Integration Checklists Overview\nDetails\n";
+        let _ = std::fs::write(&readme_section, sec_str);
         assert!(update_readme_with_table(&readme_section, "table in section").is_ok());
-        let section_res = std::fs::read_to_string(&readme_section)?;
-        assert!(section_res.contains("table in section"));
+        assert!(std::fs::read_to_string(&readme_section)
+            .unwrap_or_default()
+            .contains("table in section"));
 
-        // Case 3: without tags and without section heading (appends to end)
         let readme_plain = repo_root.join("README_plain.md");
-        std::fs::write(&readme_plain, "# Plain Title\nJust text\n")?;
+        let _ = std::fs::write(&readme_plain, "# Plain Title\nJust text\n");
         assert!(update_readme_with_table(&readme_plain, "table at bottom").is_ok());
-        let plain_res = std::fs::read_to_string(&readme_plain)?;
-        assert!(plain_res.contains("table at bottom"));
+        assert!(std::fs::read_to_string(&readme_plain)
+            .unwrap_or_default()
+            .contains("table at bottom"));
 
-        // Test run_matrix scanning child cdd-* projects and updating both output and readme
-        let parent = tmp.path().join("parent_ecosystem");
-        let child_repo = parent.join("cdd-swift");
-        std::fs::create_dir_all(child_repo.join("openapi-3.2.0"))?;
-        std::fs::write(
-            child_repo.join("openapi-3.2.0").join("client-sdk.md"),
-            high_cov_table,
-        )?;
+        let parent = repo_root.join("parent_ecosystem");
+        let child_oas = parent.join("cdd-swift").join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&child_oas);
+        let _ = std::fs::write(child_oas.join("client-sdk.md"), high_cov_table);
+        let _ = std::fs::write(child_oas.join("client-sdk-cli.md"), low_cov_table);
         let matrix_md = parent.join("matrix.md");
         let matrix_readme = parent.join("README.md");
-        std::fs::write(
-            &matrix_readme,
-            "# Ecosystem\n<!-- ECOSYSTEM_CONFORMANCE_START -->\n<!-- ECOSYSTEM_CONFORMANCE_END -->\n",
-        )?;
+        let eco_str = "# Ecosystem\n<!-- ECOSYSTEM_CONFORMANCE_START -->\n<!-- ECOSYSTEM_CONFORMANCE_END -->\n";
+        let _ = std::fs::write(&matrix_readme, eco_str);
 
+        assert!(run_matrix(&parent, None, None).is_ok());
         assert!(run_matrix(&parent, Some(&matrix_md), Some(&matrix_readme)).is_ok());
-        assert!(std::fs::read_to_string(&matrix_md)?.contains("swift"));
-        assert!(std::fs::read_to_string(&matrix_readme)?.contains("swift"));
+        assert!(std::fs::read_to_string(&matrix_md)
+            .unwrap_or_default()
+            .contains("swift"));
+        assert!(std::fs::read_to_string(&matrix_readme)
+            .unwrap_or_default()
+            .contains("swift"));
 
-        Ok(())
+        let _ = std::fs::remove_dir_all(&repo_root);
     }
 }

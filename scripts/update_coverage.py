@@ -6,139 +6,219 @@ import os
 import re
 import subprocess
 import sys
+from typing import Tuple
 
-def get_color(cov_str):
-    """Returns shields.io badge color based on coverage percentage."""
+
+def get_color(cov_str: str) -> str:
+    """Returns shields.io badge color for a given coverage percentage string.
+
+    Args:
+        cov_str: Percentage string (e.g. "100" or "95.5").
+
+    Returns:
+        Shields.io color identifier string.
+    """
     try:
-        val = float(cov_str)
-        if val >= 90.0:
-            return "brightgreen"
-        elif val >= 80.0:
-            return "green"
-        elif val >= 70.0:
-            return "yellow"
-        else:
-            return "red"
+        cov = float(cov_str)
     except ValueError:
         return "red"
+    if cov >= 100.0:
+        return "brightgreen"
+    if cov >= 90.0:
+        return "green"
+    if cov >= 80.0:
+        return "yellowgreen"
+    if cov >= 70.0:
+        return "yellow"
+    return "red"
 
-def calculate_test_coverage():
-    """Calculates test coverage percentage using cargo-llvm-cov or cargo-tarpaulin."""
-    print("Calculating test coverage...")
+
+def calculate_test_coverage() -> str:
+    """Calculates test coverage (minimum of lines, functions, and regions) via cargo-llvm-cov or cargo-tarpaulin.
+
+    Returns:
+        Formatted percentage string (e.g. "100" or "98.50").
+
+    Raises:
+        SystemExit: If neither coverage tool succeeds.
+    """
     try:
         res = subprocess.run(
-            ["cargo", "llvm-cov", "--json"],
+            ["cargo", "llvm-cov", "--all-targets", "--json", "--summary-only"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         data = json.loads(res.stdout)
-        lines = data["data"][0]["totals"]["lines"]
-        percent = lines["percent"]
-        cov_str = f"{percent:.2f}"
-        print(f"Test coverage (llvm-cov): {cov_str}%")
-        return cov_str
-    except Exception as e:
-        print(f"cargo-llvm-cov failed or unavailable: {e}")
+        totals = data["data"][0]["totals"]
+        line_pct = float(totals["lines"]["percent"])
+        fn_pct = float(totals["functions"]["percent"])
+        reg_pct = float(totals["regions"]["percent"])
+        pct = min(line_pct, fn_pct, reg_pct)
+        if pct >= 99.995:
+            return "100"
+        return f"{pct:.2f}"
+    except Exception:
+        pass
 
     try:
         res = subprocess.run(
-            ["cargo", "tarpaulin", "--workspace"],
-            capture_output=True,
-            text=True
-        )
-        out = res.stdout + res.stderr
-        match = re.search(r'(\d+\.\d+)%\s*coverage', out)
-        if match:
-            cov_str = match.group(1)
-            print(f"Test coverage (tarpaulin): {cov_str}%")
-            return cov_str
-    except Exception as e:
-        print(f"cargo-tarpaulin failed: {e}")
-
-    return "100.00"
-
-def calculate_doc_coverage():
-    """Calculates doc coverage percentage using rustdoc show-coverage."""
-    print("Calculating doc coverage...")
-    try:
-        res = subprocess.run(
-            ["cargo", "+nightly", "rustdoc", "--", "-Z", "unstable-options", "--show-coverage", "--output-format", "json"],
+            ["cargo", "tarpaulin", "--out", "Stdout"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        doc_json_path = "target/doc/cdd_conformance.json"
-        if os.path.exists(doc_json_path):
-            with open(doc_json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            total = sum(v.get("total", 0) for v in data.values())
-            with_docs = sum(v.get("with_docs", 0) for v in data.values())
-            if total > 0:
-                pct = (with_docs * 100.0) / total
-                cov_str = f"{pct:.2f}"
-                print(f"Doc coverage (rustdoc json): {cov_str}% ({with_docs}/{total})")
-                return cov_str
-    except Exception as e:
-        print(f"rustdoc show-coverage failed: {e}")
+        match = re.search(r"(\d+\.\d+)%\s+coverage", res.stdout)
+        if match:
+            val = float(match.group(1))
+            if val >= 99.995:
+                return "100"
+            return f"{val:.2f}"
+    except Exception as exc:
+        print(f"Failed to calculate test coverage: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-    # Fallback: if cargo doc passes with missing_docs denied, it's 100%
+    print("Failed to parse test coverage output", file=sys.stderr)
+    sys.exit(1)
+
+
+def calculate_doc_coverage() -> str:
+    """Calculates documentation coverage using nightly rustdoc or fallback parser.
+
+    Returns:
+        Formatted percentage string (e.g. "100" or "99.10").
+    """
     try:
-        subprocess.run(["cargo", "doc", "--no-deps", "--all-features"], check=True, capture_output=True)
-        return "100.00"
+        res = subprocess.run(
+            [
+                "cargo",
+                "+nightly",
+                "rustdoc",
+                "--",
+                "-Z",
+                "unstable-options",
+                "--show-coverage",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = res.stdout + chr(10) + res.stderr
+        txt_path = os.path.join("target", "doc", "cdd_conformance.txt")
+        if os.path.exists(txt_path):
+            with open(txt_path, "r", encoding="utf-8") as tf:
+                out += chr(10) + tf.read()
+        matches = re.findall(r"\|\s*Total\s*\|\s*\d+\s*\|\s*(\d+\.\d+)%", out)
+        if matches:
+            val = float(matches[-1])
+            if val >= 99.995:
+                return "100"
+            return f"{val:.2f}"
     except Exception:
-        return "0.00"
+        pass
 
-def update_readme(test_cov, doc_cov):
-    """Updates or adds the shields in README.md."""
+    total_items, documented_items = count_documented_pub_items("src")
+    if total_items == 0:
+        return "100"
+    pct = (documented_items / total_items) * 100.0
+    if pct >= 99.995:
+        return "100"
+    return f"{pct:.2f}"
+
+
+def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
+    """Counts public Rust items and how many have preceding `///` doc comments.
+
+    Args:
+        src_dir: Root source directory to walk.
+
+    Returns:
+        Tuple of `(total_items, documented_items)`.
+    """
+    total_items = 0
+    documented_items = 0
+    pub_pattern = re.compile(
+        r"^\s*pub\s+(fn|struct|enum|mod|trait|type|const)\s+"
+    )
+    for root, _, files in os.walk(src_dir):
+        for file in files:
+            if not file.endswith(".rs"):
+                continue
+            path = os.path.join(root, file)
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            has_doc = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("///"):
+                    has_doc = True
+                elif stripped.startswith("#["):
+                    continue
+                elif pub_pattern.match(line):
+                    total_items += 1
+                    if has_doc:
+                        documented_items += 1
+                    has_doc = False
+                elif stripped == "":
+                    has_doc = False
+                else:
+                    has_doc = False
+    return total_items, documented_items
+
+
+def update_readme(test_cov: str, doc_cov: str) -> None:
+    """Updates the coverage badges in README.md.
+
+    Args:
+        test_cov: Calculated test coverage percentage string.
+        doc_cov: Calculated documentation coverage percentage string.
+    """
     readme_path = "README.md"
     if not os.path.exists(readme_path):
-        print("README.md not found.")
         return
-
-    test_color = get_color(test_cov)
-    doc_color = get_color(doc_cov)
-
-    test_badge = f"[![Test Coverage](https://img.shields.io/badge/test_coverage-{test_cov}%25-{test_color}.svg)](README.md)"
-    doc_badge = f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_cov}%25-{doc_color}.svg)](README.md)"
-    badge_line = f"{doc_badge} {test_badge}"
 
     with open(readme_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    has_test_badge = "badge/test_coverage-" in content
-    has_doc_badge = "badge/doc_coverage-" in content
+    test_color = get_color(test_cov)
+    doc_color = get_color(doc_cov)
 
-    if has_test_badge:
-        content = re.sub(
-            r'\[!\[Test Coverage\]\(https://img\.shields\.io/badge/test_coverage-[^)]+\)\]\([^)]+\)',
-            test_badge,
-            content
-        )
-    if has_doc_badge:
-        content = re.sub(
-            r'\[!\[Doc Coverage\]\(https://img\.shields\.io/badge/doc_coverage-[^)]+\)\]\([^)]+\)',
-            doc_badge,
-            content
-        )
+    test_badge = (
+        f"[![test coverage](https://img.shields.io/badge/test_coverage-"
+        f"{test_cov}%25-{test_color})](https://github.com/SamuelMarks/cdd-spec-conformance)"
+    )
+    doc_badge = (
+        f"[![doc coverage](https://img.shields.io/badge/doc_coverage-"
+        f"{doc_cov}%25-{doc_color})](https://github.com/SamuelMarks/cdd-spec-conformance)"
+    )
 
-    if not has_test_badge and not has_doc_badge:
-        # Insert badges directly after title
-        title_end = content.find("\n\n")
-        if title_end != -1:
-            content = content[:title_end] + "\n\n" + badge_line + content[title_end:]
-        else:
-            content = badge_line + "\n\n" + content
+    test_regex = re.compile(
+        r"\[!\[test coverage\]\(https://img\.shields\.io/badge/test_coverage-[^\)]+\)\]\([^\)]+\)"
+    )
+    doc_regex = re.compile(
+        r"\[!\[doc coverage\]\(https://img\.shields\.io/badge/doc_coverage-[^\)]+\)\]\([^\)]+\)"
+    )
+
+    if test_regex.search(content):
+        content = test_regex.sub(test_badge, content)
+    if doc_regex.search(content):
+        content = doc_regex.sub(doc_badge, content)
 
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    print(f"Updated README.md with doc coverage {doc_cov}% and test coverage {test_cov}%")
+    print(
+        f"Updated README.md with doc coverage {doc_cov}% and test coverage {test_cov}%"
+    )
 
-def main():
+
+def main() -> None:
+    """Entrypoint for updating test and doc coverage shields in README.md."""
     test_cov = calculate_test_coverage()
     doc_cov = calculate_doc_coverage()
     update_readme(test_cov, doc_cov)
+
 
 if __name__ == "__main__":
     main()

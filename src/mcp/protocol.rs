@@ -29,7 +29,7 @@ pub enum RequestId {
 /// A JSON-RPC 2.0 request payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
-    /// Protocol version (must be "2.0").
+    /// Protocol version (must be `"2.0"`).
     pub jsonrpc: String,
     /// Unique request identifier.
     pub id: RequestId,
@@ -55,7 +55,7 @@ pub struct JsonRpcError {
 /// A JSON-RPC 2.0 response payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
-    /// Protocol version ("2.0").
+    /// Protocol version (`"2.0"`).
     pub jsonrpc: String,
     /// Matching request identifier.
     pub id: RequestId,
@@ -69,6 +69,15 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     /// Creates a successful response.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Request identifier matching the incoming request.
+    /// * `result` - JSON value representing the result payload.
+    ///
+    /// # Returns
+    ///
+    /// A populated `JsonRpcResponse`.
     #[must_use]
     pub fn success(id: RequestId, result: serde_json::Value) -> Self {
         Self {
@@ -79,7 +88,57 @@ impl JsonRpcResponse {
         }
     }
 
+    /// Creates a response by serializing a typed result struct, returning a JSON-RPC internal error if serialization fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Request identifier matching the incoming request.
+    /// * `result` - Serializable result payload.
+    ///
+    /// # Returns
+    ///
+    /// A `JsonRpcResponse` containing either the serialized `result` or an `-32603` error.
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn from_serializable<T: Serialize>(id: RequestId, result: &T) -> Self {
+        serde_json::to_value(result).map_or_else(
+            |e| {
+                let err = crate::error::ConformanceError::JsonRpcInternal {
+                    message: e.to_string(),
+                };
+                Self::from_conformance_error(id.clone(), &err)
+            },
+            |val| Self::success(id.clone(), val),
+        )
+    }
+
+    /// Creates an error response from a `ConformanceError`.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Request identifier matching the incoming request.
+    /// * `err` - The `ConformanceError` to convert.
+    ///
+    /// # Returns
+    ///
+    /// A `JsonRpcResponse` populated with the mapped JSON-RPC error code and message.
+    #[must_use]
+    pub fn from_conformance_error(id: RequestId, err: &crate::error::ConformanceError) -> Self {
+        let (code, msg) = err.to_json_rpc_error();
+        Self::error(id, code, msg)
+    }
+
     /// Creates an error response.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Request identifier matching the incoming request.
+    /// * `code` - Standard JSON-RPC 2.0 numeric error code.
+    /// * `message` - Human-readable error summary.
+    ///
+    /// # Returns
+    ///
+    /// A populated error `JsonRpcResponse`.
     #[must_use]
     pub fn error(id: RequestId, code: i32, message: impl Into<String>) -> Self {
         Self {
@@ -98,7 +157,7 @@ impl JsonRpcResponse {
 /// A JSON-RPC 2.0 notification (request without an id).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcNotification {
-    /// Protocol version ("2.0").
+    /// Protocol version (`"2.0"`).
     pub jsonrpc: String,
     /// Method name.
     pub method: String,
@@ -109,6 +168,15 @@ pub struct JsonRpcNotification {
 
 impl JsonRpcNotification {
     /// Creates a new notification.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - Notification method name.
+    /// * `params` - Optional JSON parameter payload.
+    ///
+    /// # Returns
+    ///
+    /// A populated `JsonRpcNotification`.
     #[must_use]
     pub fn new(method: impl Into<String>, params: Option<serde_json::Value>) -> Self {
         Self {
@@ -132,9 +200,18 @@ pub enum JsonRpcMessage {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic)]
 mod tests {
     use super::*;
+
+    struct FailingSerialize;
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("intentional failure"))
+        }
+    }
 
     #[test]
     fn test_json_rpc_request_serde() {
@@ -168,7 +245,6 @@ mod tests {
         assert_eq!(new_notif.method, "test/notify");
         assert!(new_notif.params.is_some());
 
-        // Test JsonRpcMessage::Response
         let resp_json = r#"{"jsonrpc":"2.0","id":"abc","result":{"ok":true}}"#;
         let resp_parsed = serde_json::from_str::<JsonRpcMessage>(resp_json);
         assert_eq!(
@@ -184,13 +260,19 @@ mod tests {
 
     #[test]
     fn test_json_rpc_response_constructors() {
-        let success = JsonRpcResponse::success(
+        let success = JsonRpcResponse::from_serializable(
             RequestId::String("req-1".to_string()),
-            serde_json::json!({"status": "ok"}),
+            &serde_json::json!({"status": "ok"}),
         );
         assert_eq!(success.id, RequestId::String("req-1".to_string()));
         assert!(success.result.is_some());
         assert!(success.error.is_none());
+
+        let fail_ser = JsonRpcResponse::from_serializable(RequestId::Number(99), &FailingSerialize);
+        assert_eq!(
+            fail_ser.error.map(|e| e.code),
+            Some(error_codes::INTERNAL_ERROR)
+        );
 
         let error = JsonRpcResponse::error(
             RequestId::Number(42),

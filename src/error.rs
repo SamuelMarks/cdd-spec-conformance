@@ -44,6 +44,20 @@ pub enum ConformanceError {
         path: PathBuf,
     },
 
+    /// An unrecognized specification identifier was encountered.
+    #[display("Unrecognized specification identifier: '{}'", raw)]
+    UnknownSpecId {
+        /// The raw specification string that failed to parse.
+        raw: String,
+    },
+
+    /// An unrecognized profile kind was encountered.
+    #[display("Unrecognized profile kind: '{}'", raw)]
+    UnknownProfileKind {
+        /// The raw profile string that failed to parse.
+        raw: String,
+    },
+
     /// An expected specification directory could not be found.
     #[display("Missing specification directory: {}", expected_dir.display())]
     MissingSpecDirectory {
@@ -124,8 +138,8 @@ pub enum ConformanceError {
         spec: String,
         /// Target profile name.
         profile: String,
-        /// Metric evaluated (e.g. "To", "From", "Overall").
-        metric: String,
+        /// Directional metric evaluated (`To`, `From`, or `Bidirectional`).
+        metric: crate::model::Direction,
         /// Actual achieved percentage.
         actual: f64,
         /// Required threshold percentage.
@@ -222,6 +236,10 @@ pub enum ConformanceError {
 
 impl ConformanceError {
     /// Returns the corresponding JSON-RPC 2.0 error code and message.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(code, message)` conforming to the JSON-RPC 2.0 specification.
     #[must_use]
     pub fn to_json_rpc_error(&self) -> (i32, String) {
         match self {
@@ -231,6 +249,10 @@ impl ConformanceError {
                 (-32601, format!("Method not found: '{method}'"))
             }
             Self::JsonRpcInvalidParams { message } => (-32602, message.clone()),
+            Self::UnknownSpecId { .. }
+            | Self::UnknownProfileKind { .. }
+            | Self::McpRootBoundaryViolation { .. } => (-32602, self.to_string()),
+            Self::McpProtocolViolation { .. } => (-32600, self.to_string()),
             Self::JsonRpcInternal { message } => (-32603, message.clone()),
             _ => (-32603, self.to_string()),
         }
@@ -243,48 +265,73 @@ mod tests {
     use std::io::{Error as IoError, ErrorKind};
 
     #[test]
-    fn test_error_display_and_json_rpc_mapping() {
+    fn test_domain_and_io_error_display() {
         let path = PathBuf::from("test/path.yaml");
 
         let io_err = ConformanceError::Io {
             source: IoError::new(ErrorKind::NotFound, "file not found"),
             path: path.clone(),
         };
-        assert!(io_err.to_string().contains("I/O error at"));
-        let (code, _) = io_err.to_json_rpc_error();
-        assert_eq!(code, -32603);
+        assert!(io_err
+            .to_string()
+            .contains("I/O error at test/path.yaml: file not found"));
+        assert_eq!(io_err.to_json_rpc_error().0, -32603);
 
-        for input in [": invalid", "valid: true"] {
-            if let Err(y) = serde_yaml::from_str::<serde_yaml::Value>(input) {
-                let yaml_err = ConformanceError::YamlParse {
-                    source: y,
-                    path: path.clone(),
-                };
-                assert!(yaml_err.to_string().contains("YAML parse error"));
-            }
-        }
+        let yaml_err = ConformanceError::YamlParse {
+            source: <serde_yaml::Error as serde::de::Error>::custom("invalid yaml syntax"),
+            path: path.clone(),
+        };
+        assert_eq!(
+            yaml_err.to_string(),
+            "YAML parse error at test/path.yaml: invalid yaml syntax"
+        );
+        assert_eq!(yaml_err.to_json_rpc_error().0, -32603);
 
-        for input in ["{ bad", "{\"ok\": true}"] {
-            if let Err(j) = serde_json::from_str::<serde_json::Value>(input) {
-                let json_err = ConformanceError::JsonParse {
-                    source: j,
-                    path: path.clone(),
-                };
-                assert!(json_err.to_string().contains("JSON parse error"));
-            }
-        }
+        let json_err = ConformanceError::JsonParse {
+            source: <serde_json::Error as serde::de::Error>::custom("invalid json syntax"),
+            path: path.clone(),
+        };
+        assert_eq!(
+            json_err.to_string(),
+            "JSON parse error at test/path.yaml: invalid json syntax"
+        );
+        assert_eq!(json_err.to_json_rpc_error().0, -32603);
 
         let md_err = ConformanceError::MarkdownParse {
             message: "corrupted row".to_string(),
             line: 42,
             path: path.clone(),
         };
-        assert!(md_err.to_string().contains("Markdown parse error at"));
+        assert_eq!(
+            md_err.to_string(),
+            "Markdown parse error at test/path.yaml:42: corrupted row"
+        );
+
+        let unknown_spec = ConformanceError::UnknownSpecId {
+            raw: "bad-spec".to_string(),
+        };
+        assert_eq!(
+            unknown_spec.to_string(),
+            "Unrecognized specification identifier: 'bad-spec'"
+        );
+        assert_eq!(unknown_spec.to_json_rpc_error().0, -32602);
+
+        let unknown_profile = ConformanceError::UnknownProfileKind {
+            raw: "bad-profile".to_string(),
+        };
+        assert_eq!(
+            unknown_profile.to_string(),
+            "Unrecognized profile kind: 'bad-profile'"
+        );
+        assert_eq!(unknown_profile.to_json_rpc_error().0, -32602);
 
         let missing_dir = ConformanceError::MissingSpecDirectory {
             expected_dir: path.clone(),
         };
-        assert!(missing_dir.to_string().contains("Missing specification"));
+        assert_eq!(
+            missing_dir.to_string(),
+            "Missing specification directory: test/path.yaml"
+        );
 
         let bad_header = ConformanceError::InvalidChecklistHeader {
             path: path.clone(),
@@ -294,12 +341,20 @@ mod tests {
         assert!(bad_header.to_string().contains("Invalid checklist header"));
 
         let bad_row = ConformanceError::InvalidChecklistRow {
-            path: path.clone(),
+            path,
             line: 5,
             raw: "bad".to_string(),
             reason: "malformed".to_string(),
         };
-        assert!(bad_row.to_string().contains("Invalid checklist row"));
+        assert_eq!(
+            bad_row.to_string(),
+            "Invalid checklist row at test/path.yaml:5: 'bad' (malformed)"
+        );
+    }
+
+    #[test]
+    fn test_conformance_and_json_rpc_error_mapping() {
+        let path = PathBuf::from("test/path.yaml");
 
         let schema_mismatch = ConformanceError::ChecklistSchemaMismatch {
             spec: "oas".to_string(),
@@ -323,11 +378,14 @@ mod tests {
         let threshold_err = ConformanceError::ThresholdNotMet {
             spec: "oas".to_string(),
             profile: "sdk".to_string(),
-            metric: "To".to_string(),
+            metric: crate::model::Direction::To,
             actual: 50.0,
             required: 80.0,
         };
-        assert!(threshold_err.to_string().contains("Threshold not met"));
+        assert_eq!(
+            threshold_err.to_string(),
+            "Threshold not met for oas (profile sdk): To coverage is 50.00%, required 80.00%"
+        );
 
         let reg_err = ConformanceError::RegressionDetected {
             spec: "oas".to_string(),
@@ -341,44 +399,64 @@ mod tests {
             path,
             reason: "bad config".to_string(),
         };
-        assert!(cfg_err.to_string().contains("Invalid configuration"));
+        assert_eq!(
+            cfg_err.to_string(),
+            "Invalid configuration at test/path.yaml: bad config"
+        );
 
         let rpc_parse = ConformanceError::JsonRpcParse {
             message: "syntax error".to_string(),
             code: -32700,
         };
-        assert_eq!(rpc_parse.to_json_rpc_error().0, -32700);
+        assert_eq!(
+            rpc_parse.to_json_rpc_error(),
+            (-32700, "syntax error".to_string())
+        );
 
         let rpc_req = ConformanceError::JsonRpcInvalidRequest {
             message: "bad request".to_string(),
         };
-        assert_eq!(rpc_req.to_json_rpc_error().0, -32600);
+        assert_eq!(
+            rpc_req.to_json_rpc_error(),
+            (-32600, "bad request".to_string())
+        );
 
         let rpc_method = ConformanceError::JsonRpcMethodNotFound {
             method: "nonexistent".to_string(),
         };
-        assert_eq!(rpc_method.to_json_rpc_error().0, -32601);
+        assert_eq!(
+            rpc_method.to_json_rpc_error(),
+            (-32601, "Method not found: 'nonexistent'".to_string())
+        );
 
         let rpc_params = ConformanceError::JsonRpcInvalidParams {
             message: "invalid param".to_string(),
         };
-        assert_eq!(rpc_params.to_json_rpc_error().0, -32602);
+        assert_eq!(
+            rpc_params.to_json_rpc_error(),
+            (-32602, "invalid param".to_string())
+        );
 
         let rpc_internal = ConformanceError::JsonRpcInternal {
             message: "fatal error".to_string(),
         };
-        assert_eq!(rpc_internal.to_json_rpc_error().0, -32603);
+        assert_eq!(
+            rpc_internal.to_json_rpc_error(),
+            (-32603, "fatal error".to_string())
+        );
 
         let proto_err = ConformanceError::McpProtocolViolation {
             expected: "initialized".to_string(),
             received: "ping".to_string(),
         };
         assert!(proto_err.to_string().contains("MCP protocol violation"));
+        assert_eq!(proto_err.to_json_rpc_error().0, -32600);
 
         let root_err = ConformanceError::McpRootBoundaryViolation {
             requested_path: PathBuf::from("/etc/passwd"),
             allowed_roots: vec![PathBuf::from("/workspace")],
         };
         assert!(root_err.to_string().contains("MCP root boundary violation"));
+        assert_eq!(root_err.to_json_rpc_error().0, -32602);
     }
 }

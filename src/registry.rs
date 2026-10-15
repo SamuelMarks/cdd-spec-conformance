@@ -5,232 +5,248 @@ use crate::model::{ChecklistTable, ProfileKind, SpecId};
 use crate::parser::markdown::parse_checklist;
 use std::path::PathBuf;
 
-// Embedded canonical checklist files:
+// Embedded canonical specification checklists at compile time.
+const OAS_320_SDK: &str = include_str!("../openapi-3.2.0/client-sdk.md");
+const OAS_320_CLI: &str = include_str!("../openapi-3.2.0/client-sdk-cli.md");
+const OAS_320_SRV: &str = include_str!("../openapi-3.2.0/servers.md");
 
-const OPENAPI_3_2_0_CLIENT_SDK: &str = include_str!("../openapi-3.2.0/client-sdk.md");
-const OPENAPI_3_2_0_CLI: &str = include_str!("../openapi-3.2.0/client-sdk-cli.md");
-const OPENAPI_3_2_0_SERVERS: &str = include_str!("../openapi-3.2.0/servers.md");
+const OAS_311_SDK: &str = include_str!("../openapi-3.1.1/client-sdk.md");
+const OAS_311_CLI: &str = include_str!("../openapi-3.1.1/client-sdk-cli.md");
+const OAS_311_SRV: &str = include_str!("../openapi-3.1.1/servers.md");
 
-const OPENAPI_3_1_1_CLIENT_SDK: &str = include_str!("../openapi-3.1.1/client-sdk.md");
-const OPENAPI_3_1_1_CLI: &str = include_str!("../openapi-3.1.1/client-sdk-cli.md");
-const OPENAPI_3_1_1_SERVERS: &str = include_str!("../openapi-3.1.1/servers.md");
+const OAS_310_SDK: &str = include_str!("../openapi-3.1.0/client-sdk.md");
+const OAS_310_CLI: &str = include_str!("../openapi-3.1.0/client-sdk-cli.md");
+const OAS_310_SRV: &str = include_str!("../openapi-3.1.0/servers.md");
 
-const OPENAPI_3_1_0_CLIENT_SDK: &str = include_str!("../openapi-3.1.0/client-sdk.md");
-const OPENAPI_3_1_0_CLI: &str = include_str!("../openapi-3.1.0/client-sdk-cli.md");
-const OPENAPI_3_1_0_SERVERS: &str = include_str!("../openapi-3.1.0/servers.md");
+const OAS_300_SDK: &str = include_str!("../openapi-3.0.0/client-sdk.md");
+const OAS_300_CLI: &str = include_str!("../openapi-3.0.0/client-sdk-cli.md");
+const OAS_300_SRV: &str = include_str!("../openapi-3.0.0/servers.md");
 
-const OPENAPI_3_0_0_CLIENT_SDK: &str = include_str!("../openapi-3.0.0/client-sdk.md");
-const OPENAPI_3_0_0_CLI: &str = include_str!("../openapi-3.0.0/client-sdk-cli.md");
-const OPENAPI_3_0_0_SERVERS: &str = include_str!("../openapi-3.0.0/servers.md");
+const SWAGGER_20_SDK: &str = include_str!("../swagger-2.0/client-sdk.md");
+const SWAGGER_20_CLI: &str = include_str!("../swagger-2.0/client-sdk-cli.md");
+const SWAGGER_20_SRV: &str = include_str!("../swagger-2.0/servers.md");
 
-const SWAGGER_2_0_CLIENT_SDK: &str = include_str!("../swagger-2.0/client-sdk.md");
-const SWAGGER_2_0_CLI: &str = include_str!("../swagger-2.0/client-sdk-cli.md");
-const SWAGGER_2_0_SERVERS: &str = include_str!("../swagger-2.0/servers.md");
+const ARAZZO_110_SDK: &str = include_str!("../arazzo-1.1.0/client-sdk.md");
+const ARAZZO_110_CLI: &str = include_str!("../arazzo-1.1.0/client-sdk-cli.md");
+const ARAZZO_110_SRV: &str = include_str!("../arazzo-1.1.0/servers.md");
 
-const ARAZZO_1_1_0_CLIENT_SDK: &str = include_str!("../arazzo-1.1.0/client-sdk.md");
-const ARAZZO_1_1_0_CLI: &str = include_str!("../arazzo-1.1.0/client-sdk-cli.md");
-const ARAZZO_1_1_0_SERVERS: &str = include_str!("../arazzo-1.1.0/servers.md");
+const MCP_100_SDK: &str = include_str!("../mcp-1.0.0/client-sdk.md");
+const MCP_100_CLI: &str = include_str!("../mcp-1.0.0/client-sdk-cli.md");
+const MCP_100_SRV: &str = include_str!("../mcp-1.0.0/servers.md");
 
-const MCP_1_0_0_CLIENT_SDK: &str = include_str!("../mcp-1.0.0/client-sdk.md");
-const MCP_1_0_0_CLI: &str = include_str!("../mcp-1.0.0/client-sdk-cli.md");
-const MCP_1_0_0_SERVERS: &str = include_str!("../mcp-1.0.0/servers.md");
-
-const MCP_2026_07_28_CLIENT_SDK: &str = include_str!("../mcp-2026-07-28/client-sdk.md");
-const MCP_2026_07_28_CLI: &str = include_str!("../mcp-2026-07-28/client-sdk-cli.md");
-const MCP_2026_07_28_SERVERS: &str = include_str!("../mcp-2026-07-28/servers.md");
+const MCP_2026_SDK: &str = include_str!("../mcp-2026-07-28/client-sdk.md");
+const MCP_2026_CLI: &str = include_str!("../mcp-2026-07-28/client-sdk-cli.md");
+const MCP_2026_SRV: &str = include_str!("../mcp-2026-07-28/servers.md");
 
 const MOCK_SERVER_PLAN: &str = include_str!("../mock-server/mock-server-plan.md");
 
-/// Canonical specification registry providing reference checklists.
+/// Registry providing access to canonical specification checklists (embedded or via custom directory).
+#[derive(Debug, Clone, Default)]
 pub struct CanonicalRegistry {
-    custom_root: Option<PathBuf>,
+    /// Optional filesystem override directory containing canonical specification folders.
+    pub custom_root: Option<PathBuf>,
 }
 
 impl CanonicalRegistry {
-    /// Creates a new `CanonicalRegistry` utilizing embedded canonical specifications.
+    /// Creates a new registry backed by compile-time embedded canonical tables.
+    ///
+    /// # Returns
+    ///
+    /// A default `CanonicalRegistry`.
     #[must_use]
     pub const fn new() -> Self {
         Self { custom_root: None }
     }
 
-    /// Creates a new `CanonicalRegistry` with an explicit directory root.
+    /// Creates a registry backed by a custom filesystem directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - Filesystem directory containing canonical specification folders.
+    ///
+    /// # Returns
+    ///
+    /// A `CanonicalRegistry` reading from `root`.
     #[must_use]
-    pub fn with_root(root: impl Into<PathBuf>) -> Self {
+    pub const fn with_root(root: PathBuf) -> Self {
         Self {
-            custom_root: Some(root.into()),
+            custom_root: Some(root),
         }
     }
 
-    /// Returns the raw markdown string for a canonical specification checklist.
+    /// Retrieves the raw Markdown content for a given specification and profile.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - Target specification identifier.
+    /// * `profile` - Target profile boundary.
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError::Io` if an explicit root is configured and file read fails,
-    /// or `ConformanceError::MissingSpecDirectory` if the specification or profile is not found.
+    /// Returns `ConformanceError::MissingSpecDirectory` if the `(spec, profile)` pair is unsupported,
+    /// or `ConformanceError::Io` if reading from a custom root directory fails.
     pub fn get_raw_content(
         &self,
-        spec_id: SpecId,
+        spec: SpecId,
         profile: ProfileKind,
     ) -> Result<String, ConformanceError> {
         if let Some(ref root) = self.custom_root {
-            let spec_dir = root.join(spec_id.as_str());
-            let file_path = spec_dir.join(profile.filename());
+            let file_path = root.join(spec.as_str()).join(profile.filename());
             if file_path.is_file() {
                 return std::fs::read_to_string(&file_path).map_err(|e| ConformanceError::Io {
                     source: e,
                     path: file_path,
                 });
             }
-            return Err(ConformanceError::MissingSpecDirectory {
-                expected_dir: spec_dir,
-            });
         }
 
-        let content = match (spec_id, profile) {
-            (SpecId::OpenApi320, ProfileKind::ClientSdk) => OPENAPI_3_2_0_CLIENT_SDK,
-            (SpecId::OpenApi320, ProfileKind::ClientCli) => OPENAPI_3_2_0_CLI,
-            (SpecId::OpenApi320, ProfileKind::Servers) => OPENAPI_3_2_0_SERVERS,
+        let embedded = match (spec, profile) {
+            (SpecId::OpenApi320, ProfileKind::ClientSdk) => Some(OAS_320_SDK),
+            (SpecId::OpenApi320, ProfileKind::ClientCli) => Some(OAS_320_CLI),
+            (SpecId::OpenApi320, ProfileKind::Servers) => Some(OAS_320_SRV),
 
-            (SpecId::OpenApi311, ProfileKind::ClientSdk) => OPENAPI_3_1_1_CLIENT_SDK,
-            (SpecId::OpenApi311, ProfileKind::ClientCli) => OPENAPI_3_1_1_CLI,
-            (SpecId::OpenApi311, ProfileKind::Servers) => OPENAPI_3_1_1_SERVERS,
+            (SpecId::OpenApi311, ProfileKind::ClientSdk) => Some(OAS_311_SDK),
+            (SpecId::OpenApi311, ProfileKind::ClientCli) => Some(OAS_311_CLI),
+            (SpecId::OpenApi311, ProfileKind::Servers) => Some(OAS_311_SRV),
 
-            (SpecId::OpenApi310, ProfileKind::ClientSdk) => OPENAPI_3_1_0_CLIENT_SDK,
-            (SpecId::OpenApi310, ProfileKind::ClientCli) => OPENAPI_3_1_0_CLI,
-            (SpecId::OpenApi310, ProfileKind::Servers) => OPENAPI_3_1_0_SERVERS,
+            (SpecId::OpenApi310, ProfileKind::ClientSdk) => Some(OAS_310_SDK),
+            (SpecId::OpenApi310, ProfileKind::ClientCli) => Some(OAS_310_CLI),
+            (SpecId::OpenApi310, ProfileKind::Servers) => Some(OAS_310_SRV),
 
-            (SpecId::OpenApi300, ProfileKind::ClientSdk) => OPENAPI_3_0_0_CLIENT_SDK,
-            (SpecId::OpenApi300, ProfileKind::ClientCli) => OPENAPI_3_0_0_CLI,
-            (SpecId::OpenApi300, ProfileKind::Servers) => OPENAPI_3_0_0_SERVERS,
+            (SpecId::OpenApi300, ProfileKind::ClientSdk) => Some(OAS_300_SDK),
+            (SpecId::OpenApi300, ProfileKind::ClientCli) => Some(OAS_300_CLI),
+            (SpecId::OpenApi300, ProfileKind::Servers) => Some(OAS_300_SRV),
 
-            (SpecId::Swagger20, ProfileKind::ClientSdk) => SWAGGER_2_0_CLIENT_SDK,
-            (SpecId::Swagger20, ProfileKind::ClientCli) => SWAGGER_2_0_CLI,
-            (SpecId::Swagger20, ProfileKind::Servers) => SWAGGER_2_0_SERVERS,
+            (SpecId::Swagger20, ProfileKind::ClientSdk) => Some(SWAGGER_20_SDK),
+            (SpecId::Swagger20, ProfileKind::ClientCli) => Some(SWAGGER_20_CLI),
+            (SpecId::Swagger20, ProfileKind::Servers) => Some(SWAGGER_20_SRV),
 
-            (SpecId::Arazzo110, ProfileKind::ClientSdk) => ARAZZO_1_1_0_CLIENT_SDK,
-            (SpecId::Arazzo110, ProfileKind::ClientCli) => ARAZZO_1_1_0_CLI,
-            (SpecId::Arazzo110, ProfileKind::Servers) => ARAZZO_1_1_0_SERVERS,
+            (SpecId::Arazzo110, ProfileKind::ClientSdk) => Some(ARAZZO_110_SDK),
+            (SpecId::Arazzo110, ProfileKind::ClientCli) => Some(ARAZZO_110_CLI),
+            (SpecId::Arazzo110, ProfileKind::Servers) => Some(ARAZZO_110_SRV),
 
-            (SpecId::Mcp100, ProfileKind::ClientSdk) => MCP_1_0_0_CLIENT_SDK,
-            (SpecId::Mcp100, ProfileKind::ClientCli) => MCP_1_0_0_CLI,
-            (SpecId::Mcp100, ProfileKind::Servers) => MCP_1_0_0_SERVERS,
+            (SpecId::Mcp100, ProfileKind::ClientSdk) => Some(MCP_100_SDK),
+            (SpecId::Mcp100, ProfileKind::ClientCli) => Some(MCP_100_CLI),
+            (SpecId::Mcp100, ProfileKind::Servers) => Some(MCP_100_SRV),
 
-            (SpecId::Mcp20260728, ProfileKind::ClientSdk) => MCP_2026_07_28_CLIENT_SDK,
-            (SpecId::Mcp20260728, ProfileKind::ClientCli) => MCP_2026_07_28_CLI,
-            (SpecId::Mcp20260728, ProfileKind::Servers) => MCP_2026_07_28_SERVERS,
+            (SpecId::Mcp20260728, ProfileKind::ClientSdk) => Some(MCP_2026_SDK),
+            (SpecId::Mcp20260728, ProfileKind::ClientCli) => Some(MCP_2026_CLI),
+            (SpecId::Mcp20260728, ProfileKind::Servers) => Some(MCP_2026_SRV),
 
-            (SpecId::MockServer, ProfileKind::MockServerPlan) => MOCK_SERVER_PLAN,
-
-            _ => {
-                return Err(ConformanceError::MissingSpecDirectory {
-                    expected_dir: PathBuf::from(format!(
-                        "{}/{}",
-                        spec_id.as_str(),
-                        profile.filename()
-                    )),
-                });
-            }
+            (SpecId::MockServer, ProfileKind::MockServerPlan) => Some(MOCK_SERVER_PLAN),
+            _ => None,
         };
 
-        Ok(content.to_string())
+        embedded
+            .map(ToString::to_string)
+            .ok_or_else(|| ConformanceError::MissingSpecDirectory {
+                expected_dir: PathBuf::from(format!("{}/{}", spec.as_str(), profile.filename())),
+            })
     }
 
-    /// Loads and parses the canonical checklist table for the given specification and profile.
+    /// Parses and returns the canonical `ChecklistTable` for a specification and profile.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - Target specification identifier.
+    /// * `profile` - Target profile boundary.
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError` if retrieval or parsing fails.
+    /// Returns `ConformanceError` if the table does not exist or fails to parse.
     pub fn get_table(
         &self,
-        spec_id: SpecId,
+        spec: SpecId,
         profile: ProfileKind,
     ) -> Result<ChecklistTable, ConformanceError> {
-        let raw = self.get_raw_content(spec_id, profile)?;
-        let path = PathBuf::from(format!("{}/{}", spec_id.as_str(), profile.filename()));
-        parse_checklist(&raw, &path, spec_id, profile)
+        let raw = self.get_raw_content(spec, profile)?;
+        let virtual_path = PathBuf::from(format!("{}/{}", spec.as_str(), profile.filename()));
+        parse_checklist(&raw, &virtual_path, spec, profile)
     }
 
-    /// Returns a slice of all supported specifications.
+    /// Lists all canonical specifications available in the registry.
+    ///
+    /// # Returns
+    ///
+    /// Static slice of all supported `SpecId` variants.
     #[must_use]
     pub const fn list_specs(&self) -> &'static [SpecId] {
         SpecId::all()
     }
 
-    /// Returns the profiles supported by a given specification.
+    /// Lists the applicable profiles for a given specification.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - Target specification identifier.
+    ///
+    /// # Returns
+    ///
+    /// Static slice of `ProfileKind` variants applicable to `spec`.
     #[must_use]
-    pub fn list_profiles(&self, spec_id: SpecId) -> Vec<ProfileKind> {
-        if spec_id == SpecId::MockServer {
-            vec![ProfileKind::MockServerPlan]
-        } else {
-            ProfileKind::standard_profiles().to_vec()
+    pub const fn list_profiles(&self, spec: SpecId) -> &'static [ProfileKind] {
+        match spec {
+            SpecId::MockServer => &[ProfileKind::MockServerPlan],
+            _ => ProfileKind::standard_profiles(),
         }
-    }
-}
-
-impl Default for CanonicalRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::assert_is_empty, clippy::uninlined_format_args)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_all_embedded_canonical_tables_parse_successfully(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let registry = CanonicalRegistry::default();
+    fn test_all_embedded_canonical_tables_parse_cleanly() {
+        let registry = CanonicalRegistry::new();
         for spec in registry.list_specs() {
-            let profiles = registry.list_profiles(*spec);
-            assert!(!profiles.is_empty());
-            for profile in profiles {
-                let table = registry.get_table(*spec, profile)?;
-                assert!(
-                    !table.rows.is_empty(),
-                    "Canonical table for {} {} is empty",
-                    spec,
-                    profile
-                );
+            for profile in registry.list_profiles(*spec) {
+                let table = registry.get_table(*spec, *profile).ok();
+                assert!(table.is_some_and(|t| !t.rows.is_empty()));
             }
         }
-
-        // Test unmapped spec / profile combination (MockServer with ClientSdk)
-        assert!(registry
-            .get_table(SpecId::MockServer, ProfileKind::ClientSdk)
-            .is_err());
-        Ok(())
     }
 
     #[test]
-    fn test_registry_with_custom_root() -> Result<(), Box<dyn std::error::Error>> {
-        let registry = CanonicalRegistry::with_root(".");
-        let table = registry.get_table(SpecId::OpenApi320, ProfileKind::ClientSdk)?;
-        assert!(!table.rows.is_empty());
+    fn test_invalid_spec_profile_combination() {
+        let registry = CanonicalRegistry::new();
+        let res = registry.get_table(SpecId::OpenApi320, ProfileKind::MockServerPlan);
+        assert!(res.is_err());
+    }
 
-        let bad_registry = CanonicalRegistry::with_root("nonexistent-dir-12345");
-        assert!(bad_registry
+    #[test]
+    fn test_custom_root_registry() {
+        let dir = std::env::temp_dir().join("cdd_registry_custom_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let oas_dir = dir.join("openapi-3.2.0");
+        let _ = std::fs::create_dir_all(&oas_dir);
+        let file_path = oas_dir.join("client-sdk.md");
+        let _ = std::fs::write(
+            &file_path,
+            "# Custom Table\n| Object / Feature | Presence [To, From] |\n| :--- | :---: |\n| Custom Row | `[x]` , `[x]` |\n",
+        );
+
+        let reg = CanonicalRegistry::with_root(dir.clone());
+        let table = reg
             .get_table(SpecId::OpenApi320, ProfileKind::ClientSdk)
-            .is_err());
+            .ok();
+        assert_eq!(
+            table.map(|t| (t.rows.len(), t.rows[0].feature_name.clone())),
+            Some((1, "Custom Row".to_string()))
+        );
+
+        let fallback = reg.get_table(SpecId::OpenApi320, ProfileKind::Servers).ok();
+        assert!(fallback.is_some_and(|t| !t.rows.is_empty()));
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let dir = tempfile::tempdir()?;
-            let spec_dir = dir.path().join("openapi-3.2.0");
-            std::fs::create_dir_all(&spec_dir)?;
-            let file_path = spec_dir.join("client-sdk.md");
-            std::fs::write(&file_path, b"test")?;
-            std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o000))?;
-
-            let reg = CanonicalRegistry::with_root(dir.path());
+            let _ = std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o000));
             assert!(reg
-                .get_raw_content(SpecId::OpenApi320, ProfileKind::ClientSdk)
+                .get_table(SpecId::OpenApi320, ProfileKind::ClientSdk)
                 .is_err());
-
-            std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))?;
+            let _ = std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644));
         }
-        Ok(())
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

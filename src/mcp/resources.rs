@@ -6,6 +6,13 @@ use crate::registry::CanonicalRegistry;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Parameter payload for `resources/read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadResourceParams {
+    /// Target resource URI to read.
+    pub uri: String,
+}
+
 /// Metadata for an MCP resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +76,14 @@ pub struct ReadResourceResult {
 }
 
 /// Lists available static conformance resources.
+///
+/// # Arguments
+///
+/// * `registry` - Reference to the canonical specification registry.
+///
+/// # Returns
+///
+/// A `ListResourcesResult` containing all catalog and checklist URIs.
 #[must_use]
 pub fn list_resources(registry: &CanonicalRegistry) -> ListResourcesResult {
     let mut resources = vec![Resource {
@@ -95,6 +110,10 @@ pub fn list_resources(registry: &CanonicalRegistry) -> ListResourcesResult {
 }
 
 /// Lists parameterized resource templates.
+///
+/// # Returns
+///
+/// A `ListResourceTemplatesResult` advertising the RFC 6570 URI template.
 #[must_use]
 pub fn list_resource_templates() -> ListResourceTemplatesResult {
     ListResourceTemplatesResult {
@@ -111,6 +130,11 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
 }
 
 /// Reads the contents of a requested resource URI.
+///
+/// # Arguments
+///
+/// * `uri` - Target resource URI (`conformance://specs` or `conformance://specs/{spec_id}/{profile}`).
+/// * `registry` - Reference to the canonical specification registry.
 ///
 /// # Errors
 ///
@@ -154,7 +178,6 @@ pub fn read_resource(
 }
 
 #[cfg(test)]
-#[allow(clippy::assert_is_empty)]
 mod tests {
     use super::*;
 
@@ -167,33 +190,24 @@ mod tests {
         let templates = list_resource_templates();
         assert_eq!(templates.resource_templates.len(), 1);
 
-        let catalog_res = read_resource("conformance://specs", &registry);
-        assert!(catalog_res.is_ok());
+        let catalog_res = read_resource("conformance://specs", &registry).ok();
+        assert_eq!(catalog_res.map(|r| r.contents.len()), Some(1));
 
-        let spec_res = read_resource("conformance://specs/openapi-3.2.0/client-sdk", &registry);
-        assert!(spec_res.is_ok());
+        let spec_res =
+            read_resource("conformance://specs/openapi-3.2.0/client-sdk", &registry).ok();
+        assert_eq!(spec_res.map(|r| r.contents.len()), Some(1));
 
-        let bad_res = read_resource("conformance://invalid", &registry);
-        assert!(bad_res.is_err());
-
-        let bad_parts = read_resource("conformance://specs/one", &registry);
-        assert!(bad_parts.is_err());
-
-        let too_many_parts = read_resource("conformance://specs/a/b/c", &registry);
-        assert!(too_many_parts.is_err());
-
-        let invalid_spec =
-            read_resource("conformance://specs/invalid-spec-id/client-sdk", &registry);
-        assert!(invalid_spec.is_err());
-
-        let invalid_profile = read_resource(
+        assert!(read_resource("conformance://invalid", &registry).is_err());
+        assert!(read_resource("conformance://specs/one", &registry).is_err());
+        assert!(read_resource("conformance://specs/a/b/c", &registry).is_err());
+        assert!(
+            read_resource("conformance://specs/invalid-spec-id/client-sdk", &registry).is_err()
+        );
+        assert!(read_resource(
             "conformance://specs/openapi-3.2.0/invalid-profile",
             &registry,
-        );
-        assert!(invalid_profile.is_err());
-
-        let unmapped_profile =
-            read_resource("conformance://specs/mock-server/client-sdk", &registry);
-        assert!(unmapped_profile.is_err());
+        )
+        .is_err());
+        assert!(read_resource("conformance://specs/mock-server/client-sdk", &registry).is_err());
     }
 }
