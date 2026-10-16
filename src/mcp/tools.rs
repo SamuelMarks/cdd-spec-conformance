@@ -1,7 +1,7 @@
 //! MCP tools engine exposing conformance verification capabilities to AI models.
 
 use crate::claims::verify_compliance_claims;
-use crate::diff::compare_checklists;
+use crate::diff::compare_checklists_with_path;
 use crate::discovery::{scan_all_repositories, scan_repository};
 use crate::error::ConformanceError;
 use crate::model::{ProfileKind, SpecId};
@@ -73,9 +73,13 @@ pub struct Tool {
 
 /// Result returned in response to `tools/list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListToolsResult {
     /// Available tools.
     pub tools: Vec<Tool>,
+    /// Optional pagination cursor for subsequent pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Content payload returned by tool execution.
@@ -242,10 +246,24 @@ pub fn list_tools() -> ListToolsResult {
                 }),
             },
         ],
+        next_cursor: None,
     }
 }
 
 /// Parses strongly typed tool arguments from an optional `serde_json::Value`.
+///
+/// # Arguments
+///
+/// * `tool_name` - Name of the tool being invoked.
+/// * `arguments` - Optional raw JSON value containing tool arguments.
+///
+/// # Returns
+///
+/// Deserialized argument structure `T`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::JsonRpcInvalidParams` if `arguments` is `None` or fails deserialization.
 fn parse_tool_args<T: for<'de> Deserialize<'de>>(
     tool_name: &str,
     arguments: Option<&serde_json::Value>,
@@ -258,38 +276,36 @@ fn parse_tool_args<T: for<'de> Deserialize<'de>>(
     })
 }
 
-/// Loads and parses all checklists from a validated repository path.
-fn load_repo_and_tables(
-    repo_path: &Path,
-    allowed_roots: &[PathBuf],
-) -> Result<
-    (
-        crate::discovery::DiscoveredProject,
-        Vec<crate::model::ChecklistTable>,
-    ),
-    ConformanceError,
-> {
-    let valid_repo = validate_path_within_roots(repo_path, allowed_roots)?;
-    let project = scan_repository(&valid_repo)?;
-    let tables = project.parse_all_checklists()?;
-    Ok((project, tables))
-}
-
 /// Handles `check_conformance` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `CheckConformanceArgs`.
+/// * `registry` - Reference to the canonical specification registry.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` summarizing repository conformance.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if path validation, scanning, or checklist parsing fails.
 fn handle_check_conformance(
-    arguments: Option<&serde_json::Value>,
+    args: &CheckConformanceArgs,
     registry: &CanonicalRegistry,
     allowed_roots: &[PathBuf],
 ) -> Result<CallToolResult, ConformanceError> {
-    let args: CheckConformanceArgs = parse_tool_args("check_conformance", arguments)?;
-    let (project, tables) = load_repo_and_tables(&args.repo_path, allowed_roots)?;
+    let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
+    let project = scan_repository(&valid_repo)?;
+    let tables = project.parse_all_checklists()?;
 
     let mut output = format!(
         "Audited '{}' ({}):\n\n",
         project.language_name,
         project.root.display()
     );
-    for target_table in &tables {
+    for (target_table, checklist) in tables.iter().zip(project.checklists.iter()) {
         if let Some(f) = args.spec_id {
             if target_table.spec_id != f {
                 continue;
@@ -297,7 +313,7 @@ fn handle_check_conformance(
         }
 
         let canonical = registry.get_table(target_table.spec_id, target_table.profile)?;
-        let diff = compare_checklists(target_table, &canonical);
+        let diff = compare_checklists_with_path(target_table, &canonical, &checklist.path);
         let score = diff.score;
         let _ = writeln!(
             output,
@@ -322,19 +338,27 @@ fn handle_check_conformance(
 }
 
 /// Handles `get_compliance_matrix` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `GetComplianceMatrixArgs`.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` containing the formatted ecosystem compliance matrix.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if path validation or repository scanning fails.
 fn handle_get_compliance_matrix(
-    arguments: Option<&serde_json::Value>,
+    args: &GetComplianceMatrixArgs,
     allowed_roots: &[PathBuf],
 ) -> Result<CallToolResult, ConformanceError> {
-    let args: GetComplianceMatrixArgs = match arguments {
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
-            ConformanceError::JsonRpcInvalidParams {
-                message: format!("Invalid arguments for get_compliance_matrix: {e}"),
-            }
-        })?,
-        None => GetComplianceMatrixArgs::default(),
-    };
-    let parent_dir = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
+    let parent_dir = args
+        .repos_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".."));
     let valid_parent = validate_path_within_roots(&parent_dir, allowed_roots)?;
 
     let projects = scan_all_repositories(&valid_parent)?;
@@ -358,6 +382,77 @@ fn handle_get_compliance_matrix(
     Ok(CallToolResult::text(output))
 }
 
+/// Handles `diff_checklists` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `DiffChecklistsArgs`.
+/// * `registry` - Reference to the canonical specification registry.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` containing the JSON-serialized `DiffReport`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if path validation, scanning, or checklist comparison fails.
+fn handle_diff_checklists(
+    args: &DiffChecklistsArgs,
+    registry: &CanonicalRegistry,
+    allowed_roots: &[PathBuf],
+) -> Result<CallToolResult, ConformanceError> {
+    let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
+    let project = scan_repository(&valid_repo)?;
+    let checklist = project
+        .checklists
+        .iter()
+        .find(|c| c.spec_id == args.spec_id && c.profile == args.profile)
+        .ok_or_else(|| ConformanceError::MissingSpecDirectory {
+            expected_dir: PathBuf::from(format!("{}/{}", args.spec_id, args.profile.filename())),
+        })?;
+    let target_table = checklist.parse()?;
+
+    let canonical = registry.get_table(args.spec_id, args.profile)?;
+    let diff = compare_checklists_with_path(&target_table, &canonical, &checklist.path);
+
+    let json_str = serde_json::to_string_pretty(&diff).unwrap_or_default();
+    Ok(CallToolResult::text(json_str))
+}
+
+/// Handles `validate_claims` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `ValidateClaimsArgs`.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` containing the JSON-serialized `ClaimVerificationReport`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if path validation, scanning, or claim verification fails.
+fn handle_validate_claims(
+    args: &ValidateClaimsArgs,
+    allowed_roots: &[PathBuf],
+) -> Result<CallToolResult, ConformanceError> {
+    let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
+    let project = scan_repository(&valid_repo)?;
+    let tables = project.parse_all_checklists()?;
+
+    if let Some(ref comp_file) = project.compliance_file {
+        let report = verify_compliance_claims(comp_file, &tables)?;
+        let res_json = serde_json::to_string_pretty(&report).unwrap_or_default();
+        Ok(CallToolResult::text(res_json))
+    } else {
+        Ok(CallToolResult::text(
+            "No COMPLIANCE.md file found in repository.",
+        ))
+    }
+}
+
 /// Executes a tool call request with root boundary validation.
 ///
 /// # Arguments
@@ -377,45 +472,29 @@ pub fn execute_tool_with_roots(
     allowed_roots: &[PathBuf],
 ) -> Result<CallToolResult, ConformanceError> {
     match name {
-        "check_conformance" => handle_check_conformance(arguments, registry, allowed_roots),
-        "get_compliance_matrix" => handle_get_compliance_matrix(arguments, allowed_roots),
-
+        "check_conformance" => {
+            let args: CheckConformanceArgs = parse_tool_args(name, arguments)?;
+            handle_check_conformance(&args, registry, allowed_roots)
+        }
+        "get_compliance_matrix" => {
+            let args: GetComplianceMatrixArgs = match arguments {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+                    ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Invalid arguments for get_compliance_matrix: {e}"),
+                    }
+                })?,
+                None => GetComplianceMatrixArgs::default(),
+            };
+            handle_get_compliance_matrix(&args, allowed_roots)
+        }
         "diff_checklists" => {
             let args: DiffChecklistsArgs = parse_tool_args(name, arguments)?;
-            let (_project, tables) = load_repo_and_tables(&args.repo_path, allowed_roots)?;
-            let target_table = tables
-                .into_iter()
-                .find(|t| t.spec_id == args.spec_id && t.profile == args.profile)
-                .ok_or_else(|| ConformanceError::MissingSpecDirectory {
-                    expected_dir: PathBuf::from(format!(
-                        "{}/{}",
-                        args.spec_id,
-                        args.profile.filename()
-                    )),
-                })?;
-
-            let canonical = registry.get_table(args.spec_id, args.profile)?;
-            let diff = compare_checklists(&target_table, &canonical);
-
-            let json_str = serde_json::to_string_pretty(&diff).unwrap_or_default();
-            Ok(CallToolResult::text(json_str))
+            handle_diff_checklists(&args, registry, allowed_roots)
         }
-
         "validate_claims" => {
             let args: ValidateClaimsArgs = parse_tool_args(name, arguments)?;
-            let (project, tables) = load_repo_and_tables(&args.repo_path, allowed_roots)?;
-
-            if let Some(ref comp_file) = project.compliance_file {
-                let report = verify_compliance_claims(comp_file, &tables)?;
-                let res_json = serde_json::to_string_pretty(&report).unwrap_or_default();
-                Ok(CallToolResult::text(res_json))
-            } else {
-                Ok(CallToolResult::text(
-                    "No COMPLIANCE.md file found in repository.",
-                ))
-            }
+            handle_validate_claims(&args, allowed_roots)
         }
-
         _ => Err(ConformanceError::JsonRpcMethodNotFound {
             method: name.to_string(),
         }),
@@ -449,6 +528,7 @@ mod tests {
     fn test_list_tools_contains_expected() {
         let tools = list_tools();
         assert_eq!(tools.tools.len(), 4);
+        assert!(tools.next_cursor.is_none());
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
             .tools
@@ -472,8 +552,7 @@ mod tests {
 
     #[test]
     fn test_root_boundary_enforcement() {
-        let base = std::env::temp_dir().join("cdd_tools_roots_test");
-        let _ = std::fs::remove_dir_all(&base);
+        let base = std::env::temp_dir().join(format!("cdd_tools_t1_{}", std::process::id()));
         let allowed = base.join("allowed");
         let forbidden = base.join("forbidden");
         let _ = std::fs::create_dir_all(&allowed);
@@ -482,16 +561,14 @@ mod tests {
         let ok_path = validate_path_within_roots(&allowed, std::slice::from_ref(&allowed)).ok();
         assert_eq!(ok_path, allowed.canonicalize().ok());
 
-        let err = validate_path_within_roots(&forbidden, &[allowed]);
-        assert_eq!(
-            err.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(
-                &ConformanceError::McpRootBoundaryViolation {
-                    requested_path: PathBuf::new(),
-                    allowed_roots: Vec::new(),
-                }
-            ))
-        );
+        let err = validate_path_within_roots(&forbidden, std::slice::from_ref(&allowed));
+        assert!(matches!(
+            err,
+            Err(ConformanceError::McpRootBoundaryViolation {
+                ref requested_path,
+                ref allowed_roots,
+            }) if requested_path == &forbidden && allowed_roots == &[allowed]
+        ));
         assert!(validate_path_within_roots(Path::new("nonexistent_path_xyz"), &[]).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -499,8 +576,6 @@ mod tests {
     #[test]
     fn test_execute_tool_check_and_matrix() {
         let registry = CanonicalRegistry::new();
-
-        // check_conformance error branches
         assert!(execute_tool("check_conformance", None, &registry).is_err());
         assert!(
             execute_tool("check_conformance", Some(&serde_json::json!({})), &registry).is_err()
@@ -512,8 +587,7 @@ mod tests {
         )
         .is_err());
 
-        let base = std::env::temp_dir().join("cdd_tools_check_matrix");
-        let _ = std::fs::remove_dir_all(&base);
+        let base = std::env::temp_dir().join(format!("cdd_tools_t2_{}", std::process::id()));
         let child = base.join("cdd-rust");
         let _ = std::fs::create_dir_all(child.join("openapi-3.2.0"));
         let _ = std::fs::write(
@@ -527,8 +601,6 @@ mod tests {
         );
 
         let child_str = child.to_str().unwrap_or(".");
-
-        // check_conformance with filter and strict
         let filter_args = serde_json::json!({
             "repo_path": child_str,
             "spec_id": "openapi-3.2.0",
@@ -540,13 +612,9 @@ mod tests {
             text.contains("[FAIL] Schema mismatch")
         }));
 
-        // check_conformance without filter
-        let no_filter_args = serde_json::json!({
-            "repo_path": child_str
-        });
+        let no_filter_args = serde_json::json!({ "repo_path": child_str });
         assert!(execute_tool("check_conformance", Some(&no_filter_args), &registry).is_ok());
 
-        // check_conformance in strict mode when checklist is valid (no [FAIL])
         let canon_oas_sdk = registry
             .get_raw_content(SpecId::OpenApi320, ProfileKind::ClientSdk)
             .unwrap_or_default()
@@ -564,7 +632,6 @@ mod tests {
             !text.contains("[FAIL]")
         }));
 
-        // get_compliance_matrix error & success branches
         assert!(execute_tool(
             "get_compliance_matrix",
             Some(&serde_json::json!("bad")),
@@ -579,9 +646,7 @@ mod tests {
         .is_err());
         assert!(execute_tool("get_compliance_matrix", None, &registry).is_ok());
 
-        let child_matrix_args = serde_json::json!({
-            "repos_dir": base.to_str().unwrap_or(".")
-        });
+        let child_matrix_args = serde_json::json!({ "repos_dir": base.to_str().unwrap_or(".") });
         let child_matrix_res =
             execute_tool("get_compliance_matrix", Some(&child_matrix_args), &registry).ok();
         assert!(child_matrix_res.is_some_and(|r| {
@@ -589,7 +654,6 @@ mod tests {
             text.contains("rust")
         }));
 
-        // Test malformed checklist and invalid config in get_compliance_matrix
         let _ = std::fs::write(
             child.join("swagger-2.0").join("client-sdk.md"),
             "# Corrupted\n| Bad |\n| --- |\n| 1 |\n",
@@ -604,15 +668,13 @@ mod tests {
         assert!(
             execute_tool("get_compliance_matrix", Some(&child_matrix_args), &registry).is_err()
         );
-
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn test_execute_tool_diff_and_claims() {
         let registry = CanonicalRegistry::new();
-        let base = std::env::temp_dir().join("cdd_tools_diff_claims");
-        let _ = std::fs::remove_dir_all(&base);
+        let base = std::env::temp_dir().join(format!("cdd_tools_t3_{}", std::process::id()));
         let child = base.join("cdd-rust");
         let _ = std::fs::create_dir_all(child.join("openapi-3.2.0"));
         let _ = std::fs::write(
@@ -627,8 +689,8 @@ mod tests {
         let child_str = child.to_str().unwrap_or(".");
         let no_filter_args = serde_json::json!({ "repo_path": child_str });
 
-        // diff_checklists error and success branches
         assert!(execute_tool("diff_checklists", None, &registry).is_err());
+        assert!(execute_tool("diff_checklists", Some(&serde_json::json!({})), &registry).is_err());
         assert!(execute_tool(
             "diff_checklists",
             Some(&serde_json::json!({
@@ -639,7 +701,6 @@ mod tests {
             &registry
         )
         .is_err());
-
         let missing_table_args = serde_json::json!({
             "repo_path": child_str,
             "spec_id": "openapi-3.2.0",
@@ -656,7 +717,6 @@ mod tests {
             execute_tool("diff_checklists", Some(&success_diff_args), &registry).ok();
         assert!(diff_success.is_some_and(|r| !r.content.is_empty()));
 
-        // Test invalid (spec_id, profile) in check_conformance and diff_checklists by adding mock-server-plan.md inside swagger-2.0
         let _ = std::fs::write(
             child.join("swagger-2.0").join("mock-server-plan.md"),
             "# Mock Plan\n- [x] Item\n",
@@ -668,19 +728,23 @@ mod tests {
             "profile": "mock-server-plan"
         });
         assert!(execute_tool("diff_checklists", Some(&bad_diff_args), &registry).is_err());
+        let _ = std::fs::write(
+            child.join("swagger-2.0").join("mock-server-plan.md"),
+            "# Bad List\n- [?] Item\n",
+        );
+        assert!(execute_tool("diff_checklists", Some(&bad_diff_args), &registry).is_err());
+        assert!(execute_tool("validate_claims", Some(&no_filter_args), &registry).is_err());
         let _ = std::fs::remove_file(child.join("swagger-2.0").join("mock-server-plan.md"));
 
-        // validate_claims error, empty, and present COMPLIANCE.md branches
         assert!(execute_tool("validate_claims", None, &registry).is_err());
+        assert!(execute_tool("validate_claims", Some(&serde_json::json!({})), &registry).is_err());
         assert!(execute_tool(
             "validate_claims",
             Some(&serde_json::json!({"repo_path": "nonexistent_repo_xyz"})),
             &registry
         )
         .is_err());
-        let empty_repo_args = serde_json::json!({
-            "repo_path": child_str
-        });
+        let empty_repo_args = serde_json::json!({ "repo_path": child_str });
         let no_comp_res = execute_tool("validate_claims", Some(&empty_repo_args), &registry).ok();
         assert!(no_comp_res.is_some_and(|r| {
             let ToolContent::Text { ref text } = r.content[0];
@@ -689,7 +753,7 @@ mod tests {
 
         let _ = std::fs::write(
             child.join("COMPLIANCE.md"),
-            "# Compliance\n| Info Object | ✅ |\n",
+            "# Compliance\n| Feature | Status |\n| --- | --- |\n| Info Object | ✅ |\n",
         );
         let valid_comp_res =
             execute_tool("validate_claims", Some(&empty_repo_args), &registry).ok();
@@ -698,7 +762,6 @@ mod tests {
             text.contains(r#""is_consistent": true"#)
         }));
 
-        // Test unreadable COMPLIANCE.md in validate_claims
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -708,6 +771,9 @@ mod tests {
             let _ = std::fs::set_permissions(&comp_path, std::fs::Permissions::from_mode(0o644));
         }
 
+        let _ = std::fs::write(child.join(".cdd-conformance.yaml"), b": invalid yaml :");
+        assert!(execute_tool("diff_checklists", Some(&success_diff_args), &registry).is_err());
+        assert!(execute_tool("validate_claims", Some(&empty_repo_args), &registry).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

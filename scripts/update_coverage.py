@@ -37,7 +37,7 @@ def calculate_test_coverage() -> str:
     """Calculates test coverage (minimum of lines, functions, and regions) via cargo-llvm-cov or cargo-tarpaulin.
 
     Returns:
-        Formatted percentage string (e.g. "100" or "98.50").
+        Formatted percentage string (e.g. "100.00" or "98.50").
 
     Raises:
         SystemExit: If neither coverage tool succeeds.
@@ -56,7 +56,7 @@ def calculate_test_coverage() -> str:
         reg_pct = float(totals["regions"]["percent"])
         pct = min(line_pct, fn_pct, reg_pct)
         if pct >= 99.995:
-            return "100"
+            return "100.00"
         return f"{pct:.2f}"
     except Exception:
         pass
@@ -72,7 +72,7 @@ def calculate_test_coverage() -> str:
         if match:
             val = float(match.group(1))
             if val >= 99.995:
-                return "100"
+                return "100.00"
             return f"{val:.2f}"
     except Exception as exc:
         print(f"Failed to calculate test coverage: {exc}", file=sys.stderr)
@@ -86,7 +86,7 @@ def calculate_doc_coverage() -> str:
     """Calculates documentation coverage using nightly rustdoc or fallback parser.
 
     Returns:
-        Formatted percentage string (e.g. "100" or "99.10").
+        Formatted percentage string (e.g. "100.00" or "99.10").
     """
     try:
         res = subprocess.run(
@@ -112,17 +112,17 @@ def calculate_doc_coverage() -> str:
         if matches:
             val = float(matches[-1])
             if val >= 99.995:
-                return "100"
+                return "100.00"
             return f"{val:.2f}"
     except Exception:
         pass
 
     total_items, documented_items = count_documented_pub_items("src")
     if total_items == 0:
-        return "100"
+        return "100.00"
     pct = (documented_items / total_items) * 100.0
     if pct >= 99.995:
-        return "100"
+        return "100.00"
     return f"{pct:.2f}"
 
 
@@ -185,19 +185,21 @@ def update_readme(test_cov: str, doc_cov: str) -> None:
     doc_color = get_color(doc_cov)
 
     test_badge = (
-        f"[![test coverage](https://img.shields.io/badge/test_coverage-"
-        f"{test_cov}%25-{test_color})](https://github.com/SamuelMarks/cdd-spec-conformance)"
+        f"[![Test Coverage](https://img.shields.io/badge/test_coverage-"
+        f"{test_cov}%25-{test_color}.svg)](README.md)"
     )
     doc_badge = (
-        f"[![doc coverage](https://img.shields.io/badge/doc_coverage-"
-        f"{doc_cov}%25-{doc_color})](https://github.com/SamuelMarks/cdd-spec-conformance)"
+        f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-"
+        f"{doc_cov}%25-{doc_color}.svg)](README.md)"
     )
 
     test_regex = re.compile(
-        r"\[!\[test coverage\]\(https://img\.shields\.io/badge/test_coverage-[^\)]+\)\]\([^\)]+\)"
+        r"\[!\[test coverage\]\(https://img\.shields\.io/badge/test_coverage-[^\)]+\)\]\([^\)]+\)",
+        re.IGNORECASE,
     )
     doc_regex = re.compile(
-        r"\[!\[doc coverage\]\(https://img\.shields\.io/badge/doc_coverage-[^\)]+\)\]\([^\)]+\)"
+        r"\[!\[doc coverage\]\(https://img\.shields\.io/badge/doc_coverage-[^\)]+\)\]\([^\)]+\)",
+        re.IGNORECASE,
     )
 
     if test_regex.search(content):

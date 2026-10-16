@@ -1,5 +1,6 @@
 //! Model Context Protocol connection lifecycle, capabilities, and handshake.
 
+use crate::mcp::protocol::RequestId;
 use serde::{Deserialize, Serialize};
 
 /// Client implementation metadata sent during initialization.
@@ -35,6 +36,38 @@ pub struct InitializeParams {
     pub capabilities: ClientCapabilities,
     /// Client implementation details.
     pub client_info: Implementation,
+}
+
+/// Optional pagination parameter payload for list requests (`tools/list`, `resources/list`, `prompts/list`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PaginatedRequestParams {
+    /// Opaque pagination cursor from a previous list response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// Parameter payload for `notifications/cancelled`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelledNotificationParams {
+    /// Identifier of the request being cancelled.
+    pub request_id: RequestId,
+    /// Optional human-readable reason for cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Parameter payload for `notifications/progress`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressNotificationParams {
+    /// Opaque progress token associating this notification with an active request.
+    pub progress_token: RequestId,
+    /// Current progress value.
+    pub progress: f64,
+    /// Optional total expected progress value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
 }
 
 /// Server tool capabilities.
@@ -98,6 +131,9 @@ pub struct InitializeResult {
     pub capabilities: ServerCapabilities,
     /// Server metadata.
     pub server_info: Implementation,
+    /// Optional human-readable instructions describing how to use the server's tools and resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 impl InitializeResult {
@@ -121,10 +157,12 @@ impl InitializeResult {
         Self {
             protocol_version: version,
             capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability { list_changed: true }),
+                tools: Some(ToolsCapability {
+                    list_changed: false,
+                }),
                 resources: Some(ResourcesCapability {
                     subscribe: false,
-                    list_changed: true,
+                    list_changed: false,
                 }),
                 prompts: Some(PromptsCapability {
                     list_changed: false,
@@ -135,6 +173,9 @@ impl InitializeResult {
                 name: env!("CARGO_PKG_NAME").to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
+            instructions: Some(
+                "Use cdd-conformance tools and conformance://specs resources to audit and synchronize CDD specification checklists.".to_string(),
+            ),
         }
     }
 }
@@ -144,10 +185,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_initialize_negotiation_2024_and_2026() {
+    fn test_initialize_negotiation_2024_and_2026_and_notifications() {
         let res_old = InitializeResult::new("2024-11-05");
         assert_eq!(res_old.protocol_version, "2024-11-05");
-        assert!(res_old.capabilities.tools.is_some());
+        assert_eq!(
+            res_old.capabilities.tools,
+            Some(ToolsCapability {
+                list_changed: false
+            })
+        );
+        assert_eq!(
+            res_old.capabilities.resources,
+            Some(ResourcesCapability {
+                subscribe: false,
+                list_changed: false
+            })
+        );
+        assert!(res_old.instructions.is_some());
         assert_eq!(res_old.server_info.version, env!("CARGO_PKG_VERSION"));
 
         let res_new = InitializeResult::new("2026-07-28");
@@ -155,5 +209,33 @@ mod tests {
 
         let res_fallback = InitializeResult::new("unknown-version");
         assert_eq!(res_fallback.protocol_version, "2024-11-05");
+
+        let page_params: Option<PaginatedRequestParams> =
+            serde_json::from_str(r#"{"cursor":"next-1"}"#).ok();
+        assert_eq!(
+            page_params.and_then(|p| p.cursor),
+            Some("next-1".to_string())
+        );
+
+        let cancel_params: Option<CancelledNotificationParams> =
+            serde_json::from_str(r#"{"requestId":42,"reason":"timeout"}"#).ok();
+        assert_eq!(
+            cancel_params,
+            Some(CancelledNotificationParams {
+                request_id: RequestId::Number(42),
+                reason: Some("timeout".to_string()),
+            })
+        );
+
+        let prog_params: Option<ProgressNotificationParams> =
+            serde_json::from_str(r#"{"progressToken":"tok-1","progress":50.0,"total":100.0}"#).ok();
+        assert_eq!(
+            prog_params,
+            Some(ProgressNotificationParams {
+                progress_token: RequestId::String("tok-1".to_string()),
+                progress: 50.0,
+                total: Some(100.0),
+            })
+        );
     }
 }

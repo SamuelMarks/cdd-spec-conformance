@@ -1,7 +1,7 @@
 CDD Spec Conformance Tables
 ===========================
 
-[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-97.39%25-brightgreen.svg)](README.md)
+[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-100.00%25-brightgreen.svg)](README.md)
 
 A comprehensive collection of conformance tables designed to ensure your Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are fully compliant with their respective specifications.
 

@@ -3,7 +3,6 @@
 use crate::error::ConformanceError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::ops::{Index, IndexMut};
 use std::str::FromStr;
 
 /// Supported specification identifiers.
@@ -94,6 +93,34 @@ impl SpecId {
         let lower = dir_name.trim().to_lowercase().replace('_', "-");
         let stripped = lower.strip_prefix("compliance-").unwrap_or(&lower);
         Self::from_str(stripped).ok()
+    }
+
+    /// Checks whether a given `ProfileKind` is valid for this specification.
+    ///
+    /// # Arguments
+    ///
+    /// * `profile` - The profile boundary to validate.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `profile` is applicable to `self`.
+    #[must_use]
+    pub const fn supports_profile(self, profile: ProfileKind) -> bool {
+        matches!(
+            (self, profile),
+            (Self::MockServer, ProfileKind::MockServerPlan)
+                | (
+                    Self::OpenApi320
+                        | Self::OpenApi311
+                        | Self::OpenApi310
+                        | Self::OpenApi300
+                        | Self::Swagger20
+                        | Self::Arazzo110
+                        | Self::Mcp100
+                        | Self::Mcp20260728,
+                    ProfileKind::ClientSdk | ProfileKind::ClientCli | ProfileKind::Servers
+                )
+        )
     }
 }
 
@@ -329,6 +356,35 @@ impl DirectionalFlags {
             Direction::Bidirectional => self.to && self.from,
         }
     }
+
+    /// Updates the flag(s) corresponding to the requested `Direction`.
+    ///
+    /// For `Direction::Bidirectional`, sets both `to` and `from` to `value`.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` - The directional axis to modify.
+    /// * `value` - The boolean state to assign.
+    pub const fn set(&mut self, direction: Direction, value: bool) {
+        match direction {
+            Direction::To => self.to = value,
+            Direction::From => self.from = value,
+            Direction::Bidirectional => {
+                self.to = value;
+                self.from = value;
+            }
+        }
+    }
+
+    /// Converts this `DirectionalFlags` pair into a two-element `[To, From]` boolean array.
+    ///
+    /// # Returns
+    ///
+    /// `[self.to, self.from]`.
+    #[must_use]
+    pub const fn to_array(self) -> [bool; 2] {
+        [self.to, self.from]
+    }
 }
 
 impl From<[bool; 2]> for DirectionalFlags {
@@ -342,35 +398,7 @@ impl From<[bool; 2]> for DirectionalFlags {
 
 impl From<DirectionalFlags> for [bool; 2] {
     fn from(flags: DirectionalFlags) -> Self {
-        [flags.to, flags.from]
-    }
-}
-
-impl PartialEq<[bool; 2]> for DirectionalFlags {
-    fn eq(&self, other: &[bool; 2]) -> bool {
-        self.to == other[0] && self.from == other[1]
-    }
-}
-
-impl Index<usize> for DirectionalFlags {
-    type Output = bool;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        if index == 0 {
-            &self.to
-        } else {
-            &self.from
-        }
-    }
-}
-
-impl IndexMut<usize> for DirectionalFlags {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        if index == 0 {
-            &mut self.to
-        } else {
-            &mut self.from
-        }
+        flags.to_array()
     }
 }
 
@@ -469,7 +497,7 @@ impl FeatureStatus {
     /// `true` if `To` presence is checked.
     #[must_use]
     pub const fn is_to_present(self) -> bool {
-        self.presence.to
+        self.is_present(Direction::To)
     }
 
     /// Returns `true` if `From` direction is implemented (`Presence [_, x]`).
@@ -479,7 +507,7 @@ impl FeatureStatus {
     /// `true` if `From` presence is checked.
     #[must_use]
     pub const fn is_from_present(self) -> bool {
-        self.presence.from
+        self.is_present(Direction::From)
     }
 
     /// Returns `true` if `To` direction is explicitly absent (`Absence [x, _]`).
@@ -489,7 +517,7 @@ impl FeatureStatus {
     /// `true` if `To` absence is checked.
     #[must_use]
     pub const fn is_to_absent(self) -> bool {
-        self.absence.to
+        self.is_absent(Direction::To)
     }
 
     /// Returns `true` if `From` direction is explicitly absent (`Absence [_, x]`).
@@ -499,7 +527,7 @@ impl FeatureStatus {
     /// `true` if `From` absence is checked.
     #[must_use]
     pub const fn is_from_absent(self) -> bool {
-        self.absence.from
+        self.is_absent(Direction::From)
     }
 
     /// Returns `true` if `To` direction is skipped (`Skipped [x, _]`).
@@ -509,7 +537,7 @@ impl FeatureStatus {
     /// `true` if `To` skipped is checked.
     #[must_use]
     pub const fn is_to_skipped(self) -> bool {
-        self.skipped.to
+        self.is_skipped(Direction::To)
     }
 
     /// Returns `true` if `From` direction is skipped (`Skipped [_, x]`).
@@ -519,30 +547,12 @@ impl FeatureStatus {
     /// `true` if `From` skipped is checked.
     #[must_use]
     pub const fn is_from_skipped(self) -> bool {
-        self.skipped.from
-    }
-
-    /// Returns `true` if the `To` direction has all boxes unchecked.
-    ///
-    /// # Returns
-    ///
-    /// `true` if `To` is unreviewed.
-    #[must_use]
-    pub const fn is_to_unreviewed(self) -> bool {
-        !self.presence.to && !self.absence.to && !self.skipped.to
-    }
-
-    /// Returns `true` if the `From` direction has all boxes unchecked.
-    ///
-    /// # Returns
-    ///
-    /// `true` if `From` is unreviewed.
-    #[must_use]
-    pub const fn is_from_unreviewed(self) -> bool {
-        !self.presence.from && !self.absence.from && !self.skipped.from
+        self.is_skipped(Direction::From)
     }
 
     /// Queries whether the specified `Direction` remains unreviewed.
+    ///
+    /// For `Direction::Bidirectional`, returns `true` if either `To` or `From` is unreviewed.
     ///
     /// # Arguments
     ///
@@ -554,10 +564,32 @@ impl FeatureStatus {
     #[must_use]
     pub const fn is_unreviewed_in(self, direction: Direction) -> bool {
         match direction {
-            Direction::To => self.is_to_unreviewed(),
-            Direction::From => self.is_from_unreviewed(),
-            Direction::Bidirectional => self.is_unreviewed(),
+            Direction::To => !self.presence.to && !self.absence.to && !self.skipped.to,
+            Direction::From => !self.presence.from && !self.absence.from && !self.skipped.from,
+            Direction::Bidirectional => {
+                self.is_unreviewed_in(Direction::To) || self.is_unreviewed_in(Direction::From)
+            }
         }
+    }
+
+    /// Returns `true` if the `To` direction has all boxes unchecked.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `To` is unreviewed.
+    #[must_use]
+    pub const fn is_to_unreviewed(self) -> bool {
+        self.is_unreviewed_in(Direction::To)
+    }
+
+    /// Returns `true` if the `From` direction has all boxes unchecked.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `From` is unreviewed.
+    #[must_use]
+    pub const fn is_from_unreviewed(self) -> bool {
+        self.is_unreviewed_in(Direction::From)
     }
 
     /// Returns `true` if any direction remains completely unreviewed (all boxes unchecked).
@@ -567,7 +599,40 @@ impl FeatureStatus {
     /// `true` if either `To` or `From` is unreviewed.
     #[must_use]
     pub const fn is_unreviewed(self) -> bool {
-        self.is_to_unreviewed() || self.is_from_unreviewed()
+        self.is_unreviewed_in(Direction::Bidirectional)
+    }
+
+    /// Queries whether the specified `Direction` has contradictory markers (more than one of
+    /// `Presence`, `Absence`, or `Skipped` checked).
+    ///
+    /// For `Direction::Bidirectional`, returns `true` if either `To` or `From` has a contradiction.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` - The `Direction` to inspect.
+    ///
+    /// # Returns
+    ///
+    /// `true` if contradictory markers exist in `direction`.
+    #[must_use]
+    pub const fn has_contradiction_in(self, direction: Direction) -> bool {
+        match direction {
+            Direction::To => {
+                let count =
+                    (self.presence.to as u8) + (self.absence.to as u8) + (self.skipped.to as u8);
+                count > 1
+            }
+            Direction::From => {
+                let count = (self.presence.from as u8)
+                    + (self.absence.from as u8)
+                    + (self.skipped.from as u8);
+                count > 1
+            }
+            Direction::Bidirectional => {
+                self.has_contradiction_in(Direction::To)
+                    || self.has_contradiction_in(Direction::From)
+            }
+        }
     }
 
     /// Returns `true` if the `To` direction has contradictory markers (more than one of Presence, Absence, Skipped checked).
@@ -577,8 +642,7 @@ impl FeatureStatus {
     /// `true` if `To` has multiple status markers checked simultaneously.
     #[must_use]
     pub const fn has_to_contradiction(self) -> bool {
-        let count = (self.presence.to as u8) + (self.absence.to as u8) + (self.skipped.to as u8);
-        count > 1
+        self.has_contradiction_in(Direction::To)
     }
 
     /// Returns `true` if the `From` direction has contradictory markers (more than one of Presence, Absence, Skipped checked).
@@ -588,9 +652,7 @@ impl FeatureStatus {
     /// `true` if `From` has multiple status markers checked simultaneously.
     #[must_use]
     pub const fn has_from_contradiction(self) -> bool {
-        let count =
-            (self.presence.from as u8) + (self.absence.from as u8) + (self.skipped.from as u8);
-        count > 1
+        self.has_contradiction_in(Direction::From)
     }
 
     /// Returns `true` if either `To` or `From` direction has contradictory markers.
@@ -600,7 +662,7 @@ impl FeatureStatus {
     /// `true` if any directional contradiction is present.
     #[must_use]
     pub const fn has_any_contradiction(self) -> bool {
-        self.has_to_contradiction() || self.has_from_contradiction()
+        self.has_contradiction_in(Direction::Bidirectional)
     }
 }
 
@@ -638,69 +700,11 @@ impl ChecklistTable {
     /// A `ProfileScore` containing directional and overall counts.
     #[must_use]
     pub fn score(&self) -> ProfileScore {
-        let total_items = self.rows.len();
-        let mut implemented_to = 0;
-        let mut implemented_from = 0;
-        let mut absent_to = 0;
-        let mut absent_from = 0;
-        let mut absent_count = 0;
-        let mut skipped_to = 0;
-        let mut skipped_from = 0;
-        let mut skipped_count = 0;
-        let mut unreviewed_to = 0;
-        let mut unreviewed_from = 0;
-        let mut unreviewed_count = 0;
-
+        let mut score = ProfileScore::default();
         for row in &self.rows {
-            if row.status.is_to_present() {
-                implemented_to += 1;
-            }
-            if row.status.is_from_present() {
-                implemented_from += 1;
-            }
-            if row.status.is_to_absent() {
-                absent_to += 1;
-            }
-            if row.status.is_from_absent() {
-                absent_from += 1;
-            }
-            if row.status.is_to_absent() || row.status.is_from_absent() {
-                absent_count += 1;
-            }
-            if row.status.is_to_skipped() {
-                skipped_to += 1;
-            }
-            if row.status.is_from_skipped() {
-                skipped_from += 1;
-            }
-            if row.status.is_to_skipped() || row.status.is_from_skipped() {
-                skipped_count += 1;
-            }
-            if row.status.is_to_unreviewed() {
-                unreviewed_to += 1;
-            }
-            if row.status.is_from_unreviewed() {
-                unreviewed_from += 1;
-            }
-            if row.status.is_unreviewed() {
-                unreviewed_count += 1;
-            }
+            score.record_row(row.status);
         }
-
-        ProfileScore {
-            total_items,
-            implemented_to,
-            implemented_from,
-            absent_to,
-            absent_from,
-            absent_count,
-            skipped_to,
-            skipped_from,
-            skipped_count,
-            unreviewed_to,
-            unreviewed_from,
-            unreviewed_count,
-        }
+        score
     }
 }
 
@@ -733,13 +737,69 @@ pub struct ProfileScore {
     pub unreviewed_count: usize,
 }
 
-/// Converts a `usize` count into `f64` losslessly for values up to `u32::MAX`.
-fn usize_to_f64(val: usize) -> f64 {
+/// Converts a `usize` count into `f64` losslessly for values up to `u32::MAX`,
+/// saturating at `u32::MAX` (`4_294_967_295.0`) if `val` exceeds 32-bit bounds.
+///
+/// # Arguments
+///
+/// * `val` - The unsigned count to convert.
+///
+/// # Returns
+///
+/// Saturated `f64` representation of `val`.
+#[must_use]
+pub fn usize_to_f64(val: usize) -> f64 {
     f64::from(u32::try_from(val).unwrap_or(u32::MAX))
 }
 
 impl ProfileScore {
+    /// Records the directional and aggregate metrics of a single `FeatureStatus` row into `self`.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - The `FeatureStatus` of the row being accumulated.
+    pub const fn record_row(&mut self, status: FeatureStatus) {
+        self.total_items += 1;
+        if status.is_to_present() {
+            self.implemented_to += 1;
+        }
+        if status.is_from_present() {
+            self.implemented_from += 1;
+        }
+        if status.is_to_absent() {
+            self.absent_to += 1;
+        }
+        if status.is_from_absent() {
+            self.absent_from += 1;
+        }
+        if status.is_to_absent() || status.is_from_absent() {
+            self.absent_count += 1;
+        }
+        if status.is_to_skipped() {
+            self.skipped_to += 1;
+        }
+        if status.is_from_skipped() {
+            self.skipped_from += 1;
+        }
+        if status.is_to_skipped() || status.is_from_skipped() {
+            self.skipped_count += 1;
+        }
+        if status.is_to_unreviewed() {
+            self.unreviewed_to += 1;
+        }
+        if status.is_from_unreviewed() {
+            self.unreviewed_from += 1;
+        }
+        if status.is_unreviewed() {
+            self.unreviewed_count += 1;
+        }
+    }
+
     /// Returns the percentage of features implemented in the `To` direction (0.0 to 100.0).
+    ///
+    /// # Returns
+    ///
+    /// Percentage in the range `0.0..=100.0`.
     #[must_use]
     pub fn to_percentage(self) -> f64 {
         if self.total_items == 0 {
@@ -750,6 +810,10 @@ impl ProfileScore {
     }
 
     /// Returns the percentage of features implemented in the `From` direction (0.0 to 100.0).
+    ///
+    /// # Returns
+    ///
+    /// Percentage in the range `0.0..=100.0`.
     #[must_use]
     pub fn from_percentage(self) -> f64 {
         if self.total_items == 0 {
@@ -760,6 +824,10 @@ impl ProfileScore {
     }
 
     /// Returns the combined average percentage of features implemented across both directions.
+    ///
+    /// # Returns
+    ///
+    /// Percentage in the range `0.0..=100.0`.
     #[must_use]
     pub fn total_percentage(self) -> f64 {
         if self.total_items == 0 {
@@ -796,21 +864,11 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn parse_spec_and_check(s: &str) -> Result<SpecId, ConformanceError> {
-        let parsed = SpecId::from_str(s)?;
-        Ok(parsed)
-    }
-
-    fn parse_profile_and_check(s: &str) -> Result<ProfileKind, ConformanceError> {
-        let parsed = ProfileKind::from_str(s)?;
-        Ok(parsed)
-    }
-
     #[test]
     fn test_spec_id_roundtrip_and_dir_resolution() {
         for spec in SpecId::all() {
             let s = spec.as_str();
-            assert_eq!(parse_spec_and_check(s).ok(), Some(*spec));
+            assert_eq!(SpecId::from_str(s).ok(), Some(*spec));
             assert_eq!(spec.to_string(), s);
             assert_eq!(SpecId::from_dir_name(s), Some(*spec));
         }
@@ -820,35 +878,36 @@ mod tests {
         );
         assert_eq!(SpecId::from_dir_name("unknown-dir"), None);
 
-        let bad_spec = parse_spec_and_check("nonexistent-spec");
-        assert_eq!(
-            bad_spec.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(&ConformanceError::UnknownSpecId {
-                raw: String::new()
-            }))
-        );
+        assert!(SpecId::MockServer.supports_profile(ProfileKind::MockServerPlan));
+        assert!(!SpecId::MockServer.supports_profile(ProfileKind::ClientSdk));
+        assert!(SpecId::OpenApi320.supports_profile(ProfileKind::ClientSdk));
+        assert!(!SpecId::OpenApi320.supports_profile(ProfileKind::MockServerPlan));
+
+        let bad_spec = SpecId::from_str("nonexistent-spec");
+        assert!(matches!(
+            bad_spec,
+            Err(ConformanceError::UnknownSpecId { ref raw }) if raw == "nonexistent-spec"
+        ));
     }
 
     #[test]
     fn test_profile_kind_roundtrip_and_priority() {
         for profile in ProfileKind::standard_profiles() {
             let s = profile.as_str();
-            assert_eq!(parse_profile_and_check(s).ok(), Some(*profile));
+            assert_eq!(ProfileKind::from_str(s).ok(), Some(*profile));
             assert_eq!(profile.to_string(), s);
             assert!(!profile.filename().is_empty());
         }
         assert_eq!(
-            parse_profile_and_check("mock-server-plan").ok(),
+            ProfileKind::from_str("mock-server-plan").ok(),
             Some(ProfileKind::MockServerPlan)
         );
 
-        let bad_prof = parse_profile_and_check("unknown-profile");
-        assert_eq!(
-            bad_prof.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(
-                &ConformanceError::UnknownProfileKind { raw: String::new() }
-            ))
-        );
+        let bad_prof = ProfileKind::from_str("unknown-profile");
+        assert!(matches!(
+            bad_prof,
+            Err(ConformanceError::UnknownProfileKind { ref raw }) if raw == "unknown-profile"
+        ));
 
         assert_eq!(
             ProfileKind::filename_priority(Path::new("client-sdk.md")),
@@ -887,20 +946,21 @@ mod tests {
         assert!(flags.get(Direction::To));
         assert!(!flags.get(Direction::From));
         assert!(!flags.get(Direction::Bidirectional));
-        assert!(flags[0]);
-        assert!(!flags[1]);
-        assert_eq!(flags, [true, false]);
+        assert_eq!(flags.to_array(), [true, false]);
 
-        flags[1] = true;
+        flags.set(Direction::From, true);
         assert!(flags.get(Direction::Bidirectional));
-        flags[0] = false;
+        flags.set(Direction::To, false);
         assert!(!flags.to);
 
         let arr: [bool; 2] = flags.into();
         assert_eq!(arr, [false, true]);
 
+        flags.set(Direction::Bidirectional, true);
+        assert_eq!(flags.to_array(), [true, true]);
+
         let serialized = serde_json::to_string(&flags).unwrap_or_default();
-        assert_eq!(serialized, "[false,true]");
+        assert_eq!(serialized, "[true,true]");
         let deserialized: Option<DirectionalFlags> = serde_json::from_str(&serialized).ok();
         assert_eq!(deserialized, Some(flags));
     }
@@ -942,8 +1002,11 @@ mod tests {
 
         let contra_to = FeatureStatus::from_arrays([true, false], [false, false], [true, false]);
         assert!(contra_to.has_to_contradiction());
+        assert!(contra_to.has_contradiction_in(Direction::To));
         assert!(!contra_to.has_from_contradiction());
+        assert!(!contra_to.has_contradiction_in(Direction::From));
         assert!(contra_to.has_any_contradiction());
+        assert!(contra_to.has_contradiction_in(Direction::Bidirectional));
 
         let contra_from = FeatureStatus::from_arrays([false, false], [false, true], [false, true]);
         assert!(!contra_from.has_to_contradiction());
@@ -952,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn test_checklist_table_scoring() {
+    fn test_checklist_table_scoring_and_saturation() {
         let table = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
@@ -978,11 +1041,17 @@ mod tests {
                     notes: Some("Skip note".to_string()),
                     line_number: 11,
                 },
+                ChecklistRow {
+                    feature_name: "Feature 3".to_string(),
+                    status: FeatureStatus::new(),
+                    notes: None,
+                    line_number: 12,
+                },
             ],
         };
 
         let score = table.score();
-        assert_eq!(score.total_items, 2);
+        assert_eq!(score.total_items, 3);
         assert_eq!(score.implemented_to, 1);
         assert_eq!(score.implemented_from, 1);
         assert_eq!(score.absent_to, 1);
@@ -991,17 +1060,23 @@ mod tests {
         assert_eq!(score.skipped_to, 0);
         assert_eq!(score.skipped_from, 1);
         assert_eq!(score.skipped_count, 1);
-        assert_eq!(score.unreviewed_to, 0);
-        assert_eq!(score.unreviewed_from, 0);
-        assert_eq!(score.unreviewed_count, 0);
+        assert_eq!(score.unreviewed_to, 1);
+        assert_eq!(score.unreviewed_from, 1);
+        assert_eq!(score.unreviewed_count, 1);
 
-        assert!((score.percentage_for(Direction::To) - 50.0).abs() < f64::EPSILON);
-        assert!((score.percentage_for(Direction::From) - 50.0).abs() < f64::EPSILON);
-        assert!((score.percentage_for(Direction::Bidirectional) - 50.0).abs() < f64::EPSILON);
+        let expected_pct = (1.0 / 3.0) * 100.0;
+        assert!((score.percentage_for(Direction::To) - expected_pct).abs() < f64::EPSILON);
+        assert!((score.percentage_for(Direction::From) - expected_pct).abs() < f64::EPSILON);
+        assert!(
+            (score.percentage_for(Direction::Bidirectional) - expected_pct).abs() < f64::EPSILON
+        );
 
         let empty_score = ProfileScore::default();
         assert!((empty_score.to_percentage() - 0.0).abs() < f64::EPSILON);
         assert!((empty_score.from_percentage() - 0.0).abs() < f64::EPSILON);
         assert!((empty_score.total_percentage() - 0.0).abs() < f64::EPSILON);
+
+        assert!((usize_to_f64(42) - 42.0).abs() < f64::EPSILON);
+        assert!((usize_to_f64(usize::MAX) - f64::from(u32::MAX)).abs() < f64::EPSILON);
     }
 }

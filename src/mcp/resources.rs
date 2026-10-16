@@ -43,9 +43,13 @@ pub struct ResourceTemplate {
 
 /// Result returned in response to `resources/list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListResourcesResult {
     /// Available resources.
     pub resources: Vec<Resource>,
+    /// Optional pagination cursor for subsequent pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Result returned in response to `resources/templates/list`.
@@ -54,6 +58,9 @@ pub struct ListResourcesResult {
 pub struct ListResourceTemplatesResult {
     /// Available resource templates.
     pub resource_templates: Vec<ResourceTemplate>,
+    /// Optional pagination cursor for subsequent pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Content payload returned by `resources/read`.
@@ -106,7 +113,10 @@ pub fn list_resources(registry: &CanonicalRegistry) -> ListResourcesResult {
         }
     }
 
-    ListResourcesResult { resources }
+    ListResourcesResult {
+        resources,
+        next_cursor: None,
+    }
 }
 
 /// Lists parameterized resource templates.
@@ -126,6 +136,7 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
             ),
             mime_type: Some("text/markdown".to_string()),
         }],
+        next_cursor: None,
     }
 }
 
@@ -144,8 +155,12 @@ pub fn read_resource(
     registry: &CanonicalRegistry,
 ) -> Result<ReadResourceResult, ConformanceError> {
     if uri == "conformance://specs" {
-        let specs: Vec<&'static str> = registry.list_specs().iter().map(|s| s.as_str()).collect();
-        let json = serde_json::to_string_pretty(&specs).unwrap_or_default();
+        let items: Vec<serde_json::Value> = registry
+            .list_specs()
+            .iter()
+            .map(|s| serde_json::Value::String(s.as_str().to_string()))
+            .collect();
+        let json = serde_json::to_string_pretty(&items).unwrap_or_default();
         return Ok(ReadResourceResult {
             contents: vec![ResourceContents {
                 uri: uri.to_string(),
@@ -186,9 +201,11 @@ mod tests {
         let registry = CanonicalRegistry::new();
         let list = list_resources(&registry);
         assert!(!list.resources.is_empty());
+        assert!(list.next_cursor.is_none());
 
         let templates = list_resource_templates();
         assert_eq!(templates.resource_templates.len(), 1);
+        assert!(templates.next_cursor.is_none());
 
         let catalog_res = read_resource("conformance://specs", &registry).ok();
         assert_eq!(catalog_res.map(|r| r.contents.len()), Some(1));

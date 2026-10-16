@@ -1,20 +1,15 @@
 //! CLI entrypoint for `cdd-conformance`.
 
 #![deny(missing_docs)]
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable,
-    clippy::todo,
-    clippy::unimplemented,
-    clippy::dbg_macro
-)]
-#![deny(clippy::all, clippy::pedantic)]
 
 use cdd_conformance::cli::{run_cli, Cli};
 use cdd_conformance::error::ConformanceError;
 
+/// Application entrypoint that parses command-line arguments and executes `cdd-conformance`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if CLI command execution or MCP stdio streaming fails.
 #[tokio::main]
 async fn main() -> Result<(), ConformanceError> {
     let cli = Cli::from_matches(&Cli::build_command().get_matches());

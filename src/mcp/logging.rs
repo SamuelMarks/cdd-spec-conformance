@@ -48,8 +48,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_logging_level_ordering() {
+    fn test_logging_level_ordering_and_serde() {
         assert!(LoggingLevel::Debug < LoggingLevel::Info);
-        assert!(LoggingLevel::Info < LoggingLevel::Error);
+        assert!(LoggingLevel::Info < LoggingLevel::Notice);
+        assert!(LoggingLevel::Notice < LoggingLevel::Warning);
+        assert!(LoggingLevel::Warning < LoggingLevel::Error);
+        assert!(LoggingLevel::Error < LoggingLevel::Critical);
+        assert!(LoggingLevel::Critical < LoggingLevel::Alert);
+        assert!(LoggingLevel::Alert < LoggingLevel::Emergency);
+
+        let set_level = SetLevelParams {
+            level: LoggingLevel::Warning,
+        };
+        let set_json = serde_json::to_string(&set_level).unwrap_or_default();
+        assert_eq!(set_json, r#"{"level":"warning"}"#);
+        let parsed_set: Option<SetLevelParams> = serde_json::from_str(&set_json).ok();
+        assert_eq!(parsed_set, Some(set_level));
+
+        let log_msg = LogMessageParams {
+            level: LoggingLevel::Error,
+            logger: Some("conformance".to_string()),
+            data: serde_json::json!({"event": "mismatch"}),
+        };
+        let msg_json = serde_json::to_string(&log_msg).unwrap_or_default();
+        let parsed_msg: Option<LogMessageParams> = serde_json::from_str(&msg_json).ok();
+        assert_eq!(parsed_msg, Some(log_msg));
     }
 }

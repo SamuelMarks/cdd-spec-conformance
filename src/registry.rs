@@ -5,39 +5,63 @@ use crate::model::{ChecklistTable, ProfileKind, SpecId};
 use crate::parser::markdown::parse_checklist;
 use std::path::PathBuf;
 
-// Embedded canonical specification checklists at compile time.
+/// Embedded canonical `OpenAPI` 3.2.0 Client SDK checklist.
 const OAS_320_SDK: &str = include_str!("../openapi-3.2.0/client-sdk.md");
+/// Embedded canonical `OpenAPI` 3.2.0 Client CLI checklist.
 const OAS_320_CLI: &str = include_str!("../openapi-3.2.0/client-sdk-cli.md");
+/// Embedded canonical `OpenAPI` 3.2.0 Servers checklist.
 const OAS_320_SRV: &str = include_str!("../openapi-3.2.0/servers.md");
 
+/// Embedded canonical `OpenAPI` 3.1.1 Client SDK checklist.
 const OAS_311_SDK: &str = include_str!("../openapi-3.1.1/client-sdk.md");
+/// Embedded canonical `OpenAPI` 3.1.1 Client CLI checklist.
 const OAS_311_CLI: &str = include_str!("../openapi-3.1.1/client-sdk-cli.md");
+/// Embedded canonical `OpenAPI` 3.1.1 Servers checklist.
 const OAS_311_SRV: &str = include_str!("../openapi-3.1.1/servers.md");
 
+/// Embedded canonical `OpenAPI` 3.1.0 Client SDK checklist.
 const OAS_310_SDK: &str = include_str!("../openapi-3.1.0/client-sdk.md");
+/// Embedded canonical `OpenAPI` 3.1.0 Client CLI checklist.
 const OAS_310_CLI: &str = include_str!("../openapi-3.1.0/client-sdk-cli.md");
+/// Embedded canonical `OpenAPI` 3.1.0 Servers checklist.
 const OAS_310_SRV: &str = include_str!("../openapi-3.1.0/servers.md");
 
+/// Embedded canonical `OpenAPI` 3.0.0 Client SDK checklist.
 const OAS_300_SDK: &str = include_str!("../openapi-3.0.0/client-sdk.md");
+/// Embedded canonical `OpenAPI` 3.0.0 Client CLI checklist.
 const OAS_300_CLI: &str = include_str!("../openapi-3.0.0/client-sdk-cli.md");
+/// Embedded canonical `OpenAPI` 3.0.0 Servers checklist.
 const OAS_300_SRV: &str = include_str!("../openapi-3.0.0/servers.md");
 
+/// Embedded canonical Swagger 2.0 Client SDK checklist.
 const SWAGGER_20_SDK: &str = include_str!("../swagger-2.0/client-sdk.md");
+/// Embedded canonical Swagger 2.0 Client CLI checklist.
 const SWAGGER_20_CLI: &str = include_str!("../swagger-2.0/client-sdk-cli.md");
+/// Embedded canonical Swagger 2.0 Servers checklist.
 const SWAGGER_20_SRV: &str = include_str!("../swagger-2.0/servers.md");
 
+/// Embedded canonical Arazzo 1.1.0 Client SDK checklist.
 const ARAZZO_110_SDK: &str = include_str!("../arazzo-1.1.0/client-sdk.md");
+/// Embedded canonical Arazzo 1.1.0 Client CLI checklist.
 const ARAZZO_110_CLI: &str = include_str!("../arazzo-1.1.0/client-sdk-cli.md");
+/// Embedded canonical Arazzo 1.1.0 Servers checklist.
 const ARAZZO_110_SRV: &str = include_str!("../arazzo-1.1.0/servers.md");
 
+/// Embedded canonical MCP 1.0.0 Client SDK checklist.
 const MCP_100_SDK: &str = include_str!("../mcp-1.0.0/client-sdk.md");
+/// Embedded canonical MCP 1.0.0 Client CLI checklist.
 const MCP_100_CLI: &str = include_str!("../mcp-1.0.0/client-sdk-cli.md");
+/// Embedded canonical MCP 1.0.0 Servers checklist.
 const MCP_100_SRV: &str = include_str!("../mcp-1.0.0/servers.md");
 
+/// Embedded canonical MCP 2026-07-28 Client SDK checklist.
 const MCP_2026_SDK: &str = include_str!("../mcp-2026-07-28/client-sdk.md");
+/// Embedded canonical MCP 2026-07-28 Client CLI checklist.
 const MCP_2026_CLI: &str = include_str!("../mcp-2026-07-28/client-sdk-cli.md");
+/// Embedded canonical MCP 2026-07-28 Servers checklist.
 const MCP_2026_SRV: &str = include_str!("../mcp-2026-07-28/servers.md");
 
+/// Embedded canonical Mock Server Plan checklist.
 const MOCK_SERVER_PLAN: &str = include_str!("../mock-server/mock-server-plan.md");
 
 /// Registry providing access to canonical specification checklists (embedded or via custom directory).
@@ -216,8 +240,7 @@ mod tests {
 
     #[test]
     fn test_custom_root_registry() {
-        let dir = std::env::temp_dir().join("cdd_registry_custom_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!("cdd_reg_t1_{}", std::process::id()));
         let oas_dir = dir.join("openapi-3.2.0");
         let _ = std::fs::create_dir_all(&oas_dir);
         let file_path = oas_dir.join("client-sdk.md");

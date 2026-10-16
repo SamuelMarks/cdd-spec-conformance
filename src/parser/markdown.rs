@@ -17,8 +17,8 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns `ConformanceError::InvalidChecklistRow` if fewer than 1 or more than 2 checkboxes are found,
-/// or if checkbox formatting is invalid.
+/// Returns `ConformanceError::InvalidChecklistRow` if an unclosed `[` bracket is encountered,
+/// if fewer than 1 or more than 2 checkboxes are found, or if checkbox formatting is invalid.
 pub fn parse_checkbox_pair(
     raw: &str,
     path: &Path,
@@ -29,24 +29,30 @@ pub fn parse_checkbox_pair(
 
     while let Some(open_idx) = rest.find('[') {
         let after_open = &rest[open_idx + 1..];
-        if let Some(close_idx) = after_open.find(']') {
-            let inner = after_open[..close_idx].trim();
-            match inner {
-                "" | " " | "-" => flags.push(false),
-                "x" | "X" | "v" | "V" | "✓" | "✔" => flags.push(true),
-                _ => {
-                    return Err(ConformanceError::InvalidChecklistRow {
-                        path: path.to_path_buf(),
-                        line,
-                        raw: raw.to_string(),
-                        reason: format!("Unexpected checkbox contents: '{inner}'"),
-                    });
-                }
+        let close_idx =
+            after_open
+                .find(']')
+                .ok_or_else(|| ConformanceError::InvalidChecklistRow {
+                    path: path.to_path_buf(),
+                    line,
+                    raw: raw.to_string(),
+                    reason: "Unclosed '[' bracket in checkbox cell".to_string(),
+                })?;
+
+        let inner = after_open[..close_idx].trim();
+        match inner {
+            "" | " " | "-" => flags.push(false),
+            "x" | "X" | "v" | "V" | "✓" | "✔" => flags.push(true),
+            _ => {
+                return Err(ConformanceError::InvalidChecklistRow {
+                    path: path.to_path_buf(),
+                    line,
+                    raw: raw.to_string(),
+                    reason: format!("Unexpected checkbox contents: '{inner}'"),
+                });
             }
-            rest = &after_open[close_idx + 1..];
-        } else {
-            break;
         }
+        rest = &after_open[close_idx + 1..];
     }
 
     match flags.len() {
@@ -113,6 +119,42 @@ pub fn parse_checklist(
     parse_table_checklist(content, path, spec_id, profile)
 }
 
+/// Precomputes the starting byte offsets of every line in `content` for $O(\log N)$ line lookup.
+///
+/// # Arguments
+///
+/// * `content` - Full Markdown document text.
+///
+/// # Returns
+///
+/// Sorted vector of 0-based byte offsets for the start of each line.
+fn compute_line_starts(content: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (idx, b) in content.bytes().enumerate() {
+        if b == 10 {
+            starts.push(idx + 1);
+        }
+    }
+    starts
+}
+
+/// Resolves a byte offset into a 1-based line number using binary search over `line_starts`.
+///
+/// # Arguments
+///
+/// * `line_starts` - Precomputed slice of line starting byte offsets.
+/// * `offset` - Byte offset inside the document.
+///
+/// # Returns
+///
+/// 1-based line number containing `offset`.
+fn line_number_for_offset(line_starts: &[usize], offset: usize) -> usize {
+    match line_starts.binary_search(&offset) {
+        Ok(line_idx) => line_idx + 1,
+        Err(insert_idx) => insert_idx.max(1),
+    }
+}
+
 /// Active cursor region during `pulldown-cmark` event traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum TableFocus {
@@ -132,18 +174,42 @@ enum TableFocus {
 /// Internal state accumulator for `pulldown-cmark` table event traversal.
 #[derive(Default)]
 struct TableParseState {
+    /// Document title extracted from the top-level heading.
     title: String,
+    /// Active cursor focus region.
     focus: TableFocus,
+    /// Accumulated text inside the currently open table cell.
     current_cell_text: String,
+    /// Accumulated cells of the currently open table row.
     current_row_cells: Vec<String>,
+    /// Header cells of the currently open table head.
     header_cells: Vec<String>,
+    /// Header cells of the most recently parsed table head.
     last_header_cells: Vec<String>,
+    /// Whether the currently open table has valid checklist headers.
     current_table_is_checklist: bool,
+    /// Accumulated checklist rows across the document.
     rows: Vec<ChecklistRow>,
+    /// 1-based starting line number of the current table row.
     row_line: usize,
 }
 
 /// Parses a table-based checklist document.
+///
+/// # Arguments
+///
+/// * `content` - Raw Markdown document string.
+/// * `path` - File path of the Markdown checklist for error diagnostics.
+/// * `spec_id` - Specification identifier.
+/// * `profile` - Target profile boundary.
+///
+/// # Returns
+///
+/// Parsed `ChecklistTable`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if headers or rows are invalid.
 fn parse_table_checklist(
     content: &str,
     path: &Path,
@@ -153,6 +219,7 @@ fn parse_table_checklist(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
 
+    let line_starts = compute_line_starts(content);
     let parser = Parser::new_ext(content, options);
     let mut state = TableParseState {
         row_line: 1,
@@ -179,7 +246,7 @@ fn parse_table_checklist(
             }
             Event::Start(Tag::TableRow) => {
                 state.current_row_cells.clear();
-                state.row_line = content[..range.start].lines().count().max(1);
+                state.row_line = line_number_for_offset(&line_starts, range.start);
             }
             Event::End(TagEnd::TableRow) => {
                 if state.current_table_is_checklist
@@ -244,6 +311,15 @@ fn parse_table_checklist(
 }
 
 /// Validates that table header cells conform to the required standard columns.
+///
+/// # Arguments
+///
+/// * `headers` - Slice of header cell strings.
+/// * `path` - File path of the Markdown checklist for error diagnostics.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::InvalidChecklistHeader` if headers do not match checklist conventions.
 fn validate_headers(headers: &[String], path: &Path) -> Result<(), ConformanceError> {
     if headers.is_empty() {
         return Err(ConformanceError::InvalidChecklistHeader {
@@ -294,6 +370,14 @@ fn validate_headers(headers: &[String], path: &Path) -> Result<(), ConformanceEr
 }
 
 /// Extracts an optional cleaned note string from trailing table cells.
+///
+/// # Arguments
+///
+/// * `cells` - Trailing cell strings after checkbox columns.
+///
+/// # Returns
+///
+/// `Some(String)` if non-placeholder notes exist, or `None`.
 fn extract_notes(cells: &[String]) -> Option<String> {
     let joined = cells.join(" ").trim().to_string();
     if joined.is_empty() || joined == "TODO" || joined == "-" {
@@ -305,8 +389,19 @@ fn extract_notes(cells: &[String]) -> Option<String> {
 
 /// Converts a row of parsed table cells into an optional typed `ChecklistRow`.
 ///
-/// Returns `Ok(None)` if the row is a section heading/divider row with no checkboxes,
-/// or `Err(ConformanceError::InvalidChecklistRow)` if a data row has malformed checkboxes.
+/// # Arguments
+///
+/// * `cells` - Parsed cells of the current table row.
+/// * `path` - File path of the Markdown checklist for error diagnostics.
+/// * `line` - 1-based line number of the row.
+///
+/// # Returns
+///
+/// `Ok(None)` if the row is a section heading/divider row with no checkboxes, or `Ok(Some(ChecklistRow))`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::InvalidChecklistRow` if a data row has malformed checkboxes.
 fn build_row_from_cells(
     cells: &[String],
     path: &Path,
@@ -372,6 +467,21 @@ fn build_row_from_cells(
 }
 
 /// Parses a list-based checklist document (such as `mock-server-plan.md`).
+///
+/// # Arguments
+///
+/// * `content` - Raw Markdown document string.
+/// * `path` - File path of the Markdown checklist for error diagnostics.
+/// * `spec_id` - Specification identifier.
+/// * `profile` - Target profile boundary.
+///
+/// # Returns
+///
+/// Parsed `ChecklistTable`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if list items have malformed markers or if no items exist.
 fn parse_list_checklist(
     content: &str,
     path: &Path,
@@ -391,52 +501,59 @@ fn parse_list_checklist(
         }
 
         if let Some(rest) = trimmed.strip_prefix("- [") {
-            if let Some(close_idx) = rest.find(']') {
-                let marker = rest[..close_idx].trim();
-                let item_raw = rest[close_idx + 1..].trim();
-                let (feature_part, notes) = item_raw
-                    .split_once(" — ")
-                    .or_else(|| item_raw.split_once(": "))
-                    .map_or_else(
-                        || (item_raw, None),
-                        |(f, n)| (f.trim(), extract_notes(&[n.to_string()])),
-                    );
-                let feature_name = clean_markdown_text(feature_part);
+            let close_idx =
+                rest.find(']')
+                    .ok_or_else(|| ConformanceError::InvalidChecklistRow {
+                        path: path.to_path_buf(),
+                        line: line_num,
+                        raw: trimmed.to_string(),
+                        reason: "Unclosed '[' bracket in list checklist item".to_string(),
+                    })?;
 
-                let status = match marker {
-                    "x" | "X" => FeatureStatus {
-                        presence: DirectionalFlags::new(true, true),
-                        absence: DirectionalFlags::new(false, false),
-                        skipped: DirectionalFlags::new(false, false),
-                    },
-                    "" | " " => FeatureStatus::new(),
-                    "-" => FeatureStatus {
-                        presence: DirectionalFlags::new(false, false),
-                        absence: DirectionalFlags::new(true, true),
-                        skipped: DirectionalFlags::new(false, false),
-                    },
-                    "~" => FeatureStatus {
-                        presence: DirectionalFlags::new(false, false),
-                        absence: DirectionalFlags::new(false, false),
-                        skipped: DirectionalFlags::new(true, true),
-                    },
-                    other => {
-                        return Err(ConformanceError::InvalidChecklistRow {
-                            path: path.to_path_buf(),
-                            line: line_num,
-                            raw: trimmed.to_string(),
-                            reason: format!("Unexpected list checkbox marker: '{other}'"),
-                        });
-                    }
-                };
+            let marker = rest[..close_idx].trim();
+            let item_raw = rest[close_idx + 1..].trim();
+            let (feature_part, notes) = item_raw
+                .split_once(" — ")
+                .or_else(|| item_raw.split_once(": "))
+                .map_or_else(
+                    || (item_raw, None),
+                    |(f, n)| (f.trim(), extract_notes(&[n.to_string()])),
+                );
+            let feature_name = clean_markdown_text(feature_part);
 
-                rows.push(ChecklistRow {
-                    feature_name,
-                    status,
-                    notes,
-                    line_number: line_num,
-                });
-            }
+            let status = match marker {
+                "x" | "X" => FeatureStatus {
+                    presence: DirectionalFlags::new(true, true),
+                    absence: DirectionalFlags::new(false, false),
+                    skipped: DirectionalFlags::new(false, false),
+                },
+                "" | " " => FeatureStatus::new(),
+                "-" => FeatureStatus {
+                    presence: DirectionalFlags::new(false, false),
+                    absence: DirectionalFlags::new(true, true),
+                    skipped: DirectionalFlags::new(false, false),
+                },
+                "~" => FeatureStatus {
+                    presence: DirectionalFlags::new(false, false),
+                    absence: DirectionalFlags::new(false, false),
+                    skipped: DirectionalFlags::new(true, true),
+                },
+                other => {
+                    return Err(ConformanceError::InvalidChecklistRow {
+                        path: path.to_path_buf(),
+                        line: line_num,
+                        raw: trimmed.to_string(),
+                        reason: format!("Unexpected list checkbox marker: '{other}'"),
+                    });
+                }
+            };
+
+            rows.push(ChecklistRow {
+                feature_name,
+                status,
+                notes,
+                line_number: line_num,
+            });
         }
     }
 
@@ -485,9 +602,22 @@ mod tests {
             Some([true, true])
         );
         assert_eq!(parse_checkbox_pair("[x]", p, 1).ok(), Some([true, true]));
+        assert_eq!(
+            parse_checkbox_pair("`-` , `-`", p, 1).ok(),
+            Some([false, false])
+        );
 
-        // Unclosed bracket stops cleanly
-        assert!(parse_checkbox_pair("[x", p, 1).is_err());
+        // Unclosed bracket returns explicit reason
+        let unclosed_res = parse_checkbox_pair("[x", p, 4);
+        assert!(matches!(
+            unclosed_res,
+            Err(ConformanceError::InvalidChecklistRow {
+                line: 4,
+                ref reason,
+                ..
+            }) if reason == "Unclosed '[' bracket in checkbox cell"
+        ));
+
         // >2 checkboxes rejected
         assert!(parse_checkbox_pair("[x] , [ ] , [x]", p, 1).is_err());
         // Invalid content rejected
@@ -497,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_table_checklist_valid() {
+    fn test_parse_table_checklist_valid_and_line_numbers() {
         let content = r#"# OpenAPI 3.2.0 Conformance Table: Client SDK
 
 | OpenAPI 3.2.0 Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes / Implementation Strategy |
@@ -516,6 +646,9 @@ mod tests {
         assert!(t_res.is_ok_and(|t| {
             assert_eq!(t.rows.len(), 3);
             assert_eq!(t.rows[0].feature_name, "OpenAPI Object (Root)");
+            assert_eq!(t.rows[0].line_number, 5);
+            assert_eq!(t.rows[1].line_number, 6);
+            assert_eq!(t.rows[2].line_number, 7);
             assert!(t.rows[0].status.is_to_present());
             assert!(t.rows[0].status.is_from_present());
             assert_eq!(
@@ -525,6 +658,17 @@ mod tests {
             assert_eq!(t.rows[1].notes, None);
             t.rows[2].status.is_to_skipped() && t.rows[2].status.is_from_skipped()
         }));
+
+        // Test binary_search Err branch when offset is mid-line
+        let starts = compute_line_starts(
+            "line1
+line2
+",
+        );
+        assert_eq!(line_number_for_offset(&starts, 0), 1);
+        assert_eq!(line_number_for_offset(&starts, 2), 1);
+        assert_eq!(line_number_for_offset(&starts, 6), 2);
+        assert_eq!(line_number_for_offset(&starts, 8), 2);
     }
 
     #[test]
@@ -573,7 +717,9 @@ mod tests {
             table.rows[4].notes.as_deref() == Some("Out of scope for REST mock server")
         }));
 
-        let bad_list = "# Bad List\n- [?] Invalid marker\n";
+        let bad_list = "# Bad List
+- [?] Invalid marker
+";
         assert!(parse_checklist(
             bad_list,
             Path::new("bad-list.md"),
@@ -581,6 +727,24 @@ mod tests {
             ProfileKind::MockServerPlan
         )
         .is_err());
+
+        let unclosed_list = "# Unclosed List
+- [x Valid item
+";
+        let unclosed_res = parse_checklist(
+            unclosed_list,
+            Path::new("unclosed-list.md"),
+            SpecId::MockServer,
+            ProfileKind::MockServerPlan,
+        );
+        assert!(matches!(
+            unclosed_res,
+            Err(ConformanceError::InvalidChecklistRow {
+                line: 2,
+                ref reason,
+                ..
+            }) if reason == "Unclosed '[' bracket in list checklist item"
+        ));
     }
 
     #[test]
@@ -610,7 +774,7 @@ mod tests {
         )
         .is_ok());
 
-        let empty_list = "# Empty List\nNo checkboxes here\nJust text\n- [unclosed\n";
+        let empty_list = "# Empty List\nNo checkboxes here\nJust text\n";
         assert!(parse_checklist(
             empty_list,
             p,
@@ -671,34 +835,54 @@ mod tests {
         let p = Path::new("test.md");
 
         // Malformed checkbox in Presence, Absence, and Skipped columns MUST return Err!
-        let bad_box_row = "| Object Feature | Presence |\n| --- | --- |\n| Bad | [?] |\n";
+        let bad_box_row = "| Object Feature | Presence |
+| --- | --- |
+| Bad | [?] |
+";
         assert!(
             parse_checklist(bad_box_row, p, SpecId::OpenApi320, ProfileKind::ClientSdk).is_err()
         );
 
-        let bad_abs_row =
-            "| Feature | Presence | Absence |\n| --- | --- | --- |\n| Bad | [x] | [?] |\n";
+        let bad_abs_row = "| Feature | Presence | Absence |
+| --- | --- | --- |
+| Bad | [x] | [?] |
+";
         assert!(
             parse_checklist(bad_abs_row, p, SpecId::OpenApi320, ProfileKind::ClientSdk).is_err()
         );
 
-        let bad_skip_row = "| Feature | Presence | Absence | Skipped |\n| --- | --- | --- | --- |\n| Bad | [x] | [ ] | [?] |\n";
+        let bad_skip_row = "| Feature | Presence | Absence | Skipped |
+| --- | --- | --- | --- |
+| Bad | [x] | [ ] | [?] |
+";
         assert!(
             parse_checklist(bad_skip_row, p, SpecId::OpenApi320, ProfileKind::ClientSdk).is_err()
         );
 
-        let omitted_skip = "| Feature | Presence | Absence | Notes |\n| --- | --- | --- | --- |\n| Foo | [x] | [ ] | custom notes |\n| Bar | [x] | [ ] | TODO |\n| Baz | [x] | [ ] | - |\n| Qux | [x] | [ ] | |\n";
+        let omitted_skip = "| Feature | Presence | Absence | Notes |
+| --- | --- | --- | --- |
+| Foo | [x] | [ ] | custom notes |
+| Bar | [x] | [ ] | TODO |
+| Baz | [x] | [ ] | - |
+| Qux | [x] | [ ] | |
+";
         assert!(
             parse_checklist(omitted_skip, p, SpecId::OpenApi320, ProfileKind::ClientSdk).is_ok()
         );
 
-        let omitted_abs =
-            "| Feature | Presence | Notes |\n| --- | --- | --- |\n| Foo | [x] | note direct |\n| Bar | [x] | TODO |\n";
+        let omitted_abs = "| Feature | Presence | Notes |
+| --- | --- | --- |
+| Foo | [x] | note direct |
+| Bar | [x] | TODO |
+";
         assert!(
             parse_checklist(omitted_abs, p, SpecId::OpenApi320, ProfileKind::ClientSdk).is_ok()
         );
 
-        let four_col_only_boxes = "| Feature | Presence | Absence | Skipped |\n| --- | --- | --- | --- |\n| ExactFour | [x] | [ ] | [ ] |\n";
+        let four_col_only_boxes = "| Feature | Presence | Absence | Skipped |
+| --- | --- | --- | --- |
+| ExactFour | [x] | [ ] | [ ] |
+";
         assert!(parse_checklist(
             four_col_only_boxes,
             p,

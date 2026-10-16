@@ -1,18 +1,20 @@
 //! Core Model Context Protocol server orchestrator and message dispatcher.
 
 use crate::error::ConformanceError;
-use crate::mcp::lifecycle::{InitializeParams, InitializeResult};
+use crate::mcp::lifecycle::{
+    CancelledNotificationParams, InitializeParams, InitializeResult, PaginatedRequestParams,
+    ProgressNotificationParams,
+};
 use crate::mcp::logging::{LoggingLevel, SetLevelParams};
 use crate::mcp::prompts::{get_prompt_typed, list_prompts, GetPromptParams};
-use crate::mcp::protocol::{
-    error_codes, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, RequestId,
-};
+use crate::mcp::protocol::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, RequestId};
 use crate::mcp::resources::{
     list_resource_templates, list_resources, read_resource, ReadResourceParams,
 };
 use crate::mcp::tools::{execute_tool_with_roots, list_tools, CallToolParams};
 use crate::registry::CanonicalRegistry;
 use serde::de::DeserializeOwned;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -28,6 +30,10 @@ pub struct McpServer {
     pub allowed_roots: Vec<PathBuf>,
     /// Active log level threshold.
     pub log_level: LoggingLevel,
+    /// Set of cancelled request IDs received via `notifications/cancelled`.
+    pub cancelled_requests: HashSet<RequestId>,
+    /// Latest progress value received via `notifications/progress`.
+    pub last_progress: Option<f64>,
 }
 
 impl McpServer {
@@ -37,13 +43,15 @@ impl McpServer {
     ///
     /// A default `McpServer` ready to accept JSON-RPC messages.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             registry: CanonicalRegistry::new(),
             initialized: false,
             strict_lifecycle: false,
             allowed_roots: Vec::new(),
             log_level: LoggingLevel::Info,
+            cancelled_requests: HashSet::new(),
+            last_progress: None,
         }
     }
 
@@ -58,13 +66,15 @@ impl McpServer {
     ///
     /// A configured `McpServer`.
     #[must_use]
-    pub const fn with_security(allowed_roots: Vec<PathBuf>, strict_lifecycle: bool) -> Self {
+    pub fn with_security(allowed_roots: Vec<PathBuf>, strict_lifecycle: bool) -> Self {
         Self {
             registry: CanonicalRegistry::new(),
             initialized: false,
             strict_lifecycle,
             allowed_roots,
             log_level: LoggingLevel::Info,
+            cancelled_requests: HashSet::new(),
+            last_progress: None,
         }
     }
 
@@ -95,7 +105,6 @@ impl McpServer {
             Err(e) => {
                 let parse_err = ConformanceError::JsonRpcParse {
                     message: format!("Parse error: {e}"),
-                    code: error_codes::PARSE_ERROR,
                 };
                 Some(JsonRpcResponse::from_conformance_error(
                     RequestId::Number(0),
@@ -106,6 +115,19 @@ impl McpServer {
     }
 
     /// Deserializes strongly typed request parameters or returns `JsonRpcInvalidParams`.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - JSON-RPC method name for error diagnostics.
+    /// * `params` - Optional JSON parameter payload.
+    ///
+    /// # Returns
+    ///
+    /// Deserialized parameter struct `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::JsonRpcInvalidParams` if `params` is missing or invalid.
     fn parse_params<T: DeserializeOwned>(
         method: &str,
         params: Option<serde_json::Value>,
@@ -121,7 +143,51 @@ impl McpServer {
             })
     }
 
+    /// Validates optional pagination parameters on list requests (`tools/list`, `resources/list`, `prompts/list`).
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - JSON-RPC method name for error diagnostics.
+    /// * `params` - Optional JSON parameter payload.
+    ///
+    /// # Returns
+    ///
+    /// Validated `PaginatedRequestParams`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::JsonRpcInvalidParams` if `params` is not a valid pagination object or contains an unknown cursor.
+    fn validate_pagination(
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<PaginatedRequestParams, ConformanceError> {
+        match params {
+            None => Ok(PaginatedRequestParams::default()),
+            Some(val) => {
+                let page: PaginatedRequestParams = serde_json::from_value(val).map_err(|e| {
+                    ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Invalid pagination params for {method}: {e}"),
+                    }
+                })?;
+                if page.cursor.as_deref().is_some_and(|c| !c.is_empty()) {
+                    return Err(ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Unknown pagination cursor for {method}"),
+                    });
+                }
+                Ok(page)
+            }
+        }
+    }
+
     /// Dispatches an actionable request to the appropriate handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `req` - Incoming `JsonRpcRequest`.
+    ///
+    /// # Returns
+    ///
+    /// Outbound `JsonRpcResponse`.
     fn dispatch_request(&mut self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id;
         let method = req.method.as_str();
@@ -161,7 +227,10 @@ impl McpServer {
 
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
-            "tools/list" => JsonRpcResponse::from_serializable(id, &list_tools()),
+            "tools/list" => match Self::validate_pagination(method, req.params) {
+                Ok(_) => JsonRpcResponse::from_serializable(id, &list_tools()),
+                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+            },
 
             "tools/call" => {
                 match Self::parse_params::<CallToolParams>(method, req.params).and_then(|call| {
@@ -177,13 +246,15 @@ impl McpServer {
                 }
             }
 
-            "resources/list" => {
-                JsonRpcResponse::from_serializable(id, &list_resources(&self.registry))
-            }
+            "resources/list" => match Self::validate_pagination(method, req.params) {
+                Ok(_) => JsonRpcResponse::from_serializable(id, &list_resources(&self.registry)),
+                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+            },
 
-            "resources/templates/list" => {
-                JsonRpcResponse::from_serializable(id, &list_resource_templates())
-            }
+            "resources/templates/list" => match Self::validate_pagination(method, req.params) {
+                Ok(_) => JsonRpcResponse::from_serializable(id, &list_resource_templates()),
+                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+            },
 
             "resources/read" => match Self::parse_params::<ReadResourceParams>(method, req.params)
                 .and_then(|read_params| read_resource(&read_params.uri, &self.registry))
@@ -192,7 +263,10 @@ impl McpServer {
                 Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
             },
 
-            "prompts/list" => JsonRpcResponse::from_serializable(id, &list_prompts()),
+            "prompts/list" => match Self::validate_pagination(method, req.params) {
+                Ok(_) => JsonRpcResponse::from_serializable(id, &list_prompts()),
+                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+            },
 
             "prompts/get" => match Self::parse_params::<GetPromptParams>(method, req.params)
                 .and_then(|prompt_params| get_prompt_typed(&prompt_params))
@@ -218,10 +292,36 @@ impl McpServer {
         }
     }
 
-    /// Handles notifications from the client.
-    fn dispatch_notification(&mut self, method: &str, _params: Option<&serde_json::Value>) {
-        if method == "notifications/initialized" {
-            self.initialized = true;
+    /// Handles notifications from the client (`notifications/initialized`, `notifications/cancelled`, `notifications/progress`).
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - Notification method name.
+    /// * `params` - Optional notification parameters.
+    fn dispatch_notification(&mut self, method: &str, params: Option<&serde_json::Value>) {
+        match method {
+            "notifications/initialized" => {
+                self.initialized = true;
+            }
+            "notifications/cancelled" => {
+                if let Some(val) = params {
+                    if let Ok(cancel) =
+                        serde_json::from_value::<CancelledNotificationParams>(val.clone())
+                    {
+                        self.cancelled_requests.insert(cancel.request_id);
+                    }
+                }
+            }
+            "notifications/progress" => {
+                if let Some(val) = params {
+                    if let Ok(prog) =
+                        serde_json::from_value::<ProgressNotificationParams>(val.clone())
+                    {
+                        self.last_progress = Some(prog.progress);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -234,7 +334,7 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError` if I/O communication or serialization fails.
+    /// Returns `ConformanceError` if I/O communication fails.
     pub async fn run_stream<R, W>(
         &mut self,
         reader: R,
@@ -289,6 +389,7 @@ impl Default for McpServer {
 #[allow(clippy::similar_names)]
 mod tests {
     use super::*;
+    use crate::mcp::protocol::error_codes;
 
     struct TestReader {
         data: &'static [u8],
@@ -349,7 +450,9 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_server_run_stream() {
         let mut server = McpServer::new();
-        let input = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n\n";
+        let input = br#"{"jsonrpc":"2.0","id":1,"method":"ping"}
+
+"#;
         let mut ok_reader = TestReader {
             data: input,
             fail: false,
@@ -454,32 +557,51 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_server_handshake_and_dispatch() {
+    fn test_mcp_server_handshake_and_notifications() {
         let mut server = McpServer::new();
         assert!(!server.initialized);
 
-        // Empty lines
         assert!(server.handle_message("").is_none());
         assert!(server.handle_message("   ").is_none());
 
-        // Parse error
         let parse_err = server.handle_message("invalid json {{{");
         assert_eq!(
             parse_err.and_then(|r| r.error).map(|e| e.code),
             Some(error_codes::PARSE_ERROR)
         );
 
-        // Inbound response message (should produce no outbound reply)
         assert!(server
             .handle_message(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
             .is_none());
 
-        // Other notification
+        assert!(server
+            .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":77,"reason":"user abort"}}"#)
+            .is_none());
+        assert!(server.cancelled_requests.contains(&RequestId::Number(77)));
         assert!(server
             .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#)
             .is_none());
+        assert!(server
+            .handle_message(
+                r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":"bad"}"#
+            )
+            .is_none());
 
-        // Test initialize
+        assert!(server
+            .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":1,"progress":42.5,"total":100.0}}"#)
+            .is_none());
+        assert_eq!(server.last_progress, Some(42.5));
+        assert!(server
+            .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#)
+            .is_none());
+        assert!(server
+            .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/progress","params":"bad"}"#)
+            .is_none());
+
+        assert!(server
+            .handle_message(r#"{"jsonrpc":"2.0","method":"notifications/unknown"}"#)
+            .is_none());
+
         let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
         let init_res = server.handle_message(init_req);
         assert_eq!(
@@ -497,7 +619,6 @@ mod tests {
             ))
         );
 
-        // Initialize error branches
         let init_missing_params = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
         assert_eq!(
             server
@@ -506,21 +627,57 @@ mod tests {
                 .map(|e| e.code),
             Some(error_codes::INVALID_PARAMS)
         );
+        let init_bad_params = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        assert_eq!(
+            server
+                .handle_message(init_bad_params)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
 
-        // Test initialized notification
         let notif = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         assert!(server.handle_message(notif).is_none());
         assert!(server.initialized);
+    }
 
-        // Test tools/list with deserialized structural assertion
-        let tools_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
+    #[test]
+    fn test_mcp_server_tools_and_resources_dispatch() {
+        let mut server = McpServer::new();
+
+        let tools_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"cursor":""}}"#;
         let tools_payload: Option<crate::mcp::tools::ListToolsResult> = server
             .handle_message(tools_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(tools_payload.map(|p| p.tools.len()), Some(4));
 
-        // Tools/call error & success branches
+        let bad_cursor_tools =
+            r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{"cursor":"invalid"}}"#;
+        assert_eq!(
+            server
+                .handle_message(bad_cursor_tools)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+        let bad_page_tools = r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":"bad"}"#;
+        assert_eq!(
+            server
+                .handle_message(bad_page_tools)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+
+        let tool_missing_params = r#"{"jsonrpc":"2.0","id":31,"method":"tools/call"}"#;
+        assert_eq!(
+            server
+                .handle_message(tool_missing_params)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
         let tool_no_name = r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{}}"#;
         assert_eq!(
             server
@@ -543,19 +700,23 @@ mod tests {
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(tool_call_payload.map(|p| p.content.len()), Some(1));
-    }
 
-    #[test]
-    fn test_mcp_server_resources_prompts_and_logging() {
-        let mut server = McpServer::new();
-
-        // Test resources/list and templates/list with deserialized structural assertions
         let res_req = r#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#;
         let res_list_payload: Option<crate::mcp::resources::ListResourcesResult> = server
             .handle_message(res_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
         assert!(res_list_payload.is_some_and(|p| !p.resources.is_empty()));
+
+        let res_bad_cursor =
+            r#"{"jsonrpc":"2.0","id":40,"method":"resources/list","params":{"cursor":"bad"}}"#;
+        assert_eq!(
+            server
+                .handle_message(res_bad_cursor)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
 
         let tmpl_req = r#"{"jsonrpc":"2.0","id":41,"method":"resources/templates/list"}"#;
         let tmpl_payload: Option<crate::mcp::resources::ListResourceTemplatesResult> = server
@@ -564,7 +725,28 @@ mod tests {
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(tmpl_payload.map(|p| p.resource_templates.len()), Some(1));
 
-        // Resources/read error & success branches
+        let tmpl_bad_cursor = r#"{"jsonrpc":"2.0","id":410,"method":"resources/templates/list","params":{"cursor":"bad"}}"#;
+        assert_eq!(
+            server
+                .handle_message(tmpl_bad_cursor)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+    }
+
+    #[test]
+    fn test_mcp_server_read_and_prompts() {
+        let mut server = McpServer::new();
+
+        let res_missing_params = r#"{"jsonrpc":"2.0","id":42,"method":"resources/read"}"#;
+        assert_eq!(
+            server
+                .handle_message(res_missing_params)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
         let res_no_uri = r#"{"jsonrpc":"2.0","id":42,"method":"resources/read","params":{}}"#;
         assert_eq!(
             server
@@ -588,7 +770,6 @@ mod tests {
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(read_payload.map(|p| p.contents.len()), Some(1));
 
-        // Test prompts/list & prompts/get with deserialized structural assertions
         let prompts_req = r#"{"jsonrpc":"2.0","id":5,"method":"prompts/list"}"#;
         let prompts_payload: Option<crate::mcp::prompts::ListPromptsResult> = server
             .handle_message(prompts_req)
@@ -596,6 +777,24 @@ mod tests {
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(prompts_payload.map(|p| p.prompts.len()), Some(2));
 
+        let prompts_bad_cursor =
+            r#"{"jsonrpc":"2.0","id":50,"method":"prompts/list","params":{"cursor":"bad"}}"#;
+        assert_eq!(
+            server
+                .handle_message(prompts_bad_cursor)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+
+        let prompt_missing_params = r#"{"jsonrpc":"2.0","id":51,"method":"prompts/get"}"#;
+        assert_eq!(
+            server
+                .handle_message(prompt_missing_params)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
         let prompt_no_name = r#"{"jsonrpc":"2.0","id":51,"method":"prompts/get","params":{}}"#;
         assert_eq!(
             server
@@ -619,12 +818,25 @@ mod tests {
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(prompt_get_payload.map(|p| p.messages.len()), Some(1));
+    }
 
-        // Logging/setLevel error & success branches
+    #[test]
+    fn test_mcp_server_logging_and_unknown_method() {
+        let mut server = McpServer::new();
+
         let log_no_params = r#"{"jsonrpc":"2.0","id":71,"method":"logging/setLevel"}"#;
         assert_eq!(
             server
                 .handle_message(log_no_params)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+        let log_bad_params =
+            r#"{"jsonrpc":"2.0","id":72,"method":"logging/setLevel","params":{"level":"invalid"}}"#;
+        assert_eq!(
+            server
+                .handle_message(log_bad_params)
                 .and_then(|r| r.error)
                 .map(|e| e.code),
             Some(error_codes::INVALID_PARAMS)
@@ -637,7 +849,6 @@ mod tests {
         );
         assert_eq!(server.log_level, LoggingLevel::Debug);
 
-        // Unknown method
         let unknown_req = r#"{"jsonrpc":"2.0","id":99,"method":"unknown/method"}"#;
         assert_eq!(
             server

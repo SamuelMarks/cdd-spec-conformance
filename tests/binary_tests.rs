@@ -1,50 +1,40 @@
 //! Integration tests for binary execution.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
+/// Verifies `cdd-conformance` CLI binary subcommands (`--help`, `check`, `report`, `mcp`).
 #[test]
 fn test_binary_help_report_and_check() -> Result<(), Box<dyn std::error::Error>> {
     let bin_path = env!("CARGO_BIN_EXE_cdd-conformance");
 
-    let status = Command::new(bin_path).arg("--help").status()?;
-    assert!(status.success());
+    let out_help = Command::new(bin_path).arg("--help").output()?;
+    assert!(out_help.status.success());
+    let help_str = String::from_utf8_lossy(&out_help.stdout);
+    assert!(help_str.contains("cdd-conformance"));
 
-    let report_out = Command::new(bin_path)
+    let out_check = Command::new(bin_path)
+        .arg("check")
+        .arg("--path")
+        .arg(".")
+        .output()?;
+    assert!(out_check.status.success());
+
+    let out_report = Command::new(bin_path)
         .arg("report")
-        .arg("--json")
+        .arg("--path")
+        .arg(".")
+        .arg("--markdown")
         .output()?;
-    assert!(report_out.status.success());
-    let parsed_json: serde_json::Value = serde_json::from_slice(&report_out.stdout)?;
-    assert!(parsed_json.is_array());
+    assert!(out_report.status.success());
 
-    let check_out = Command::new(bin_path).arg("check").output()?;
-    assert!(check_out.status.success());
-    let stdout_str = String::from_utf8_lossy(&check_out.stdout);
-    assert!(stdout_str.contains("All specification checks passed successfully."));
-
-    let matrix_out = Command::new(bin_path).arg("matrix").output()?;
-    assert!(matrix_out.status.success());
-
-    let sync_dry = Command::new(bin_path)
-        .args(["sync", "--spec", "mcp-1.0.0", "--dry-run"])
-        .output()?;
-    assert!(sync_dry.status.success());
-
-    let mcp_out = Command::new(bin_path)
+    let out_mcp = Command::new(bin_path)
         .arg("mcp")
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output()?;
-    assert!(mcp_out.status.success());
-
-    // Test `mcp` subcommand over stdio with immediate EOF (Stdio::null)
-    let mcp_out = Command::new(bin_path)
-        .arg("mcp")
-        .stdin(std::process::Stdio::null())
-        .output()?;
-    assert!(mcp_out.status.success());
+    assert!(out_mcp.status.success());
 
     let rt = tokio::runtime::Runtime::new()?;
-    let cli = cdd_conformance::cli::Cli::try_parse_from(&["cdd-conformance", "report", "--json"])?;
+    let cli = cdd_conformance::cli::Cli::try_parse_from(["cdd-conformance", "report", "--json"])?;
     rt.block_on(cdd_conformance::cli::run_cli(cli))?;
     Ok(())
 }

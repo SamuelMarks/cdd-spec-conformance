@@ -58,9 +58,13 @@ pub struct Prompt {
 
 /// Result returned in response to `prompts/list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListPromptsResult {
     /// Available prompt templates.
     pub prompts: Vec<Prompt>,
+    /// Optional pagination cursor for subsequent pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Result returned in response to `prompts/get`.
@@ -114,6 +118,7 @@ pub fn list_prompts() -> ListPromptsResult {
                 ],
             },
         ],
+        next_cursor: None,
     }
 }
 
@@ -180,35 +185,6 @@ pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, Con
     }
 }
 
-/// Retrieves and formats an instantiated prompt template.
-///
-/// # Arguments
-///
-/// * `name` - Prompt identifier name.
-/// * `arguments` - Optional JSON object containing prompt arguments.
-///
-/// # Errors
-///
-/// Returns `ConformanceError::JsonRpcMethodNotFound` if the prompt does not exist,
-/// or `ConformanceError::JsonRpcInvalidParams` if arguments are malformed.
-pub fn get_prompt(
-    name: &str,
-    arguments: Option<&serde_json::Value>,
-) -> Result<GetPromptResult, ConformanceError> {
-    let typed_args: Option<HashMap<String, String>> = match arguments {
-        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
-            ConformanceError::JsonRpcInvalidParams {
-                message: format!("Invalid prompt arguments: {e}"),
-            }
-        })?),
-        None => None,
-    };
-    get_prompt_typed(&GetPromptParams {
-        name: name.to_string(),
-        arguments: typed_args,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,19 +193,26 @@ mod tests {
     fn test_list_and_get_prompts() {
         let list = list_prompts();
         assert_eq!(list.prompts.len(), 2);
+        assert!(list.next_cursor.is_none());
 
-        let args = serde_json::json!({
-            "repo_path": "../cdd-rust",
-            "spec_id": "openapi-3.2.0"
-        });
-        let p = get_prompt("audit_repo_conformance", Some(&args)).ok();
+        let mut args = HashMap::new();
+        args.insert("repo_path".to_string(), "../cdd-rust".to_string());
+        args.insert("spec_id".to_string(), "openapi-3.2.0".to_string());
+        let p = get_prompt_typed(&GetPromptParams {
+            name: "audit_repo_conformance".to_string(),
+            arguments: Some(args),
+        })
+        .ok();
         assert!(p.is_some_and(|res| res.messages[0].content.contains("../cdd-rust")));
 
-        let impl_args = serde_json::json!({
-            "feature_name": "Webhooks",
-            "spec_id": "openapi-3.2.0"
-        });
-        let impl_prompt = get_prompt("implement_conformance_feature", Some(&impl_args)).ok();
+        let mut impl_args = HashMap::new();
+        impl_args.insert("feature_name".to_string(), "Webhooks".to_string());
+        impl_args.insert("spec_id".to_string(), "openapi-3.2.0".to_string());
+        let impl_prompt = get_prompt_typed(&GetPromptParams {
+            name: "implement_conformance_feature".to_string(),
+            arguments: Some(impl_args),
+        })
+        .ok();
         assert!(impl_prompt.is_some_and(|res| !res.messages.is_empty()));
 
         let assistant_msg = PromptMessage {
@@ -239,10 +222,10 @@ mod tests {
         let msg_str = serde_json::to_string(&assistant_msg).unwrap_or_default();
         assert!(msg_str.contains("assistant"));
 
-        let bad_args = serde_json::json!("not-a-map");
-        assert!(get_prompt("audit_repo_conformance", Some(&bad_args)).is_err());
-
-        let bad_prompt = get_prompt("unknown_prompt", None);
+        let bad_prompt = get_prompt_typed(&GetPromptParams {
+            name: "unknown_prompt".to_string(),
+            arguments: None,
+        });
         assert!(bad_prompt.is_err());
     }
 }

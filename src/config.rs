@@ -3,6 +3,7 @@
 use crate::error::ConformanceError;
 use crate::model::{Direction, ProfileKind, ProfileScore, SpecId};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Target specification and evaluated profiles configured for a repository.
@@ -85,8 +86,8 @@ impl CoverageRequirement {
                 let actual = score.percentage_for(dir);
                 if actual < required {
                     return Err(ConformanceError::ThresholdNotMet {
-                        spec: spec.to_string(),
-                        profile: profile.to_string(),
+                        spec,
+                        profile,
                         metric: dir,
                         actual,
                         required,
@@ -125,7 +126,8 @@ pub struct ProjectConfig {
 }
 
 impl ProjectConfig {
-    /// Validates all coverage thresholds configured in this `ProjectConfig`.
+    /// Validates all coverage thresholds, standard uniqueness, and `(SpecId, ProfileKind)`
+    /// pairings configured in this `ProjectConfig`.
     ///
     /// # Arguments
     ///
@@ -133,12 +135,34 @@ impl ProjectConfig {
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError::InvalidConfig` if any threshold is out of range.
+    /// Returns `ConformanceError::InvalidConfig` if any threshold is out of range, if duplicate
+    /// specification targets exist, or if an unsupported `(SpecId, ProfileKind)` pair is specified.
     pub fn validate(&self, path: &Path) -> Result<(), ConformanceError> {
         if let Some(ref cov) = self.min_coverage {
             cov.validate(path)?;
         }
+        let mut seen_specs = HashSet::with_capacity(self.standards.len());
         for target in &self.standards {
+            if !seen_specs.insert(target.spec) {
+                return Err(ConformanceError::InvalidConfig {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "Duplicate specification target '{}' in standards",
+                        target.spec
+                    ),
+                });
+            }
+            for profile in &target.profiles {
+                if !target.spec.supports_profile(*profile) {
+                    return Err(ConformanceError::InvalidConfig {
+                        path: path.to_path_buf(),
+                        reason: format!(
+                            "Specification '{}' does not support profile '{}'",
+                            target.spec, profile
+                        ),
+                    });
+                }
+            }
             if let Some(ref cov) = target.min_coverage {
                 cov.validate(path)?;
             }
@@ -146,7 +170,7 @@ impl ProjectConfig {
         Ok(())
     }
 
-    /// Loads configuration from a given file path and validates all thresholds.
+    /// Loads configuration from a given file path and validates all thresholds and targets.
     ///
     /// # Arguments
     ///
@@ -155,7 +179,7 @@ impl ProjectConfig {
     /// # Errors
     ///
     /// Returns `ConformanceError::Io` if reading fails, `ConformanceError::YamlParse` if parsing fails,
-    /// or `ConformanceError::InvalidConfig` if threshold values are out of range.
+    /// or `ConformanceError::InvalidConfig` if threshold values or targets are invalid.
     pub fn load_from_path(path: &Path) -> Result<Self, ConformanceError> {
         let content = std::fs::read_to_string(path).map_err(|e| ConformanceError::Io {
             source: e,
@@ -198,7 +222,7 @@ impl ProjectConfig {
         Ok(None)
     }
 
-    /// Resolves the effective conformance directory path for a repository.
+    /// Resolves the effective conformance directory path for scanning a repository.
     ///
     /// # Arguments
     ///
@@ -206,7 +230,8 @@ impl ProjectConfig {
     ///
     /// # Returns
     ///
-    /// Resolved `PathBuf` pointing to the conformance directory.
+    /// Resolved `PathBuf` pointing to the conformance directory (falling back to `repo_root` if
+    /// `repo_root/conformance` does not yet exist on disk).
     #[must_use]
     pub fn resolve_conformance_dir(&self, repo_root: &Path) -> PathBuf {
         self.paths.conformance_dir.as_ref().map_or_else(
@@ -218,6 +243,25 @@ impl ProjectConfig {
                     repo_root.to_path_buf()
                 }
             },
+            |custom| repo_root.join(custom),
+        )
+    }
+
+    /// Resolves the target conformance directory path when scaffolding or synchronizing checklists.
+    ///
+    /// Defaults to `repo_root/conformance` when `paths.conformance_dir` is `None`.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo_root` - Root directory of the target repository.
+    ///
+    /// # Returns
+    ///
+    /// Resolved `PathBuf` where specification subdirectories should be written.
+    #[must_use]
+    pub fn resolve_sync_conformance_dir(&self, repo_root: &Path) -> PathBuf {
+        self.paths.conformance_dir.as_ref().map_or_else(
+            || repo_root.join("conformance"),
             |custom| repo_root.join(custom),
         )
     }
@@ -302,7 +346,7 @@ paths:
   conformance_dir: "custom-conformance"
   compliance_file: "MY_COMPLIANCE.md"
 "#;
-        let dir = std::env::temp_dir().join("cdd_config_test_1");
+        let dir = std::env::temp_dir().join(format!("cdd_cfg_t1_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let cfg_path = dir.join(".cdd-conformance.yaml");
         let _ = std::fs::write(&cfg_path, yaml.as_bytes());
@@ -334,19 +378,17 @@ paths:
     }
 
     #[test]
-    fn test_validate_coverage_requirements_and_check_score() {
-        let dir = std::env::temp_dir().join("cdd_config_test_2");
+    fn test_validate_coverage_requirements_targets_and_check_score() {
+        let dir = std::env::temp_dir().join(format!("cdd_cfg_t2_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let bad_global_path = dir.join("bad_global.yaml");
         let _ = std::fs::write(&bad_global_path, b"min_coverage:\n  overall: 150.0\n");
         let bad_global_res = ProjectConfig::load_from_path(&bad_global_path);
-        assert_eq!(
-            bad_global_res.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(&ConformanceError::InvalidConfig {
-                path: PathBuf::new(),
-                reason: String::new(),
-            }))
-        );
+        assert!(matches!(
+            bad_global_res,
+            Err(ConformanceError::InvalidConfig { ref path, ref reason })
+                if path == &bad_global_path && reason.contains("overall")
+        ));
 
         let bad_std_path = dir.join("bad_std.yaml");
         let _ = std::fs::write(
@@ -354,13 +396,35 @@ paths:
             b"standards:\n  - spec: openapi-3.2.0\n    min_coverage:\n      to: -5.0\n",
         );
         let bad_std_res = ProjectConfig::load_from_path(&bad_std_path);
-        assert_eq!(
-            bad_std_res.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(&ConformanceError::InvalidConfig {
-                path: PathBuf::new(),
-                reason: String::new(),
-            }))
+        assert!(matches!(
+            bad_std_res,
+            Err(ConformanceError::InvalidConfig { ref path, ref reason })
+                if path == &bad_std_path && reason.contains("to")
+        ));
+
+        let dup_std_path = dir.join("dup_std.yaml");
+        let _ = std::fs::write(
+            &dup_std_path,
+            b"standards:\n  - spec: openapi-3.2.0\n  - spec: openapi-3.2.0\n",
         );
+        let dup_std_res = ProjectConfig::load_from_path(&dup_std_path);
+        assert!(matches!(
+            dup_std_res,
+            Err(ConformanceError::InvalidConfig { ref reason, .. })
+                if reason.contains("Duplicate specification target")
+        ));
+
+        let bad_prof_path = dir.join("bad_prof.yaml");
+        let _ = std::fs::write(
+            &bad_prof_path,
+            b"standards:\n  - spec: openapi-3.2.0\n    profiles: [mock-server-plan]\n",
+        );
+        let bad_prof_res = ProjectConfig::load_from_path(&bad_prof_path);
+        assert!(matches!(
+            bad_prof_res,
+            Err(ConformanceError::InvalidConfig { ref reason, .. })
+                if reason.contains("does not support profile")
+        ));
 
         let req = CoverageRequirement {
             to: Some(80.0),
@@ -384,16 +448,16 @@ paths:
             ..ProfileScore::default()
         };
         let low_res = req.check_score(SpecId::OpenApi320, ProfileKind::ClientSdk, low_to_score);
-        assert_eq!(
-            low_res.as_ref().err().map(std::mem::discriminant),
-            Some(std::mem::discriminant(&ConformanceError::ThresholdNotMet {
-                spec: String::new(),
-                profile: String::new(),
+        assert!(matches!(
+            low_res,
+            Err(ConformanceError::ThresholdNotMet {
+                spec: SpecId::OpenApi320,
+                profile: ProfileKind::ClientSdk,
                 metric: Direction::To,
-                actual: 0.0,
-                required: 0.0,
-            }))
-        );
+                actual,
+                required,
+            }) if (actual - 50.0).abs() < f64::EPSILON && (required - 80.0).abs() < f64::EPSILON
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -402,7 +466,7 @@ paths:
         let missing = ProjectConfig::load_from_path(Path::new("missing.yaml"));
         assert!(missing.is_err());
 
-        let dir = std::env::temp_dir().join("cdd_config_test_3");
+        let dir = std::env::temp_dir().join(format!("cdd_cfg_t3_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let bad_yaml_path = dir.join("invalid.yaml");
         let _ = std::fs::write(&bad_yaml_path, b": invalid yaml : :");
@@ -413,8 +477,7 @@ paths:
 
     #[test]
     fn test_find_and_load_empty_dir() {
-        let dir = std::env::temp_dir().join("cdd_config_test_4");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!("cdd_cfg_t4_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let res = ProjectConfig::find_and_load(&dir);
         assert_eq!(res.ok(), Some(None));
@@ -422,6 +485,10 @@ paths:
         let cfg = ProjectConfig::default();
         let conf_dir = cfg.resolve_conformance_dir(&dir);
         assert_eq!(conf_dir, dir);
+        assert_eq!(
+            cfg.resolve_sync_conformance_dir(&dir),
+            dir.join("conformance")
+        );
 
         let comp_file = cfg.resolve_compliance_file(&dir);
         assert_eq!(comp_file, dir.join("COMPLIANCE.md"));
@@ -438,6 +505,10 @@ paths:
             dir.join("my-conf")
         );
         assert_eq!(
+            custom_cfg.resolve_sync_conformance_dir(&dir),
+            dir.join("my-conf")
+        );
+        assert_eq!(
             custom_cfg.resolve_compliance_file(&dir),
             dir.join("CUSTOM_COMPLIANCE.md")
         );
@@ -446,8 +517,7 @@ paths:
 
     #[test]
     fn test_find_and_load_yml_file() {
-        let dir = std::env::temp_dir().join("cdd_config_test_5");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!("cdd_cfg_t5_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let yml_path = dir.join(".cdd-conformance.yml");
         let _ = std::fs::write(&yml_path, b"strict: true\n");

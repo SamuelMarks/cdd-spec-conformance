@@ -2,118 +2,188 @@
 
 use crate::error::ConformanceError;
 use crate::model::ChecklistTable;
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Diagnostic report verifying documented claims in `COMPLIANCE.md` against actual checklists.
+/// Report detailing consistency between documentation claims (`COMPLIANCE.md`) and checklists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClaimReport {
-    /// Path to the compliance documentation file.
-    pub file_path: PathBuf,
-    /// Total claims detected in documentation.
-    pub total_claims: usize,
-    /// Number of claims verified as accurate against the checklists.
-    pub verified_claims: usize,
-    /// Discrepancies where documentation claims `✅` but checklist marks absent or unreviewed.
-    pub discrepancies: Vec<String>,
-    /// Whether all documented claims are strictly truthful.
+pub struct ClaimVerificationReport {
+    /// Path to the evaluated `COMPLIANCE.md` document.
+    pub compliance_file: PathBuf,
+    /// Whether all extracted documentation claims are consistent with the checklists.
     pub is_consistent: bool,
+    /// Total feature claims checked.
+    pub total_claims: usize,
+    /// Claims that matched checklist implementation status.
+    pub verified_claims: usize,
+    /// Discrepancies where documentation claims implementation (`✅`) but checklists show absent/unreviewed.
+    pub discrepancies: Vec<String>,
 }
 
-impl ClaimReport {
-    /// Validates the report, returning `Ok(())` or `ConformanceError::ComplianceClaimMismatch`.
+impl ClaimVerificationReport {
+    /// Converts this report into a `Result`, returning `Err(ConformanceError::ComplianceClaimMismatch)`
+    /// if any discrepancies exist.
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError::ComplianceClaimMismatch` if any discrepancy was detected.
+    /// Returns `ConformanceError::ComplianceClaimMismatch` if `discrepancies` is non-empty.
     pub fn into_result(self) -> Result<(), ConformanceError> {
-        if !self.is_consistent {
+        if let Some(first) = self.discrepancies.first() {
             return Err(ConformanceError::ComplianceClaimMismatch {
-                claimed: "✅ Supported".to_string(),
-                actual_status: "Unimplemented or absent in checklist".to_string(),
-                details: self.discrepancies.join("; "),
+                claimed: first.clone(),
+                actual_status: "Unimplemented or Absent in Checklist".to_string(),
+                details: format!(
+                    "Found {} discrepancy(ies) in {}",
+                    self.discrepancies.len(),
+                    self.compliance_file.display()
+                ),
             });
         }
         Ok(())
     }
 }
 
-/// Checks whether every whitespace-separated token in `claimed_key` matches a word or word-prefix in `candidate_key`.
-fn matches_feature_tokens(candidate_key: &str, claimed_key: &str) -> bool {
-    let candidate_words: Vec<&str> = candidate_key.split_whitespace().collect();
-    claimed_key.split_whitespace().all(|claimed_tok| {
-        candidate_words
-            .iter()
-            .any(|cand_tok| cand_tok.starts_with(claimed_tok))
-    })
-}
-
-/// Evaluates a single extracted feature claim against the aggregated feature map.
-fn evaluate_single_claim(
-    feature_name: &str,
-    line_num: usize,
-    implemented_features: &HashMap<String, bool>,
-    verified_claims: &mut usize,
-    discrepancies: &mut Vec<String>,
-) {
-    let norm_key = normalize_feature_name(feature_name);
-    if norm_key.is_empty() {
-        discrepancies.push(format!(
-            "'{feature_name}' claimed ✅ at line {line_num}, but not found in checklists"
-        ));
-        return;
-    }
-
-    if let Some(&is_impl) = implemented_features.get(&norm_key) {
-        if is_impl {
-            *verified_claims += 1;
-        } else {
-            discrepancies.push(format!(
-                "'{feature_name}' claimed ✅ at line {line_num}, but checklist marks it absent"
-            ));
-        }
-    } else {
-        let partial_match = implemented_features
-            .iter()
-            .any(|(k, &v)| v && matches_feature_tokens(k, &norm_key));
-        if partial_match {
-            *verified_claims += 1;
-        } else {
-            discrepancies.push(format!(
-                "'{feature_name}' claimed ✅ at line {line_num}, but not found in checklists"
-            ));
-        }
-    }
-}
-
-/// Verifies claims documented in `COMPLIANCE.md` against the ground truth of parsed checklists.
+/// Normalizes a feature string for fuzzy lookup (lowercased, stripping punctuation and parentheticals).
 ///
 /// # Arguments
 ///
-/// * `compliance_path` - Path to the Markdown compliance documentation file.
-/// * `tables` - Slice of parsed `ChecklistTable` instances from the repository.
+/// * `s` - Raw feature name string.
+///
+/// # Returns
+///
+/// Space-delimited lowercased alphanumeric key.
+fn normalize_feature_key(s: &str) -> String {
+    let base = s.split('(').next().unwrap_or(s);
+    base.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Checks whether a normalized claimed feature key matches a normalized checklist feature key.
+///
+/// Matches when every token in `claimed_key` matches a word in `candidate_key` either exactly
+/// or as a stem prefix of at least 3 characters (e.g. `"webhook"` matching `"webhooks"`).
+///
+/// # Arguments
+///
+/// * `claimed_key` - Normalized feature key from `COMPLIANCE.md`.
+/// * `candidate_key` - Normalized feature key from a checklist row.
+///
+/// # Returns
+///
+/// `true` if all tokens in `claimed_key` match tokens in `candidate_key`.
+fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
+    let candidate_words: Vec<&str> = candidate_key.split_whitespace().collect();
+    claimed_key.split_whitespace().all(|claimed_tok| {
+        candidate_words.iter().any(|cand_tok| {
+            *cand_tok == claimed_tok
+                || (claimed_tok.len() >= 3 && cand_tok.starts_with(claimed_tok))
+                || (cand_tok.len() >= 3 && claimed_tok.starts_with(cand_tok))
+        })
+    })
+}
+
+/// Extracts claimed feature names from Markdown tables where rows contain `✅`,
+/// ignoring fenced/indented code blocks, HTML comments, and table header rows.
+///
+/// # Arguments
+///
+/// * `content` - Raw Markdown content of `COMPLIANCE.md`.
+///
+/// # Returns
+///
+/// Vector of feature names extracted from rows containing `✅`.
+fn extract_markdown_claims(content: &str) -> Vec<String> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+
+    let parser = Parser::new_ext(content, options);
+    let mut claims = Vec::new();
+    let mut in_table_head = false;
+    let mut current_cell = String::new();
+    let mut current_row: Vec<String> = Vec::new();
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::TableHead) => {
+                in_table_head = true;
+            }
+            Event::End(TagEnd::TableHead) => {
+                in_table_head = false;
+            }
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableRow) => {
+                if current_row.len() >= 2 {
+                    let feature_cell = current_row[0].trim().to_string();
+                    let row_has_check = current_row.iter().skip(1).any(|c| c.contains('✅'));
+                    if !feature_cell.is_empty() && row_has_check {
+                        claims.push(feature_cell);
+                    }
+                }
+            }
+            Event::Start(Tag::TableCell) => {
+                current_cell.clear();
+            }
+            Event::End(TagEnd::TableCell) => {
+                if !in_table_head {
+                    current_row.push(current_cell.trim().to_string());
+                }
+            }
+            Event::Text(t) | Event::Code(t) => {
+                current_cell.push_str(&t);
+            }
+            _ => {}
+        }
+    }
+
+    claims
+}
+
+/// Verifies that claims made in a repository's `COMPLIANCE.md` match the actual checklist tables.
+///
+/// Inspects Markdown tables in `COMPLIANCE.md` where features are marked with `✅`, and cross-references
+/// those features against the parsed `ChecklistTable` rows.
+///
+/// # Arguments
+///
+/// * `compliance_path` - Path to the `COMPLIANCE.md` file.
+/// * `tables` - Slice of parsed `ChecklistTable` instances discovered in the repository.
 ///
 /// # Errors
 ///
-/// Returns `ConformanceError::Io` if reading the compliance documentation file fails.
+/// Returns `ConformanceError::Io` if reading `compliance_path` fails.
 pub fn verify_compliance_claims(
     compliance_path: &Path,
     tables: &[ChecklistTable],
-) -> Result<ClaimReport, ConformanceError> {
+) -> Result<ClaimVerificationReport, ConformanceError> {
     let content = std::fs::read_to_string(compliance_path).map_err(|e| ConformanceError::Io {
         source: e,
         path: compliance_path.to_path_buf(),
     })?;
 
-    // Aggregate implementation status across all tables using boolean OR so an implemented feature
-    // in one profile is not overwritten by an unimplemented status in another profile.
+    // Build lookup map of normalized feature name -> whether it is implemented in at least one profile/direction
     let mut implemented_features: HashMap<String, bool> = HashMap::new();
     for table in tables {
         for row in &table.rows {
-            let key = normalize_feature_name(&row.feature_name);
-            let is_implemented = row.status.is_to_present() || row.status.is_from_present();
-            *implemented_features.entry(key).or_insert(false) |= is_implemented;
+            let full_key = normalize_feature_key(&row.feature_name);
+            let is_impl = row.status.is_to_present() || row.status.is_from_present();
+            implemented_features
+                .entry(full_key)
+                .and_modify(|v| *v = *v || is_impl)
+                .or_insert(is_impl);
         }
     }
 
@@ -121,100 +191,97 @@ pub fn verify_compliance_claims(
     let mut verified_claims = 0;
     let mut discrepancies = Vec::new();
 
-    for (line_idx, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-        let line_num = line_idx + 1;
-
-        if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.contains('✅') {
-            let parts: Vec<&str> = trimmed
-                .split('|')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect();
-            if parts.len() >= 2 && parts[1].contains('✅') {
-                total_claims += 1;
-                evaluate_single_claim(
-                    parts[0],
-                    line_num,
-                    &implemented_features,
-                    &mut verified_claims,
-                    &mut discrepancies,
-                );
-            }
-        } else if (trimmed.starts_with('-') || trimmed.starts_with('*')) && trimmed.contains('✅')
+    for feature_cell in extract_markdown_claims(&content) {
+        let key = normalize_feature_key(&feature_cell);
+        if key.is_empty()
+            || matches!(
+                key.as_str(),
+                "feature" | "object" | "status" | "notes" | "total"
+            )
         {
-            total_claims += 1;
-            let text = trimmed.trim_start_matches(['-', '*', ' ']);
-            let feature_name = text.split(':').next().unwrap_or(text).trim();
-            evaluate_single_claim(
-                feature_name,
-                line_num,
-                &implemented_features,
-                &mut verified_claims,
-                &mut discrepancies,
-            );
+            continue;
+        }
+
+        total_claims += 1;
+
+        // Check exact normalized key or token-level match in checklists
+        let matched = implemented_features.get(&key).copied().or_else(|| {
+            let mut found_any = false;
+            let mut any_impl = false;
+            for (k, &v) in &implemented_features {
+                if matches_feature_tokens(&key, k) {
+                    found_any = true;
+                    if v {
+                        any_impl = true;
+                    }
+                }
+            }
+            found_any.then_some(any_impl)
+        });
+
+        match matched {
+            Some(true) => {
+                verified_claims += 1;
+            }
+            Some(false) => {
+                discrepancies.push(format!(
+                    "Feature '{feature_cell}' is claimed as implemented (✅) in {}, but marked unimplemented in checklists",
+                    compliance_path.display()
+                ));
+            }
+            None => {
+                // If checklists exist, an unknown feature claimed as ✅ is flagged
+                if implemented_features.is_empty() {
+                    verified_claims += 1;
+                } else {
+                    discrepancies.push(format!(
+                        "Feature '{feature_cell}' is claimed as implemented (✅) in {}, but not found in any checklist",
+                        compliance_path.display()
+                    ));
+                }
+            }
         }
     }
 
-    let is_consistent = discrepancies.is_empty();
-
-    Ok(ClaimReport {
-        file_path: compliance_path.to_path_buf(),
+    Ok(ClaimVerificationReport {
+        compliance_file: compliance_path.to_path_buf(),
+        is_consistent: discrepancies.is_empty(),
         total_claims,
         verified_claims,
         discrepancies,
-        is_consistent,
     })
 }
 
-/// Normalizes a feature name for robust word-level comparison without mangling substrings.
-fn normalize_feature_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace(['`', '*'], "")
-        .replace(['-', '_'], " ")
-        .split_whitespace()
-        .filter(|word| *word != "object")
-        .collect::<Vec<&str>>()
-        .join(" ")
-}
-
 #[cfg(test)]
+#[allow(clippy::needless_raw_string_hashes)]
 mod tests {
     use super::*;
     use crate::model::{ChecklistRow, FeatureStatus, ProfileKind, SpecId};
 
     #[test]
-    fn test_normalize_feature_name_preserves_substrings() {
-        assert_eq!(normalize_feature_name("Info Object"), "info");
-        assert_eq!(
-            normalize_feature_name("Objective Function"),
-            "objective function"
-        );
-        assert_eq!(normalize_feature_name("` `*` `"), "");
-    }
-
-    #[test]
-    fn test_verify_compliance_claims_matching_and_multi_table() {
-        let dir = std::env::temp_dir().join("cdd_claims_test_1");
+    fn test_verify_compliance_claims_consistent_and_discrepant() {
+        let dir = std::env::temp_dir().join(format!("cdd_claims_t1_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let file_path = dir.join("COMPLIANCE_1.md");
-        let content = "# Compliance
-| Feature ✅ | Status |
+        let comp_path = dir.join("COMPLIANCE.md");
+
+        let comp_content = r#"# OpenAPI 3.2.0 Compliance
+```markdown
+| Fake Code Block Feature | ✅ |
+```
+| Feature | "✅" |
 | :--- | :---: |
 | Info Object | ✅ |
-| Server | ✅ |
-| Auth | ✅ |
-";
-        let _ = std::fs::write(&file_path, content);
+| Webhooks | ✅ |
+"#;
+        let _ = std::fs::write(&comp_path, comp_content);
 
-        // Table 1 has Info Object implemented
-        let table1 = ChecklistTable {
+        let table = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
-            title: "OpenAPI 3.2.0 SDK".to_string(),
+            title: "Test".to_string(),
             rows: vec![
                 ChecklistRow {
-                    feature_name: "Info Object".to_string(),
+                    feature_name: "Info Object (title)".to_string(),
                     status: FeatureStatus::from_arrays(
                         [true, true],
                         [false, false],
@@ -224,20 +291,20 @@ mod tests {
                     line_number: 1,
                 },
                 ChecklistRow {
-                    feature_name: "Server Object".to_string(),
+                    feature_name: "Paths Object".to_string(),
                     status: FeatureStatus::from_arrays(
-                        [true, true],
                         [false, false],
+                        [true, true],
                         [false, false],
                     ),
                     notes: None,
                     line_number: 2,
                 },
                 ChecklistRow {
-                    feature_name: "Authentication Scheme Object".to_string(),
+                    feature_name: "OpenAPI Object (`webhooks`)".to_string(),
                     status: FeatureStatus::from_arrays(
-                        [true, true],
                         [false, false],
+                        [true, true],
                         [false, false],
                     ),
                     notes: None,
@@ -246,148 +313,115 @@ mod tests {
             ],
         };
 
-        // Table 2 has Info Object absent (tests that Table 2 does not overwrite Table 1's true)
-        let table2 = ChecklistTable {
+        let report_res = verify_compliance_claims(&comp_path, &[table]);
+        assert!(report_res.is_ok_and(|report| {
+            assert!(!report.is_consistent);
+            assert_eq!(report.total_claims, 2);
+            assert_eq!(report.verified_claims, 1);
+            assert_eq!(report.discrepancies.len(), 1);
+            report.into_result().is_err()
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_compliance_claims_all_valid() {
+        let dir = std::env::temp_dir().join(format!("cdd_claims_t2_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let comp_path = dir.join("COMPLIANCE.md");
+
+        let comp_content = r#"# OpenAPI 3.2.0 Compliance
+| Feature | Status |
+| :--- | :---: |
+| `Info-Object` | ✅ |
+"#;
+        let _ = std::fs::write(&comp_path, comp_content);
+
+        let table = ChecklistTable {
             spec_id: SpecId::OpenApi320,
-            profile: ProfileKind::Servers,
-            title: "OpenAPI 3.2.0 Servers".to_string(),
+            profile: ProfileKind::ClientSdk,
+            title: "Test".to_string(),
             rows: vec![ChecklistRow {
-                feature_name: "Info Object".to_string(),
-                status: FeatureStatus::from_arrays([false, false], [true, true], [false, false]),
+                feature_name: "Info-Object".to_string(),
+                status: FeatureStatus::from_arrays([true, true], [false, false], [false, false]),
                 notes: None,
                 line_number: 1,
             }],
         };
 
-        let rep = verify_compliance_claims(&file_path, &[table1, table2]);
-        assert!(rep.is_ok_and(|r| {
-            assert!(r.is_consistent);
-            assert_eq!(r.total_claims, 3);
-            assert_eq!(r.verified_claims, 3);
-            r.into_result().is_ok()
+        let report_res = verify_compliance_claims(&comp_path, &[table]);
+        assert!(report_res.is_ok_and(|report| {
+            assert!(report.is_consistent);
+            report.into_result().is_ok()
         }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_verify_compliance_claims_mismatch() {
-        let dir = std::env::temp_dir().join("cdd_claims_test_2");
+    fn test_verify_claims_edge_cases_and_io_error() {
+        let missing_res = verify_compliance_claims(Path::new("nonexistent_compliance.md"), &[]);
+        assert!(missing_res.is_err());
+
+        let dir = std::env::temp_dir().join(format!("cdd_claims_t3_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let file_path = dir.join("COMPLIANCE_2.md");
-        let content = "# Compliance
+        let comp_path = dir.join("COMPLIANCE.md");
+
+        let comp_content = r#"# Compliance Edge Cases
+| SingleCol |
+| :--- |
+| One |
+
 | Feature | Status |
 | :--- | :---: |
-| Info Object | ✅ |
-| Callbacks Object | ✅ |
-| Unknown Widget | ✅ |
-| `` | ✅ |
-";
-        let _ = std::fs::write(&file_path, content);
+| | ✅ |
+| Total | ✅ |
+| Unknown Feature XYZ | ✅ |
+| Paths Object | ❌ |
+| Server Variable | ✅ |
+| Webhook | ✅ |
+"#;
+        let _ = std::fs::write(&comp_path, comp_content);
 
+        // 1. With empty checklists slice, unknown feature is accepted
+        let empty_tables_rep = verify_compliance_claims(&comp_path, &[]).ok();
+        assert_eq!(
+            empty_tables_rep.map(|r| (r.is_consistent, r.verified_claims)),
+            Some((true, 3))
+        );
+
+        // 2. With non-empty checklists slice:
+        //    - "Unknown Feature XYZ" -> None branch (discrepancy)
+        //    - "Server Variable" -> matches "Server Variable Object" where status is false
+        //    - "Webhook" -> stem matches "Webhooks Object" where status is true
         let table = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
-            title: "OpenAPI 3.2.0".to_string(),
+            title: "Test".to_string(),
             rows: vec![
                 ChecklistRow {
-                    feature_name: "Info Object".to_string(),
-                    status: FeatureStatus::from_arrays(
-                        [true, true],
-                        [false, false],
-                        [false, false],
-                    ),
+                    feature_name: "Server Variable Object".to_string(),
+                    status: FeatureStatus::new(),
                     notes: None,
                     line_number: 1,
                 },
                 ChecklistRow {
-                    feature_name: "Callbacks Object".to_string(),
-                    status: FeatureStatus::from_arrays(
-                        [false, false],
-                        [true, true],
-                        [false, false],
-                    ),
-                    notes: None,
-                    line_number: 2,
-                },
-            ],
-        };
-
-        let rep = verify_compliance_claims(&file_path, &[table]);
-        assert!(rep.is_ok_and(|r| {
-            assert!(!r.is_consistent);
-            assert_eq!(r.discrepancies.len(), 3);
-            r.into_result().is_err()
-        }));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_verify_compliance_claims_bullet_list_and_io_error() {
-        let bad_path = Path::new("nonexistent-compliance-file.md");
-        assert!(verify_compliance_claims(bad_path, &[]).is_err());
-
-        let dir = std::env::temp_dir().join("cdd_claims_test_3");
-        let _ = std::fs::create_dir_all(&dir);
-        let file_path = dir.join("COMPLIANCE_3.md");
-        let content = "# Bullet List Claims ✅
-
-### Non-bullet with checkmark ✅
-
-1. Numbered item with checkmark: ✅
-
-- Info Object: ✅
-
-- Callbacks Object: ✅
-
-* Server: ✅
-
-- Auth: ✅
-
-- Callback: ✅
-
-- Unknown Mystery: ✅
-
-| Callback | ✅ |
-";
-        let _ = std::fs::write(&file_path, content);
-
-        let table = ChecklistTable {
-            spec_id: SpecId::OpenApi320,
-            profile: ProfileKind::ClientSdk,
-            title: "OpenAPI 3.2.0".to_string(),
-            rows: vec![
-                ChecklistRow {
-                    feature_name: "Info Object".to_string(),
-                    status: FeatureStatus::from_arrays(
-                        [true, true],
-                        [false, false],
-                        [false, false],
-                    ),
-                    notes: None,
-                    line_number: 1,
-                },
-                ChecklistRow {
-                    feature_name: "Callbacks Object".to_string(),
-                    status: FeatureStatus::from_arrays(
-                        [false, false],
-                        [true, true],
-                        [false, false],
-                    ),
+                    feature_name: "Server Variable Object".to_string(),
+                    status: FeatureStatus::new(),
                     notes: None,
                     line_number: 2,
                 },
                 ChecklistRow {
-                    feature_name: "Server Object".to_string(),
+                    feature_name: "Webhooks Object".to_string(),
                     status: FeatureStatus::from_arrays(
-                        [true, false],
                         [false, false],
+                        [true, true],
                         [false, false],
                     ),
                     notes: None,
                     line_number: 3,
                 },
                 ChecklistRow {
-                    feature_name: "Authentication Scheme Object".to_string(),
+                    feature_name: "Webhooks Object".to_string(),
                     status: FeatureStatus::from_arrays(
                         [true, true],
                         [false, false],
@@ -399,13 +433,18 @@ mod tests {
             ],
         };
 
-        let rep = verify_compliance_claims(&file_path, &[table]);
-        assert!(rep.is_ok_and(|r| {
-            assert_eq!(r.total_claims, 7);
-            assert_eq!(r.verified_claims, 3);
-            assert_eq!(r.discrepancies.len(), 4);
+        let non_empty_rep = verify_compliance_claims(&comp_path, &[table]);
+        assert!(non_empty_rep.is_ok_and(|r| {
+            assert_eq!(r.total_claims, 3);
+            assert_eq!(r.verified_claims, 1);
+            assert_eq!(r.discrepancies.len(), 2);
             !r.is_consistent
         }));
+
+        // Verify token matching edge cases
+        assert!(matches_feature_tokens("webhook", "webhooks object"));
+        assert!(matches_feature_tokens("webhooks", "webhook object"));
+        assert!(!matches_feature_tokens("a", "apple"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
