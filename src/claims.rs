@@ -94,8 +94,98 @@ fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
     })
 }
 
-/// Extracts claimed feature names from Markdown tables where rows contain `✅`,
-/// ignoring fenced/indented code blocks, HTML comments, and table header rows.
+/// Checks whether a single normalized feature key is implemented in `implemented_features`.
+///
+/// # Arguments
+///
+/// * `key` - Normalized feature key.
+/// * `implemented_features` - Map of normalized checklist feature keys to implementation status.
+///
+/// # Returns
+///
+/// `Some(true)` if implemented, `Some(false)` if present in checklists but unimplemented, or `None` if absent.
+fn lookup_single_claim_key(
+    key: &str,
+    implemented_features: &HashMap<String, bool>,
+) -> Option<bool> {
+    implemented_features.get(key).copied().or_else(|| {
+        let mut found_any = false;
+        let mut any_impl = false;
+        for (k, &v) in implemented_features {
+            if matches_feature_tokens(key, k) {
+                found_any = true;
+                if v {
+                    any_impl = true;
+                }
+            }
+        }
+        found_any.then_some(any_impl)
+    })
+}
+
+/// Evaluates whether a raw claimed feature (supporting `/` composite features like
+/// `"Responses / Schema Object"` or `"Links / Callbacks"`) is implemented in `implemented_features`.
+///
+/// # Arguments
+///
+/// * `feature_cell` - Raw feature string from `COMPLIANCE.md`.
+/// * `implemented_features` - Map of normalized checklist feature keys to implementation status.
+///
+/// # Returns
+///
+/// `Some(true)` if all parts are implemented, `Some(false)` if any matched part is unimplemented,
+/// or `None` if not found in `implemented_features`.
+fn evaluate_claim_feature(
+    feature_cell: &str,
+    implemented_features: &HashMap<String, bool>,
+) -> Option<bool> {
+    if feature_cell.contains('/') {
+        let mut found_any = false;
+        let mut all_impl = true;
+        for part in feature_cell.split('/') {
+            let part_key = normalize_feature_key(part);
+            if !part_key.is_empty() {
+                match lookup_single_claim_key(&part_key, implemented_features) {
+                    Some(true) => found_any = true,
+                    Some(false) => {
+                        found_any = true;
+                        all_impl = false;
+                    }
+                    None => all_impl = false,
+                }
+            }
+        }
+        if found_any {
+            return Some(all_impl);
+        }
+    }
+    let key = normalize_feature_key(feature_cell);
+    lookup_single_claim_key(&key, implemented_features)
+}
+
+/// Extracts a claimed feature prefix from a bullet list item string if it contains `: ✅`.
+///
+/// Recognizes `<Feature>: ✅ ...` (e.g., `Info Object: ✅ Supported`).
+///
+/// # Arguments
+///
+/// * `item` - Concatenated text of a Markdown list item.
+///
+/// # Returns
+///
+/// `Some(String)` containing the claimed feature name, or `None`.
+fn extract_list_item_claim(item: &str) -> Option<String> {
+    if let Some((before, _after)) = item.split_once(": ✅") {
+        let feat = before.trim();
+        if !feat.is_empty() {
+            return Some(feat.to_string());
+        }
+    }
+    None
+}
+
+/// Extracts claimed feature names from Markdown tables and bullet lists where items contain `✅`
+/// or `Fully supported` / `Supported`, ignoring fenced/indented code blocks, HTML comments, and table header rows.
 ///
 /// # Arguments
 ///
@@ -103,7 +193,7 @@ fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
 ///
 /// # Returns
 ///
-/// Vector of feature names extracted from rows containing `✅`.
+/// Vector of feature names extracted from rows or list items containing `✅` or `Fully supported`.
 fn extract_markdown_claims(content: &str) -> Vec<String> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -111,7 +201,9 @@ fn extract_markdown_claims(content: &str) -> Vec<String> {
     let parser = Parser::new_ext(content, options);
     let mut claims = Vec::new();
     let mut in_table_head = false;
+    let mut in_list_item = false;
     let mut current_cell = String::new();
+    let mut current_item = String::new();
     let mut current_row: Vec<String> = Vec::new();
 
     for event in parser {
@@ -128,7 +220,12 @@ fn extract_markdown_claims(content: &str) -> Vec<String> {
             Event::End(TagEnd::TableRow) => {
                 if current_row.len() >= 2 {
                     let feature_cell = current_row[0].trim().to_string();
-                    let row_has_check = current_row.iter().skip(1).any(|c| c.contains('✅'));
+                    let mut row_has_check = false;
+                    for cell in current_row.iter().skip(1) {
+                        if cell.contains('✅') {
+                            row_has_check = true;
+                        }
+                    }
                     if !feature_cell.is_empty() && row_has_check {
                         claims.push(feature_cell);
                     }
@@ -142,8 +239,21 @@ fn extract_markdown_claims(content: &str) -> Vec<String> {
                     current_row.push(current_cell.trim().to_string());
                 }
             }
+            Event::Start(Tag::Item) => {
+                in_list_item = true;
+                current_item.clear();
+            }
+            Event::End(TagEnd::Item) => {
+                in_list_item = false;
+                if let Some(feat) = extract_list_item_claim(&current_item) {
+                    claims.push(feat);
+                }
+            }
             Event::Text(t) | Event::Code(t) => {
                 current_cell.push_str(&t);
+                if in_list_item {
+                    current_item.push_str(&t);
+                }
             }
             _ => {}
         }
@@ -184,6 +294,18 @@ pub fn verify_compliance_claims(
                 .entry(full_key)
                 .and_modify(|v| *v = *v || is_impl)
                 .or_insert(is_impl);
+            if let Some((_, after_open)) = row.feature_name.split_once('(') {
+                if let Some((prop, _)) = after_open.split_once(')') {
+                    let prop_key = normalize_feature_key(prop);
+                    if !prop_key.is_empty() {
+                        let prev = implemented_features
+                            .get(&prop_key)
+                            .copied()
+                            .unwrap_or(false);
+                        implemented_features.insert(prop_key, prev || is_impl);
+                    }
+                }
+            }
         }
     }
 
@@ -204,20 +326,7 @@ pub fn verify_compliance_claims(
 
         total_claims += 1;
 
-        // Check exact normalized key or token-level match in checklists
-        let matched = implemented_features.get(&key).copied().or_else(|| {
-            let mut found_any = false;
-            let mut any_impl = false;
-            for (k, &v) in &implemented_features {
-                if matches_feature_tokens(&key, k) {
-                    found_any = true;
-                    if v {
-                        any_impl = true;
-                    }
-                }
-            }
-            found_any.then_some(any_impl)
-        });
+        let matched = evaluate_claim_feature(&feature_cell, &implemented_features);
 
         match matched {
             Some(true) => {
@@ -447,6 +556,79 @@ mod tests {
         assert!(matches_feature_tokens("webhooks", "webhook object"));
         assert!(!matches_feature_tokens("a", "apple"));
         assert!(!matches_feature_tokens("apple", "a"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_composite_and_bullet_claims() {
+        let dir = std::env::temp_dir().join(format!("cdd_claims_test3_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let bullet_path = dir.join("COMPLIANCE2.md");
+        let bullet_md = r#"# Compliance
+Introductory paragraph outside list items.
+
+- `Info Object`: ✅ Supported
+- Info Object / (): ✅ Supported
+- Responses / Schema Object: ✅ Supported
+- Links / MissingPart: ✅ Supported
+- Unimplemented / Schema Object: ✅ Supported
+- UnknownA / UnknownB: ✅ Supported
+- Webhooks: ✅ Supported
+- ✅ Schema Object (JSON Schema)
+- ✅
+- : ✅ Ignored Empty
+- Plain item without check
+"#;
+        let _ = std::fs::write(&bullet_path, bullet_md);
+        let present = FeatureStatus::from_arrays([true, true], [false, false], [false, false]);
+        let table = ChecklistTable {
+            spec_id: SpecId::OpenApi320,
+            profile: ProfileKind::ClientSdk,
+            title: "Test2".to_string(),
+            rows: vec![
+                ChecklistRow {
+                    feature_name: "Info Object ()".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 1,
+                },
+                ChecklistRow {
+                    feature_name: "Responses Object (unclosed".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 2,
+                },
+                ChecklistRow {
+                    feature_name: "Schema Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 3,
+                },
+                ChecklistRow {
+                    feature_name: "Links Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 4,
+                },
+                ChecklistRow {
+                    feature_name: "Unimplemented Object".to_string(),
+                    status: FeatureStatus::new(),
+                    notes: None,
+                    line_number: 5,
+                },
+                ChecklistRow {
+                    feature_name: "OpenAPI Object (webhooks)".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 6,
+                },
+            ],
+        };
+        let rep = verify_compliance_claims(&bullet_path, &[table]).ok();
+        assert_eq!(
+            rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
+            Some((7, 4, 3))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

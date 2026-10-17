@@ -375,6 +375,10 @@ pub fn infer_language_from_path(path: &Path) -> Option<LanguageId> {
 
 /// Recursively parses a source file or directory of source files for a given language.
 ///
+/// By default, test and fixture directories (`tests`, `test`, `testdata`, `fixtures`, `examples`)
+/// are excluded when `path` is a directory unless `parse_source_path_with_options` is called with
+/// `include_tests: true` or `path` itself is inside a test directory.
+///
 /// # Arguments
 ///
 /// * `path` - File or directory path to parse.
@@ -393,6 +397,31 @@ pub fn parse_source_path(
     language: &LanguageId,
     custom_syntax: Option<&SyntaxProfileConfig>,
 ) -> Result<ParsedSourceBundle, ConformanceError> {
+    parse_source_path_with_options(path, language, custom_syntax, false)
+}
+
+/// Recursively parses a source file or directory of source files with explicit `include_tests` control.
+///
+/// # Arguments
+///
+/// * `path` - File or directory path to parse.
+/// * `language` - Target `LanguageId`.
+/// * `custom_syntax` - Optional custom syntax profile overrides.
+/// * `include_tests` - Whether to include `tests/`, `test/`, `testdata/`, `fixtures/`, and `examples/` subdirectories.
+///
+/// # Returns
+///
+/// Aggregated `ParsedSourceBundle` containing all structs/classes, fields, functions/methods, and args.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::Io` if reading any source file or directory fails.
+pub fn parse_source_path_with_options(
+    path: &Path,
+    language: &LanguageId,
+    custom_syntax: Option<&SyntaxProfileConfig>,
+    include_tests: bool,
+) -> Result<ParsedSourceBundle, ConformanceError> {
     let mut bundle = ParsedSourceBundle {
         language: Some(language.clone()),
         path: path.to_path_buf(),
@@ -402,7 +431,7 @@ pub fn parse_source_path(
 
     let mut files = Vec::new();
     if path.is_dir() {
-        collect_source_files(path, language, custom_syntax, &mut files);
+        collect_source_files(path, language, custom_syntax, include_tests, &mut files);
         files.sort();
     } else {
         files.push(path.to_path_buf());
@@ -421,6 +450,54 @@ pub fn parse_source_path(
     Ok(bundle)
 }
 
+/// Checks whether a directory name represents a build, dependency, or VCS artifact folder
+/// that should be skipped during source inspection.
+///
+/// # Arguments
+///
+/// * `name` - Directory basename.
+/// * `include_tests` - Whether test/fixture directories should be traversed.
+///
+/// # Returns
+///
+/// `true` if `name` should be skipped.
+fn is_ignored_source_dir(name: &str, include_tests: bool) -> bool {
+    if name.starts_with('.')
+        || matches!(
+            name,
+            "target"
+                | "node_modules"
+                | "build"
+                | "vendor"
+                | "CMakeFiles"
+                | "dist"
+                | "out"
+                | "__pycache__"
+                | "venv"
+                | "bin"
+                | "obj"
+                | "packages"
+                | "third_party"
+                | "coverage"
+        )
+    {
+        return true;
+    }
+    !include_tests
+        && matches!(
+            name,
+            "tests"
+                | "test"
+                | "testdata"
+                | "fixtures"
+                | "examples"
+                | "__tests__"
+                | "spec"
+                | "specs"
+                | "benches"
+        )
+}
+
 /// Collects matching source files for `language` recursively under `dir`.
 ///
 /// # Arguments
@@ -428,21 +505,21 @@ pub fn parse_source_path(
 /// * `dir` - Directory path to walk.
 /// * `language` - Target `LanguageId`.
 /// * `custom_syntax` - Optional custom syntax profile with `file_extensions`.
+/// * `include_tests` - Whether to traverse test/fixture subdirectories.
 /// * `out` - Output vector of matching file paths.
 fn collect_source_files(
     dir: &Path,
     language: &LanguageId,
     custom_syntax: Option<&SyntaxProfileConfig>,
+    include_tests: bool,
     out: &mut Vec<PathBuf>,
 ) {
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let p = entry.path();
         if p.is_dir() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with('.')
-                && !matches!(name, "target" | "node_modules" | "build" | "vendor")
-            {
-                collect_source_files(&p, language, custom_syntax, out);
+            if !is_ignored_source_dir(name, include_tests) {
+                collect_source_files(&p, language, custom_syntax, include_tests, out);
             }
         } else if matches_language_extension(&p, language, custom_syntax) {
             out.push(p);
@@ -667,24 +744,19 @@ fn extract_doc_tags(doc: &str) -> BTreeMap<String, String> {
                         .trim_start_matches(':')
                         .trim()
                         .to_string();
-                    map.insert(
-                        normalize_ident(name),
-                        if desc.is_empty() {
-                            name.to_string()
-                        } else {
-                            desc
-                        },
-                    );
+                    map.insert(normalize_ident(name), desc);
                 }
             }
         }
         // Python ReST: :param name: desc or :ivar name: desc
-        for tag in [":param ", ":ivar ", ":var "] {
-            if let Some((name_part, desc)) = line.strip_prefix(tag).and_then(|r| r.split_once(':'))
-            {
-                let name = name_part.split_whitespace().last().unwrap_or(name_part);
-                map.insert(normalize_ident(name), desc.trim().to_string());
-            }
+        if let Some((name_part, desc)) = line
+            .strip_prefix(":param ")
+            .or_else(|| line.strip_prefix(":ivar "))
+            .or_else(|| line.strip_prefix(":var "))
+            .and_then(|r| r.split_once(':'))
+        {
+            let name = name_part.split_whitespace().last().unwrap_or(name_part);
+            map.insert(normalize_ident(name), desc.trim().to_string());
         }
         // SwiftDoc: - Parameter name: desc
         if let Some((name, desc)) = line
@@ -954,10 +1026,19 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
         let (code_part, inline_doc) = split_code_and_inline_comment(trimmed);
         let code = code_part.trim();
 
-        // Check `impl <Type>`
+        // Check `impl <Type>` or `impl<T> <Type><T>`
         if current_struct.is_none() && code.starts_with("impl") && code.contains('{') {
             let after_impl = code.strip_prefix("impl").unwrap_or("").trim();
-            let target_part = after_impl.split('{').next().unwrap_or("").trim();
+            let without_impl_generics = if after_impl.starts_with('<') {
+                if let Some((_, rest)) = after_impl.split_once('>') {
+                    rest.trim()
+                } else {
+                    after_impl
+                }
+            } else {
+                after_impl
+            };
+            let target_part = without_impl_generics.split('{').next().unwrap_or("").trim();
             let target_name = target_part
                 .rsplit(" for ")
                 .next()
@@ -1023,7 +1104,10 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
             } else {
                 bundle.functions.push(func);
             }
-        } else if !code.starts_with("pub ") {
+        } else if !code.starts_with("pub")
+            && !code.starts_with("async ")
+            && !code.starts_with("const ")
+        {
             doc_buf.clear();
         }
 
@@ -1136,9 +1220,12 @@ fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 });
             }
         } else if brace_depth == 0
-            && !["if ", "for ", "while ", "switch "]
-                .iter()
-                .any(|p| code.starts_with(p))
+            && ![
+                "if ", "else ", "for ", "while ", "switch ", "return ", "typedef ",
+            ]
+            .iter()
+            .any(|p| code.starts_with(p))
+            && !code.contains('=')
         {
             if let Some((fn_name, params, ret)) = parse_c_like_function_header(code) {
                 let doc = join_doc_lines(&doc_buf).or(inline_doc);
@@ -1298,6 +1385,7 @@ fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Go source code (`.go`) for `type <Name> struct`, fields, `func`, args, and `//` `GoDoc` comments.
+#[allow(clippy::too_many_lines)]
 fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut in_block_comment = false;
@@ -1317,7 +1405,7 @@ fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
         let (code_part, inline_doc) = split_code_and_inline_comment(trimmed);
         let code = code_part.trim();
 
-        if code.starts_with("type ") && code.contains(" struct") {
+        if code.starts_with("type ") && (code.contains(" struct") || code.contains(" interface")) {
             let after_type = code.strip_prefix("type ").unwrap_or("").trim();
             let name = after_type
                 .split_whitespace()
@@ -1340,6 +1428,22 @@ fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
             if code.starts_with('}') {
                 finish_struct(&mut current_struct, bundle);
                 doc_buf.clear();
+            } else if let Some((fn_part, params_inside, after_params)) = code
+                .find('(')
+                .and_then(|idx| split_first_paren(&code[idx..]).map(|(p, a)| (&code[..idx], p, a)))
+            {
+                let doc = join_doc_lines(&doc_buf).or(inline_doc);
+                doc_buf.clear();
+                let mut args = parse_go_args(&params_inside, line_num);
+                attach_arg_docs(&mut args, &doc);
+                let return_out = after_params.trim();
+                st.methods.push(ParsedFunction {
+                    name: fn_part.trim().to_string(),
+                    doc_comment: doc,
+                    args,
+                    return_type: (!return_out.is_empty()).then(|| return_out.to_string()),
+                    line: line_num,
+                });
             } else {
                 let without_tag = code.split('`').next().unwrap_or(code).trim();
                 let mut parts = without_tag.split_whitespace();
@@ -1687,10 +1791,24 @@ fn parse_python_source(source: &str, bundle: &mut ParsedSourceBundle) {
             continue;
         }
 
+        let (candidate_header, header_end) =
+            if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
+                let mut full_header = trimmed.to_string();
+                let mut end_idx = i;
+                while !full_header.contains(')') && end_idx + 1 < lines.len() {
+                    end_idx += 1;
+                    full_header.push(' ');
+                    full_header.push_str(lines[end_idx].trim());
+                }
+                (full_header, end_idx)
+            } else {
+                (trimmed.to_string(), i)
+            };
+
         if let Some((fn_name, params_inside, ret)) =
-            match_fn_decl(trimmed.trim_end_matches(':'), "def")
+            match_fn_decl(candidate_header.trim_end_matches(':'), "def")
         {
-            let (docstring, next_i) = consume_python_docstring(&lines, i + 1);
+            let (docstring, next_i) = consume_python_docstring(&lines, header_end + 1);
             let doc = docstring.or_else(|| join_doc_lines(&leading_comments));
             leading_comments.clear();
             let mut args = parse_colon_style_args(&params_inside, line_num);
@@ -3640,5 +3758,51 @@ export class Second {
 
         let ada_extra = "record A\n  plain_line\nend\ntop_stmt\n";
         let _ = parse_source_str(ada_extra, Path::new("a.adb"), &ada_lang, Some(&syn));
+
+        // Go interface method, Rust impl<T>, Python multi-line async def, and include_tests directory filtering
+        let go_iface = "// Client interface.\ntype Client interface {\n    // Fetch item.\n    Fetch(id int) (string, error)\n    NoRet(id int)\n}\n";
+        let b_go_iface = parse_source_str(go_iface, Path::new("iface.go"), &LanguageId::Go, None);
+        assert_eq!(b_go_iface.structs.len(), 1);
+        assert_eq!(b_go_iface.structs[0].methods.len(), 2);
+
+        let rs_generic_impl = "/// Generic box.\npub struct Boxed {\n    /// Val.\n    pub v: i32,\n}\nimpl<T> Boxed {\n    /// Run.\n    pub async fn run(&self) {}\n}\nimpl<Unclosed {\n}\n";
+        let b_rs_gen =
+            parse_source_str(rs_generic_impl, Path::new("g.rs"), &LanguageId::Rust, None);
+        assert_eq!(b_rs_gen.structs[0].methods.len(), 1);
+        let _ = extract_doc_tags(
+            "@param\n:param no_colon\n:param int x: desc\n:ivar y: ivar desc\n:var z: var desc",
+        );
+
+        let py_multi = "async def fetch_pet(\n    pet_id: int\n) -> str:\n    \"\"\"Fetch pet.\"\"\"\n    return \"ok\"\ndef broken_def(\n";
+        let b_py_multi = parse_source_str(py_multi, Path::new("m2.py"), &LanguageId::Python, None);
+        assert_eq!(b_py_multi.functions.len(), 1);
+
+        let test_filter_dir =
+            std::env::temp_dir().join(format!("cdd_src_t3_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&test_filter_dir);
+        let _ = std::fs::create_dir_all(test_filter_dir.join("src"));
+        let _ = std::fs::create_dir_all(test_filter_dir.join("tests"));
+        let _ = std::fs::create_dir_all(test_filter_dir.join("CMakeFiles"));
+        let _ = std::fs::write(
+            test_filter_dir.join("src").join("lib.rs"),
+            b"/// Lib.\npub fn lib_fn() {}\n",
+        );
+        let _ = std::fs::write(
+            test_filter_dir.join("tests").join("test.rs"),
+            b"/// Test.\npub fn test_fn() {}\n",
+        );
+        let _ = std::fs::write(
+            test_filter_dir.join("CMakeFiles").join("cmake.rs"),
+            b"/// Cmake.\npub fn cmake_fn() {}\n",
+        );
+        let without_tests =
+            parse_source_path_with_options(&test_filter_dir, &LanguageId::Rust, None, false)
+                .unwrap_or_default();
+        assert_eq!(without_tests.functions.len(), 1);
+        let with_tests =
+            parse_source_path_with_options(&test_filter_dir, &LanguageId::Rust, None, true)
+                .unwrap_or_default();
+        assert_eq!(with_tests.functions.len(), 2);
+        let _ = std::fs::remove_dir_all(&test_filter_dir);
     }
 }

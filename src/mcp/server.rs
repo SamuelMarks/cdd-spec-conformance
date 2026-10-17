@@ -653,7 +653,7 @@ mod tests {
             .handle_message(tools_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
-        assert_eq!(tools_payload.map(|p| p.tools.len()), Some(8));
+        assert_eq!(tools_payload.map(|p| p.tools.len()), Some(10));
 
         let bad_cursor_tools =
             r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{"cursor":"invalid"}}"#;

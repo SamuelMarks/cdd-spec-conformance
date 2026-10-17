@@ -63,6 +63,35 @@ pub struct ValidateClaimsArgs {
     pub repo_path: PathBuf,
 }
 
+/// Strongly typed arguments for the `sync_checklists` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncChecklistsArgs {
+    /// Target repository path.
+    pub repo_path: PathBuf,
+    /// Optional specification identifier to synchronize.
+    #[serde(default)]
+    pub spec_id: Option<SpecId>,
+    /// Preview synchronization changes without modifying files.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Strongly typed arguments for the `generate_report` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateReportArgs {
+    /// Target repository path.
+    pub repo_path: PathBuf,
+    /// Optional specification identifier filter.
+    #[serde(default)]
+    pub spec_id: Option<SpecId>,
+    /// Output report formatted as JSON.
+    #[serde(default)]
+    pub json: bool,
+    /// Output report formatted as Markdown.
+    #[serde(default)]
+    pub markdown: bool,
+}
+
 /// Strongly typed arguments for the `inspect_language_source_signatures` tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InspectSourceArgs {
@@ -310,6 +339,33 @@ pub fn list_tools() -> ListToolsResult {
                     "type": "object",
                     "properties": {
                         "repo_path": { "type": "string", "description": "Target repository path." }
+                    },
+                    "required": ["repo_path"]
+                }),
+            },
+            Tool {
+                name: "sync_checklists".to_string(),
+                description: "Synchronizes or scaffolds checklists in a repository from canonical specification tables.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "repo_path": { "type": "string", "description": "Target repository path." },
+                        "spec_id": { "type": "string", "description": "Optional specification identifier." },
+                        "dry_run": { "type": "boolean", "description": "Preview changes without modifying files." }
+                    },
+                    "required": ["repo_path"]
+                }),
+            },
+            Tool {
+                name: "generate_report".to_string(),
+                description: "Generates a formatted conformance report (table, JSON, or Markdown) for a repository.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "repo_path": { "type": "string", "description": "Target repository path." },
+                        "spec_id": { "type": "string", "description": "Optional specification identifier filter." },
+                        "json": { "type": "boolean", "description": "Output JSON report." },
+                        "markdown": { "type": "boolean", "description": "Output Markdown report." }
                     },
                     "required": ["repo_path"]
                 }),
@@ -586,6 +642,7 @@ fn handle_validate_claims(
 /// # Errors
 ///
 /// Returns `ConformanceError` if parameters are invalid, outside allowed roots, or execution fails.
+#[allow(clippy::too_many_lines)]
 pub fn execute_tool_with_roots(
     name: &str,
     arguments: Option<&serde_json::Value>,
@@ -615,6 +672,24 @@ pub fn execute_tool_with_roots(
         "validate_claims" => {
             let args: ValidateClaimsArgs = parse_tool_args(name, arguments)?;
             handle_validate_claims(&args, allowed_roots)
+        }
+        "sync_checklists" => {
+            let args: SyncChecklistsArgs = parse_tool_args(name, arguments)?;
+            let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
+            let out = crate::cli::run_sync(&valid_repo, args.spec_id, args.dry_run, registry)?;
+            Ok(CallToolResult::text(out))
+        }
+        "generate_report" => {
+            let args: GenerateReportArgs = parse_tool_args(name, arguments)?;
+            let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
+            let out = crate::cli::run_report_filtered(
+                &valid_repo,
+                args.spec_id,
+                args.json,
+                args.markdown,
+                registry,
+            )?;
+            Ok(CallToolResult::text(out))
         }
         "inspect_language_source_signatures" => {
             let args: InspectSourceArgs = parse_tool_args(name, arguments)?;
@@ -716,7 +791,7 @@ mod tests {
     #[test]
     fn test_list_tools_contains_expected() {
         let tools = list_tools();
-        assert_eq!(tools.tools.len(), 8);
+        assert_eq!(tools.tools.len(), 10);
         assert!(tools.next_cursor.is_none());
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
@@ -727,6 +802,8 @@ mod tests {
             .tools
             .iter()
             .any(|t| t.name == "inspect_language_source_signatures"));
+        assert!(tools.tools.iter().any(|t| t.name == "sync_checklists"));
+        assert!(tools.tools.iter().any(|t| t.name == "generate_report"));
     }
 
     #[test]
@@ -868,6 +945,52 @@ mod tests {
         let registry = CanonicalRegistry::new();
         let res = execute_tool("unknown_tool", None, &registry);
         assert!(res.is_err());
+
+        assert!(execute_tool("sync_checklists", None, &registry).is_err());
+        assert!(execute_tool(
+            "sync_checklists",
+            Some(&serde_json::json!({"repo_path": ".", "dry_run": true})),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "sync_checklists",
+            Some(&serde_json::json!({"repo_path": "nonexistent_xyz", "dry_run": true})),
+            &registry
+        )
+        .is_err());
+
+        let bad_dir = std::env::temp_dir().join(format!("cdd_tools_t4_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&bad_dir);
+        let _ = std::fs::write(bad_dir.join(".cdd-conformance.yaml"), b": invalid :");
+        let bad_dir_str = bad_dir.to_str().unwrap_or(".");
+        assert!(execute_tool(
+            "sync_checklists",
+            Some(&serde_json::json!({"repo_path": bad_dir_str, "dry_run": true})),
+            &registry
+        )
+        .is_err());
+
+        assert!(execute_tool("generate_report", None, &registry).is_err());
+        assert!(execute_tool(
+            "generate_report",
+            Some(&serde_json::json!({"repo_path": ".", "json": true})),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "generate_report",
+            Some(&serde_json::json!({"repo_path": "nonexistent_xyz"})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool(
+            "generate_report",
+            Some(&serde_json::json!({"repo_path": bad_dir_str})),
+            &registry
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(&bad_dir);
     }
 
     #[test]

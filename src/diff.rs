@@ -51,7 +51,28 @@ impl DiffReport {
     ///
     /// Returns `ConformanceError::ChecklistSchemaMismatch` or `ConformanceError::InvalidChecklistRow`.
     pub fn into_result(self, strict: bool) -> Result<ProfileScore, ConformanceError> {
-        if strict && (!self.missing_features.is_empty() || !self.extra_features.is_empty()) {
+        self.into_result_with_schema(strict, strict)
+    }
+
+    /// Validates the report with explicit control over schema parity (`strict_schema`) vs.
+    /// unreviewed-feature enforcement (`strict`).
+    ///
+    /// # Arguments
+    ///
+    /// * `strict` - Whether strict mode (requiring zero unreviewed `[ ]` items) is enabled.
+    /// * `strict_schema` - Whether schema parity (requiring zero missing/extra canonical rows and valid skip notes) is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ChecklistSchemaMismatch` or `ConformanceError::InvalidChecklistRow`.
+    pub fn into_result_with_schema(
+        self,
+        strict: bool,
+        strict_schema: bool,
+    ) -> Result<ProfileScore, ConformanceError> {
+        let enforce_schema = strict || strict_schema;
+        if enforce_schema && (!self.missing_features.is_empty() || !self.extra_features.is_empty())
+        {
             return Err(ConformanceError::ChecklistSchemaMismatch {
                 spec: self.spec_id,
                 profile: self.profile,
@@ -69,7 +90,7 @@ impl DiffReport {
             });
         }
 
-        if strict && !self.invalid_skips.is_empty() {
+        if enforce_schema && !self.invalid_skips.is_empty() {
             return Err(ConformanceError::InvalidChecklistRow {
                 path: self.target_path,
                 line: self.first_violation_line,
@@ -370,6 +391,7 @@ mod tests {
 
         let strict_res = diff.clone().into_result(true);
         assert!(strict_res.is_err());
+        assert!(diff.clone().into_result_with_schema(false, true).is_err());
         assert!(diff.into_result(false).is_ok());
 
         // Test extra-only mismatch (missing_features is empty, extra_features is non-empty)

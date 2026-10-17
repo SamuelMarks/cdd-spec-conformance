@@ -60,7 +60,7 @@ pub fn parse_checkbox_pair(
         1 => Ok([flags[0], flags[0]]),
         0 if raw
             .split(',')
-            .all(|part| matches!(part.trim(), "-" | "`-`")) =>
+            .all(|part| matches!(part.trim(), "" | "-" | "`-`")) =>
         {
             Ok([false, false])
         }
@@ -381,6 +381,57 @@ fn extract_notes(cells: &[String]) -> Option<String> {
     }
 }
 
+/// Checks whether a feature name is a known section divider heading inside MCP tables
+/// (which in some legacy files had checkboxes added to the divider row).
+///
+/// # Arguments
+///
+/// * `name` - Cleaned feature cell string.
+///
+/// # Returns
+///
+/// `true` if `name` is a section divider heading rather than a trackable feature.
+fn is_section_divider_heading(name: &str) -> bool {
+    matches!(
+        name,
+        "CLI Integration (Local Desktop)"
+            | "SDK Integration (Programmatic)"
+            | "Server Integration (Remote / SSE)"
+            | "Generator CLI (stdio)"
+            | "Generator SDK / Core"
+            | "Transports"
+            | "Protocol Mechanics (JSON-RPC 2.0)"
+            | "Lifecycle & State"
+            | "Utilities &Pagination"
+            | "Utilities & Pagination"
+            | "Security & Boundaries"
+    )
+}
+
+/// Checks whether a cell contains either a checkbox bracket `[` or a comma-separated pair `,`.
+///
+/// # Arguments
+///
+/// * `cell` - Cell text.
+///
+/// # Returns
+///
+/// `true` if `cell` represents a checkbox pair column.
+fn is_checkbox_column_cell(cell: &str) -> bool {
+    if cell.contains('[') {
+        return true;
+    }
+    if !cell.contains(',') {
+        return false;
+    }
+    for part in cell.split(',') {
+        if !matches!(part.trim(), "" | "-" | "`-`") {
+            return false;
+        }
+    }
+    true
+}
+
 /// Converts a row of parsed table cells into an optional typed `ChecklistRow`.
 ///
 /// # Arguments
@@ -405,17 +456,18 @@ fn build_row_from_cells(
         return Ok(None);
     }
 
-    let (feature_name, data_start) = if cells.len() > 2 && !cells[1].contains('[') {
+    let first_cleaned = clean_markdown_text(&cells[0]);
+    if is_section_divider_heading(&first_cleaned) {
+        return Ok(None);
+    }
+
+    let (feature_name, data_start) = if cells.len() > 2 && !is_checkbox_column_cell(&cells[1]) {
         (
-            format!(
-                "{}: {}",
-                clean_markdown_text(&cells[0]),
-                clean_markdown_text(&cells[1])
-            ),
+            format!("{first_cleaned}: {}", clean_markdown_text(&cells[1])),
             2,
         )
     } else {
-        (clean_markdown_text(&cells[0]), 1)
+        (first_cleaned, 1)
     };
 
     let remaining = &cells[data_start..];
@@ -426,10 +478,10 @@ fn build_row_from_cells(
     let mut notes = None;
 
     if remaining.len() > 1 {
-        if remaining[1].contains('[') {
+        if is_checkbox_column_cell(&remaining[1]) {
             absence = parse_checkbox_pair(&remaining[1], path, line)?;
             if remaining.len() > 2 {
-                if remaining[2].contains('[') {
+                if is_checkbox_column_cell(&remaining[2]) {
                     skipped = parse_checkbox_pair(&remaining[2], path, line)?;
                     notes = extract_notes(&remaining[3..]);
                 } else {
@@ -497,7 +549,11 @@ fn parse_list_checklist(
             let item_raw = rest[close_idx + 1..].trim();
             let (feature_part, notes) = item_raw
                 .split_once(" — ")
-                .or_else(|| item_raw.split_once(": "))
+                .or_else(|| {
+                    item_raw
+                        .split_once(": ")
+                        .filter(|(f, _)| !f.trim().starts_with("**"))
+                })
                 .map_or_else(
                     || (item_raw, None),
                     |(f, n)| (f.trim(), extract_notes(&[n.to_string()])),
@@ -753,12 +809,12 @@ line2
         )
         .is_err());
 
-        let sub_feat = "# Sub Feat Table\n| Object / Feature | Detail | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| --- | --- | --- | --- | --- | --- |\n| **Section** | :--- | :---: | ---: | | |\n| Root | Sub | [x] , [x] | [ ] , [ ] | [ ] , [ ] | Sub note |\n";
+        let sub_feat = "# Sub Feat Table\n| Object / Feature | Detail | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes |\n| --- | --- | --- | --- | --- | --- |\n| **Section** | :--- | :---: | ---: | | |\n| **CLI Integration (Local Desktop)** | [x] , [x] | , | , | |\n| Root | Sub, item | [x] , [x] | , | , | Sub note |\n";
         let parsed_sub =
             parse_checklist(sub_feat, p, SpecId::OpenApi320, ProfileKind::ClientSdk).ok();
         assert_eq!(
             parsed_sub.map(|t| (t.rows.len(), t.rows[0].feature_name.clone())),
-            Some((1, "Root: Sub".to_string()))
+            Some((1, "Root: Sub, item".to_string()))
         );
 
         let three_col = "# Three Col\n| Object / Feature | Presence [To, From] | Notes |\n| --- | --- | --- |\n| Feature 3 | [x] , [ ] | Note for 3 |\n";

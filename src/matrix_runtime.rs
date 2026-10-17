@@ -218,6 +218,40 @@ pub fn inspect_source_signatures(
     require_docs: bool,
     openapi_spec_path: Option<&Path>,
 ) -> Result<ParsedSourceBundle, ConformanceError> {
+    inspect_source_signatures_with_options(
+        path,
+        lang_override,
+        require_docs,
+        openapi_spec_path,
+        false,
+    )
+}
+
+/// Inspects a source file or directory using the shallow source parser with explicit `include_tests` control.
+///
+/// # Arguments
+///
+/// * `path` - File or directory path to inspect.
+/// * `lang_override` - Optional explicit language slug/identifier.
+/// * `require_docs` - If `true`, fails when any struct, field, function, or arg lacks a doc comment.
+/// * `openapi_spec_path` - Optional path to an `OpenAPI` JSON/YAML file to verify against.
+/// * `include_tests` - Whether to include `tests/`, `test/`, `testdata/`, `fixtures/`, and `examples/` subdirectories.
+///
+/// # Returns
+///
+/// Extracted `ParsedSourceBundle`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if language inference fails, file reading fails, doc coverage is
+/// incomplete when `require_docs` is `true`, or `OpenAPI` symbols are missing.
+pub fn inspect_source_signatures_with_options(
+    path: &Path,
+    lang_override: Option<&str>,
+    require_docs: bool,
+    openapi_spec_path: Option<&Path>,
+    include_tests: bool,
+) -> Result<ParsedSourceBundle, ConformanceError> {
     let cfg = if path.is_dir() {
         ProjectConfig::find_and_load(path)?
     } else {
@@ -234,7 +268,8 @@ pub fn inspect_source_signatures(
     };
 
     let syntax = cfg.as_ref().and_then(|c| c.syntax.as_ref());
-    let bundle = parse_source_path(path, &lang, syntax)?;
+    let bundle =
+        crate::parser::source::parse_source_path_with_options(path, &lang, syntax, include_tests)?;
 
     if require_docs {
         bundle.verify_100_percent_docs(&lang)?;
@@ -661,6 +696,21 @@ pub fn evaluate_cli_verification(client_lang: &LanguageId) -> CliVerificationDet
     }
 }
 
+/// Checks whether a repository's discovered conformance checklists are valid (zero contradictory rows).
+fn repo_checklists_valid(repo_path: &Path) -> bool {
+    let tables = crate::discovery::scan_repository(repo_path)
+        .and_then(|proj| proj.parse_all_checklists())
+        .unwrap_or_default();
+    for table in &tables {
+        for row in &table.rows {
+            if row.status.has_to_contradiction() || row.status.has_from_contradiction() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Verifies all 13+ language Client SDKs, Client CLIs, and generated frontends against the
 /// `../cdd-rust` reference backend.
 ///
@@ -699,6 +749,7 @@ pub fn verify_clients_against_rust_backend(
     let reference_backend_present = reference_backend_path.is_dir();
     let reference_backend_summary = evaluate_reference_backend_summary(reference_backend_path);
     let canonical_oas = canonical_conformance_openapi_doc();
+    let port_ok = crate::runner::PortAllocator::allocate(&LanguageId::Rust).is_ok();
 
     let mut results = Vec::new();
     for tc in toolchains {
@@ -714,6 +765,7 @@ pub fn verify_clients_against_rust_backend(
         } else {
             (0, 0)
         };
+        let checklists_ok = !repo_present || repo_checklists_valid(&repo_path);
 
         let (virt_name, snippet) = canonical_generated_snippet(&tc.language_id, false);
         let generated_bundle =
@@ -724,12 +776,12 @@ pub fn verify_clients_against_rust_backend(
         let oas_ok = generated_bundle
             .verify_against_openapi(&canonical_oas, &tc.language_id)
             .is_ok();
-        let generated_signatures_verified = docs_ok & oas_ok;
+        let generated_signatures_verified = docs_ok & oas_ok & checklists_ok & port_ok;
 
         let wire_edge_cases = evaluate_wire_edge_cases(&tc.language_id);
         let cli_verification = evaluate_cli_verification(&tc.language_id);
 
-        let status = if repo_present && tc.supported_targets.sdk {
+        let status = if repo_present && tc.supported_targets.sdk && checklists_ok {
             "verified".to_string()
         } else if tc.supported_targets.sdk {
             "ready-to-generate".to_string()
@@ -1135,6 +1187,8 @@ pub fn verify_cross_language_roundtrip_chain(
 
     let mut hops = Vec::with_capacity(toolchains.len());
     for (idx, tc) in toolchains.iter().enumerate() {
+        let repo_path = repos_dir.join(&tc.repo_name);
+        let repo_ok = !repo_path.is_dir() || repo_checklists_valid(&repo_path);
         let (vname, snippet) = canonical_generated_snippet(&tc.language_id, false);
         let bundle = parse_source_str(&snippet, Path::new(vname), &tc.language_id, None);
         let docs_ok = bundle.verify_100_percent_docs(&tc.language_id).is_ok();
@@ -1148,7 +1202,7 @@ pub fn verify_cross_language_roundtrip_chain(
             &canonical_doc,
         )
         .is_ok();
-        let equivalent = docs_ok & oas_ok & eq_ok;
+        let equivalent = docs_ok & oas_ok & eq_ok & repo_ok;
         hops.push(RoundtripHop {
             hop_index: idx + 1,
             language: tc.language_id.clone(),
@@ -1318,7 +1372,12 @@ paths:
         assert_eq!(filtered_rep.map(|r| r.results.len()), Some(1));
 
         let go_repo = base.join("cdd-go");
-        let _ = std::fs::create_dir_all(&go_repo);
+        let _ = std::fs::create_dir_all(go_repo.join("openapi-3.2.0"));
+        let _ = std::fs::write(
+            go_repo.join("openapi-3.2.0").join("client-sdk.md"),
+            "# Bad\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| F | [x] , [x] | [x] , [x] |\n",
+        );
+        let _ = verify_clients_against_rust_backend(&base, &rust_repo, Some("go"), &[], None, None);
 
         let mat = verify_backends_matrix(&base, &["zig".to_string()]).ok();
         assert_eq!(mat.map(|m| m.total_pairs), Some(196));
