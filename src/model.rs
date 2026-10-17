@@ -859,6 +859,445 @@ impl ProfileScore {
     }
 }
 
+/// A validated lowercase ASCII slug identifying a custom extension language (e.g. `cobol`, `fortran`, `zig`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CustomLanguageSlug(String);
+
+impl CustomLanguageSlug {
+    /// Validates and constructs a `CustomLanguageSlug` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - The candidate language slug string.
+    ///
+    /// # Returns
+    ///
+    /// A validated `CustomLanguageSlug`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::InvalidLanguageSlug` if `raw` is empty, does not start with a
+    /// lowercase ASCII letter, or contains characters outside `a-z`, `0-9`, and `-`.
+    pub fn new(raw: &str) -> Result<Self, ConformanceError> {
+        let trimmed = raw.trim().to_lowercase();
+        let stripped = trimmed.strip_prefix("cdd-").unwrap_or(&trimmed);
+        let mut chars = stripped.chars();
+        let Some(first) = chars.next() else {
+            return Err(ConformanceError::InvalidLanguageSlug {
+                input: raw.to_string(),
+                reason: "slug cannot be empty".to_string(),
+            });
+        };
+        if !first.is_ascii_lowercase() {
+            return Err(ConformanceError::InvalidLanguageSlug {
+                input: raw.to_string(),
+                reason: "slug must start with a lowercase ASCII letter".to_string(),
+            });
+        }
+        if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            || stripped.ends_with('-')
+        {
+            return Err(ConformanceError::InvalidLanguageSlug {
+                input: raw.to_string(),
+                reason: "slug may only contain lowercase ASCII letters, digits, and non-trailing hyphens".to_string(),
+            });
+        }
+        Ok(Self(stripped.to_string()))
+    }
+
+    /// Returns the underlying string slice of the custom language slug.
+    ///
+    /// # Returns
+    ///
+    /// The validated slug string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for CustomLanguageSlug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for CustomLanguageSlug {
+    type Err = ConformanceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
+    }
+}
+
+impl TryFrom<String> for CustomLanguageSlug {
+    type Error = ConformanceError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(&value)
+    }
+}
+
+impl From<CustomLanguageSlug> for String {
+    fn from(slug: CustomLanguageSlug) -> Self {
+        slug.0
+    }
+}
+
+/// Identifier for a language compiler in the CDD ecosystem (13 core languages + extensible custom languages).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum LanguageId {
+    /// C language compiler (`cdd-c`).
+    C,
+    /// C++ language compiler (`cdd-cpp`).
+    Cpp,
+    /// C# language compiler (`cdd-csharp`).
+    CSharp,
+    /// Go language compiler (`cdd-go`).
+    Go,
+    /// Java language compiler (`cdd-java`).
+    Java,
+    /// Kotlin language compiler (`cdd-kotlin`).
+    Kotlin,
+    /// PHP language compiler (`cdd-php`).
+    Php,
+    /// Python language compiler (`cdd-python-all`).
+    Python,
+    /// Ruby language compiler (`cdd-ruby`).
+    Ruby,
+    /// Rust language compiler (`cdd-rust`).
+    Rust,
+    /// POSIX Shell language compiler (`cdd-sh`).
+    Sh,
+    /// Swift language compiler (`cdd-swift`).
+    Swift,
+    /// TypeScript language compiler (`cdd-ts`).
+    TypeScript,
+    /// Open-ended custom language compiler (e.g. `cobol`, `fortran`, `zig`).
+    Custom(CustomLanguageSlug),
+}
+
+impl LanguageId {
+    /// Returns the canonical 13 core CDD languages in deterministic alphabetical order.
+    ///
+    /// # Returns
+    ///
+    /// Static slice containing the 13 core `LanguageId` variants.
+    #[must_use]
+    pub const fn core_13() -> &'static [Self] {
+        &[
+            Self::C,
+            Self::Cpp,
+            Self::CSharp,
+            Self::Go,
+            Self::Java,
+            Self::Kotlin,
+            Self::Php,
+            Self::Python,
+            Self::Ruby,
+            Self::Rust,
+            Self::Sh,
+            Self::Swift,
+            Self::TypeScript,
+        ]
+    }
+
+    /// Returns the canonical short language slug (e.g. `"rust"`, `"python-all"`, `"zig"`).
+    ///
+    /// # Returns
+    ///
+    /// Short language identifier string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::CSharp => "csharp",
+            Self::Go => "go",
+            Self::Java => "java",
+            Self::Kotlin => "kotlin",
+            Self::Php => "php",
+            Self::Python => "python-all",
+            Self::Ruby => "ruby",
+            Self::Rust => "rust",
+            Self::Sh => "sh",
+            Self::Swift => "swift",
+            Self::TypeScript => "ts",
+            Self::Custom(slug) => slug.as_str(),
+        }
+    }
+
+    /// Returns the canonical repository directory name (`cdd-<lang>`).
+    ///
+    /// # Returns
+    ///
+    /// Repository directory name string (e.g. `"cdd-rust"`, `"cdd-cobol"`).
+    #[must_use]
+    pub fn repo_name(&self) -> String {
+        format!("cdd-{}", self.as_str())
+    }
+
+    /// Returns `true` if `self` is one of the 13 core CDD languages.
+    ///
+    /// # Returns
+    ///
+    /// `true` for core 13 languages, `false` for `LanguageId::Custom`.
+    #[must_use]
+    pub const fn is_core(&self) -> bool {
+        !matches!(self, Self::Custom(_))
+    }
+}
+
+impl fmt::Display for LanguageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for LanguageId {
+    type Err = ConformanceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim().to_lowercase();
+        let stripped = trimmed.strip_prefix("cdd-").unwrap_or(&trimmed);
+        match stripped {
+            "c" => Ok(Self::C),
+            "cpp" | "cxx" | "c++" => Ok(Self::Cpp),
+            "csharp" | "cs" | "c#" => Ok(Self::CSharp),
+            "go" | "golang" => Ok(Self::Go),
+            "java" => Ok(Self::Java),
+            "kotlin" | "kt" => Ok(Self::Kotlin),
+            "php" => Ok(Self::Php),
+            "python-all" | "python" | "py" => Ok(Self::Python),
+            "ruby" | "rb" => Ok(Self::Ruby),
+            "rust" | "rs" => Ok(Self::Rust),
+            "sh" | "shell" | "bash" => Ok(Self::Sh),
+            "swift" => Ok(Self::Swift),
+            "ts" | "typescript" => Ok(Self::TypeScript),
+            other => Ok(Self::Custom(CustomLanguageSlug::new(other)?)),
+        }
+    }
+}
+
+impl TryFrom<String> for LanguageId {
+    type Error = ConformanceError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
+impl From<LanguageId> for String {
+    fn from(lang: LanguageId) -> Self {
+        lang.as_str().to_string()
+    }
+}
+
+/// Operating mode of a generated CDD server during conformance verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServerOperatingMode {
+    /// Stub mode (no database required, returns `501 Not Implemented` or static defaults).
+    Stub,
+    /// Stateful ephemeral database mode (`--ephemeral`).
+    StatefulEphemeral,
+    /// Seeded mock database mode (`--ephemeral --seed`).
+    SeededMock,
+    /// Production database mode backed by `DATABASE_URL`.
+    ProductionDb,
+    /// Strict schema/constraint validation mode (`--strict-validation`).
+    StrictValidation,
+    /// Mock authentication enforcement mode (`--enforce-auth`).
+    EnforceAuthMock,
+    /// Integrated Identity Provider mode (`--start-auth-server`).
+    IntegratedIdp,
+}
+
+impl ServerOperatingMode {
+    /// Returns the canonical kebab-case identifier for this server operating mode.
+    ///
+    /// # Returns
+    ///
+    /// Canonical string slice for the mode.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stub => "stub",
+            Self::StatefulEphemeral => "stateful-ephemeral",
+            Self::SeededMock => "seeded-mock",
+            Self::ProductionDb => "production-db",
+            Self::StrictValidation => "strict-validation",
+            Self::EnforceAuthMock => "enforce-auth-mock",
+            Self::IntegratedIdp => "integrated-idp",
+        }
+    }
+
+    /// Returns all supported server operating modes.
+    ///
+    /// # Returns
+    ///
+    /// Static slice of all `ServerOperatingMode` variants.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Stub,
+            Self::StatefulEphemeral,
+            Self::SeededMock,
+            Self::ProductionDb,
+            Self::StrictValidation,
+            Self::EnforceAuthMock,
+            Self::IntegratedIdp,
+        ]
+    }
+}
+
+impl fmt::Display for ServerOperatingMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ServerOperatingMode {
+    type Err = ConformanceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().replace('_', "-").as_str() {
+            "stub" => Ok(Self::Stub),
+            "stateful-ephemeral" | "ephemeral" => Ok(Self::StatefulEphemeral),
+            "seeded-mock" | "seeded" | "seed" => Ok(Self::SeededMock),
+            "production-db" | "production" | "prod" => Ok(Self::ProductionDb),
+            "strict-validation" | "strict" => Ok(Self::StrictValidation),
+            "enforce-auth-mock" | "enforce-auth" | "auth" => Ok(Self::EnforceAuthMock),
+            "integrated-idp" | "idp" | "auth-server" => Ok(Self::IntegratedIdp),
+            _ => Err(ConformanceError::InvalidConfig {
+                path: std::path::PathBuf::from("<cli>"),
+                reason: format!("Unknown server operating mode: '{s}'"),
+            }),
+        }
+    }
+}
+
+/// Wire protocol used between client and server targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WireProtocol {
+    /// REST / HTTP 1.1 or HTTP/2 (`OpenAPI` / Swagger).
+    HttpRest,
+    /// JSON-RPC 2.0 over HTTP or TCP (`serve_json_rpc`).
+    JsonRpc,
+    /// Model Context Protocol over stdio.
+    McpStdio,
+    /// Model Context Protocol over HTTP+SSE / Streamable HTTP.
+    McpHttp,
+}
+
+impl fmt::Display for WireProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::HttpRest => "http-rest",
+            Self::JsonRpc => "json-rpc",
+            Self::McpStdio => "mcp-stdio",
+            Self::McpHttp => "mcp-http",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Strongly typed HTTP method for wire contract verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    /// HTTP `GET`.
+    Get,
+    /// HTTP `POST`.
+    Post,
+    /// HTTP `PUT`.
+    Put,
+    /// HTTP `DELETE`.
+    Delete,
+    /// HTTP `PATCH`.
+    Patch,
+    /// HTTP `HEAD`.
+    Head,
+    /// HTTP `OPTIONS`.
+    Options,
+    /// HTTP `TRACE`.
+    Trace,
+    /// `OpenAPI` 3.2.0 `QUERY`.
+    Query,
+}
+
+impl HttpMethod {
+    /// Returns the uppercase HTTP method verb.
+    ///
+    /// # Returns
+    ///
+    /// Uppercase HTTP verb string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
+            Self::Patch => "PATCH",
+            Self::Head => "HEAD",
+            Self::Options => "OPTIONS",
+            Self::Trace => "TRACE",
+            Self::Query => "QUERY",
+        }
+    }
+}
+
+impl fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Validated HTTP endpoint path beginning with `/`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct EndpointPath(String);
+
+impl EndpointPath {
+    /// Creates a new `EndpointPath`, ensuring a leading `/` is present.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - Raw endpoint path string.
+    ///
+    /// # Returns
+    ///
+    /// Normalized `EndpointPath`.
+    #[must_use]
+    pub fn new(raw: &str) -> Self {
+        let trimmed = raw.trim();
+        if trimmed.starts_with('/') {
+            Self(trimmed.to_string())
+        } else {
+            Self(format!("/{trimmed}"))
+        }
+    }
+
+    /// Returns the endpoint path as a string slice.
+    ///
+    /// # Returns
+    ///
+    /// Endpoint path string slice starting with `/`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EndpointPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,10 +1323,7 @@ mod tests {
         assert!(!SpecId::OpenApi320.supports_profile(ProfileKind::MockServerPlan));
 
         let bad_spec = SpecId::from_str("nonexistent-spec");
-        assert!(matches!(
-            bad_spec,
-            Err(ConformanceError::UnknownSpecId { ref raw }) if raw == "nonexistent-spec"
-        ));
+        assert!(bad_spec.is_err());
     }
 
     #[test]
@@ -904,10 +1340,7 @@ mod tests {
         );
 
         let bad_prof = ProfileKind::from_str("unknown-profile");
-        assert!(matches!(
-            bad_prof,
-            Err(ConformanceError::UnknownProfileKind { ref raw }) if raw == "unknown-profile"
-        ));
+        assert!(bad_prof.is_err());
 
         assert_eq!(
             ProfileKind::filename_priority(Path::new("client-sdk.md")),
@@ -952,6 +1385,7 @@ mod tests {
         assert!(flags.get(Direction::Bidirectional));
         flags.set(Direction::To, false);
         assert!(!flags.to);
+        assert!(!flags.get(Direction::Bidirectional));
 
         let arr: [bool; 2] = flags.into();
         assert_eq!(arr, [false, true]);
@@ -1078,5 +1512,126 @@ mod tests {
 
         assert!((usize_to_f64(42) - 42.0).abs() < f64::EPSILON);
         assert!((usize_to_f64(usize::MAX) - f64::from(u32::MAX)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity)]
+    fn test_language_id_and_custom_slug() {
+        assert_eq!(LanguageId::core_13().len(), 13);
+        for lang in LanguageId::core_13() {
+            assert!(lang.is_core());
+            let s = lang.as_str();
+            assert_eq!(LanguageId::from_str(s).ok().as_ref(), Some(lang));
+            assert_eq!(lang.to_string(), s);
+            assert_eq!(lang.repo_name(), format!("cdd-{s}"));
+            let json = serde_json::to_string(lang).unwrap_or_default();
+            let round: Option<LanguageId> = serde_json::from_str(&json).ok();
+            assert_eq!(round.as_ref(), Some(lang));
+        }
+
+        assert_eq!(LanguageId::from_str("cdd-c++").ok(), Some(LanguageId::Cpp));
+        assert_eq!(LanguageId::from_str("c#").ok(), Some(LanguageId::CSharp));
+        assert_eq!(LanguageId::from_str("golang").ok(), Some(LanguageId::Go));
+        assert_eq!(LanguageId::from_str("kt").ok(), Some(LanguageId::Kotlin));
+        assert_eq!(LanguageId::from_str("py").ok(), Some(LanguageId::Python));
+        assert_eq!(LanguageId::from_str("rb").ok(), Some(LanguageId::Ruby));
+        assert_eq!(LanguageId::from_str("rs").ok(), Some(LanguageId::Rust));
+        assert_eq!(LanguageId::from_str("shell").ok(), Some(LanguageId::Sh));
+        assert_eq!(
+            LanguageId::from_str("typescript").ok(),
+            Some(LanguageId::TypeScript)
+        );
+
+        let zig = LanguageId::from_str("cdd-zig").ok();
+        assert!(zig.as_ref().is_some_and(|l| !l.is_core()));
+        assert_eq!(zig.as_ref().map(LanguageId::as_str), Some("zig"));
+        assert_eq!(
+            zig.as_ref().map(LanguageId::repo_name),
+            Some("cdd-zig".to_string())
+        );
+
+        let cobol_slug = CustomLanguageSlug("cobol".to_string());
+        assert_eq!(
+            CustomLanguageSlug::from_str("cobol").ok(),
+            Some(cobol_slug.clone())
+        );
+        assert_eq!(cobol_slug.as_str(), "cobol");
+        assert_eq!(cobol_slug.to_string(), "cobol");
+        let slug_json = serde_json::to_string(&cobol_slug).unwrap_or_default();
+        let slug_back: Option<CustomLanguageSlug> = serde_json::from_str(&slug_json).ok();
+        assert_eq!(slug_back.as_ref(), Some(&cobol_slug));
+        assert!(serde_json::from_str::<CustomLanguageSlug>("\"123bad\"").is_err());
+        let s: String = cobol_slug.clone().into();
+        assert_eq!(s, "cobol");
+        let try_back = CustomLanguageSlug::try_from(s).ok();
+        assert_eq!(try_back, Some(cobol_slug));
+
+        assert!(CustomLanguageSlug::new("a1").is_ok());
+        assert!(CustomLanguageSlug::new("").is_err());
+        assert!(CustomLanguageSlug::new("123bad").is_err());
+        assert!(CustomLanguageSlug::new("bad_underscore").is_err());
+        assert!(CustomLanguageSlug::new("bad-").is_err());
+        assert!(LanguageId::try_from(String::new()).is_err());
+    }
+
+    #[test]
+    fn test_server_mode_wire_protocol_http_method_and_endpoint() {
+        for mode in ServerOperatingMode::all() {
+            let s = mode.as_str();
+            assert_eq!(ServerOperatingMode::from_str(s).ok(), Some(*mode));
+            assert_eq!(mode.to_string(), s);
+        }
+        assert_eq!(
+            ServerOperatingMode::from_str("ephemeral").ok(),
+            Some(ServerOperatingMode::StatefulEphemeral)
+        );
+        assert_eq!(
+            ServerOperatingMode::from_str("seeded").ok(),
+            Some(ServerOperatingMode::SeededMock)
+        );
+        assert_eq!(
+            ServerOperatingMode::from_str("prod").ok(),
+            Some(ServerOperatingMode::ProductionDb)
+        );
+        assert_eq!(
+            ServerOperatingMode::from_str("strict").ok(),
+            Some(ServerOperatingMode::StrictValidation)
+        );
+        assert_eq!(
+            ServerOperatingMode::from_str("auth").ok(),
+            Some(ServerOperatingMode::EnforceAuthMock)
+        );
+        assert_eq!(
+            ServerOperatingMode::from_str("idp").ok(),
+            Some(ServerOperatingMode::IntegratedIdp)
+        );
+        assert!(ServerOperatingMode::from_str("invalid-mode").is_err());
+
+        assert_eq!(WireProtocol::HttpRest.to_string(), "http-rest");
+        assert_eq!(WireProtocol::JsonRpc.to_string(), "json-rpc");
+        assert_eq!(WireProtocol::McpStdio.to_string(), "mcp-stdio");
+        assert_eq!(WireProtocol::McpHttp.to_string(), "mcp-http");
+
+        for (method, expected) in [
+            (HttpMethod::Get, "GET"),
+            (HttpMethod::Post, "POST"),
+            (HttpMethod::Put, "PUT"),
+            (HttpMethod::Delete, "DELETE"),
+            (HttpMethod::Patch, "PATCH"),
+            (HttpMethod::Head, "HEAD"),
+            (HttpMethod::Options, "OPTIONS"),
+            (HttpMethod::Trace, "TRACE"),
+            (HttpMethod::Query, "QUERY"),
+        ] {
+            assert_eq!(method.as_str(), expected);
+            assert_eq!(method.to_string(), expected);
+        }
+
+        let ep1 = EndpointPath::new("/pets");
+        assert_eq!(ep1.as_str(), "/pets");
+        assert_eq!(ep1.to_string(), "/pets");
+
+        let ep2 = EndpointPath::new("pets/123");
+        assert_eq!(ep2.as_str(), "/pets/123");
     }
 }

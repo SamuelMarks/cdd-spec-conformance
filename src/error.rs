@@ -1,7 +1,7 @@
 //! Monolithic error definitions for specification conformance operations.
 
 use crate::mcp::protocol::error_codes;
-use crate::model::{Direction, ProfileKind, SpecId};
+use crate::model::{Direction, LanguageId, ProfileKind, SpecId};
 use derive_more::{Display, Error};
 use std::path::PathBuf;
 
@@ -227,6 +227,286 @@ pub enum ConformanceError {
         /// The allowed root directories.
         allowed_roots: Vec<PathBuf>,
     },
+
+    /// An invalid custom language slug was encountered.
+    #[display("Invalid language slug '{}': {}", input, reason)]
+    InvalidLanguageSlug {
+        /// Raw input string that failed validation.
+        input: String,
+        /// Explanation of why the slug is invalid.
+        reason: String,
+    },
+
+    /// A shallow source-code parsing failure occurred.
+    #[display("Source parse error for {} at {}:{}: {}", language, path.display(), line, reason)]
+    SourceParseError {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Source file path.
+        path: PathBuf,
+        /// 1-based line number where the error occurred.
+        line: usize,
+        /// Description of the parse failure.
+        reason: String,
+    },
+
+    /// An expected struct/class, field, function/method, or argument symbol was missing in source code.
+    #[display(
+        "Missing source symbol for {} ({}): expected '{}'",
+        language,
+        symbol_kind,
+        expected_name
+    )]
+    MissingSourceSymbol {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Symbol category (`struct`, `field`, `function`, or `arg`).
+        symbol_kind: String,
+        /// Expected symbol name.
+        expected_name: String,
+    },
+
+    /// A parsed struct/class, field, function/method, or argument lacked its required doc comment.
+    #[display(
+        "Undocumented source symbol for {} at {}:{}: {} '{}' is missing documentation",
+        language,
+        path.display(),
+        line,
+        symbol_kind,
+        symbol_name
+    )]
+    UndocumentedSourceSymbol {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Source file path.
+        path: PathBuf,
+        /// 1-based line number of the undocumented declaration.
+        line: usize,
+        /// Symbol category (`struct`, `field`, `function`, or `arg`).
+        symbol_kind: String,
+        /// Name of the undocumented symbol.
+        symbol_name: String,
+    },
+
+    /// A language toolchain compiler or runtime binary is unavailable.
+    #[display(
+        "Toolchain unavailable for {} (binary '{}'): {}",
+        language,
+        binary,
+        reason
+    )]
+    ToolchainUnavailable {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Binary or command name.
+        binary: String,
+        /// Reason why the toolchain could not be invoked.
+        reason: String,
+    },
+
+    /// A subprocess command exited with a non-zero status or failed to execute.
+    #[display(
+        "Subprocess execution failed for {} ('{} {:?}', exit={:?}): {}",
+        language,
+        binary,
+        args,
+        exit_code,
+        stderr
+    )]
+    SubprocessExecution {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Binary name.
+        binary: String,
+        /// Command line arguments passed to the binary.
+        args: Vec<String>,
+        /// Optional process exit code.
+        exit_code: Option<i32>,
+        /// Captured standard error output.
+        stderr: String,
+    },
+
+    /// A subprocess exceeded its configured execution timeout.
+    #[display(
+        "Subprocess timeout for {} ('{}' exceeded {} ms)",
+        language,
+        binary,
+        timeout_ms
+    )]
+    SubprocessTimeout {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Binary name.
+        binary: String,
+        /// Timeout threshold in milliseconds.
+        timeout_ms: u64,
+    },
+
+    /// A generated server failed to start or become healthy on its assigned port.
+    #[display(
+        "Server startup failure for {} (mode '{}', port {}): {}",
+        language,
+        mode,
+        port,
+        reason
+    )]
+    ServerStartupFailure {
+        /// Server language identifier.
+        language: LanguageId,
+        /// Operating mode label.
+        mode: String,
+        /// Assigned TCP port.
+        port: u16,
+        /// Failure diagnostic message.
+        reason: String,
+    },
+
+    /// An HTTP transport error occurred while communicating with a server under test.
+    #[display("HTTP transport error for {} {}: {}", method, url, reason)]
+    HttpTransport {
+        /// Target request URL.
+        url: String,
+        /// HTTP method verb.
+        method: String,
+        /// Underlying transport failure description.
+        reason: String,
+    },
+
+    /// A client-to-server wire contract mismatch was detected.
+    #[display(
+        "Wire contract mismatch ({} client -> {} server on {}): expected status {}, got {} ({})",
+        client_lang,
+        server_lang,
+        endpoint,
+        expected_status,
+        actual_status,
+        diff
+    )]
+    WireContractMismatch {
+        /// Client language identifier.
+        client_lang: LanguageId,
+        /// Server language identifier.
+        server_lang: LanguageId,
+        /// Endpoint path and method.
+        endpoint: String,
+        /// Expected HTTP status code.
+        expected_status: u16,
+        /// Actual HTTP status code returned.
+        actual_status: u16,
+        /// Detailed payload or header diff.
+        diff: String,
+    },
+
+    /// A JSON/YAML payload violated the expected specification schema.
+    #[display(
+        "Payload schema violation for {} at '{}': expected {}, found {}",
+        language,
+        pointer,
+        expected,
+        actual
+    )]
+    PayloadSchemaViolation {
+        /// Target language identifier.
+        language: LanguageId,
+        /// JSON Pointer to the violating field.
+        pointer: String,
+        /// Expected schema type or constraint.
+        expected: String,
+        /// Actual value encountered.
+        actual: String,
+    },
+
+    /// Semantic drift was detected during an `OpenAPI` / AST roundtrip across compilers.
+    #[display(
+        "AST roundtrip drift for {} on {}: {:?}",
+        language,
+        spec,
+        semantic_diff
+    )]
+    AstRoundtripDrift {
+        /// Language compiler that introduced the drift.
+        language: LanguageId,
+        /// Specification identifier.
+        spec: SpecId,
+        /// List of semantic differences detected.
+        semantic_diff: Vec<String>,
+    },
+
+    /// Two language backends produced divergent responses for the same operation.
+    #[display(
+        "Backend equivalence violation between {} and {} on '{}': {}",
+        backend_a,
+        backend_b,
+        operation_id,
+        divergence
+    )]
+    BackendEquivalenceViolation {
+        /// First backend language identifier.
+        backend_a: LanguageId,
+        /// Second backend language identifier.
+        backend_b: LanguageId,
+        /// Operation identifier being tested.
+        operation_id: String,
+        /// Detailed explanation of the behavioral divergence.
+        divergence: String,
+    },
+
+    /// An MCP client-to-server interoperability check failed.
+    #[display(
+        "MCP interop failure ({} client -> {} server on '{}'): {}",
+        client_lang,
+        server_lang,
+        method,
+        details
+    )]
+    McpInteropFailure {
+        /// MCP client language identifier.
+        client_lang: LanguageId,
+        /// MCP server language identifier.
+        server_lang: LanguageId,
+        /// MCP JSON-RPC method name.
+        method: String,
+        /// Failure details.
+        details: String,
+    },
+
+    /// Database table row counts or states diverged from expected topological state.
+    #[display(
+        "Database state mismatch for {} on table '{}': expected {} rows, found {}",
+        language,
+        table,
+        expected_count,
+        actual_count
+    )]
+    DatabaseStateMismatch {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Database table name.
+        table: String,
+        /// Expected row count.
+        expected_count: usize,
+        /// Actual row count.
+        actual_count: usize,
+    },
+
+    /// A WebAssembly module execution or trap failure occurred.
+    #[display(
+        "WASM runtime failure for {} in {} (fn '{}'): {}",
+        language,
+        module_path.display(),
+        function,
+        trap_message
+    )]
+    WasmRuntimeFailure {
+        /// Target language identifier.
+        language: LanguageId,
+        /// Path to the `.wasm` module.
+        module_path: PathBuf,
+        /// Exported WASM function name.
+        function: String,
+        /// Trap or execution error message.
+        trap_message: String,
+    },
 }
 
 impl ConformanceError {
@@ -251,6 +531,7 @@ impl ConformanceError {
             }
             Self::UnknownSpecId { .. }
             | Self::UnknownProfileKind { .. }
+            | Self::InvalidLanguageSlug { .. }
             | Self::McpRootBoundaryViolation { .. } => {
                 (error_codes::INVALID_PARAMS, self.to_string())
             }
@@ -499,5 +780,168 @@ mod tests {
         };
         assert!(root_err.to_string().contains("MCP root boundary violation"));
         assert_eq!(root_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_extended_conformance_errors_display_and_rpc() {
+        let slug_err = ConformanceError::InvalidLanguageSlug {
+            input: "123".to_string(),
+            reason: "bad".to_string(),
+        };
+        assert_eq!(slug_err.to_string(), "Invalid language slug '123': bad");
+        assert_eq!(slug_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
+
+        let src_err = ConformanceError::SourceParseError {
+            language: LanguageId::Rust,
+            path: PathBuf::from("lib.rs"),
+            line: 10,
+            reason: "unclosed brace".to_string(),
+        };
+        assert_eq!(
+            src_err.to_string(),
+            "Source parse error for rust at lib.rs:10: unclosed brace"
+        );
+        assert_eq!(src_err.to_json_rpc_error().0, error_codes::INTERNAL_ERROR);
+
+        let missing_sym = ConformanceError::MissingSourceSymbol {
+            language: LanguageId::C,
+            symbol_kind: "struct".to_string(),
+            expected_name: "Pet".to_string(),
+        };
+        assert_eq!(
+            missing_sym.to_string(),
+            "Missing source symbol for c (struct): expected 'Pet'"
+        );
+
+        let undoc_sym = ConformanceError::UndocumentedSourceSymbol {
+            language: LanguageId::Go,
+            path: PathBuf::from("pet.go"),
+            line: 7,
+            symbol_kind: "field".to_string(),
+            symbol_name: "Name".to_string(),
+        };
+        assert_eq!(
+            undoc_sym.to_string(),
+            "Undocumented source symbol for go at pet.go:7: field 'Name' is missing documentation"
+        );
+
+        let tc_err = ConformanceError::ToolchainUnavailable {
+            language: LanguageId::Swift,
+            binary: "swift".to_string(),
+            reason: "not in PATH".to_string(),
+        };
+        assert_eq!(
+            tc_err.to_string(),
+            "Toolchain unavailable for swift (binary 'swift'): not in PATH"
+        );
+
+        let sub_err = ConformanceError::SubprocessExecution {
+            language: LanguageId::Python,
+            binary: "pytest".to_string(),
+            args: vec!["-q".to_string()],
+            exit_code: Some(1),
+            stderr: "failed".to_string(),
+        };
+        assert!(sub_err
+            .to_string()
+            .contains("Subprocess execution failed for python"));
+
+        let timeout_err = ConformanceError::SubprocessTimeout {
+            language: LanguageId::Java,
+            binary: "mvn".to_string(),
+            timeout_ms: 5000,
+        };
+        assert_eq!(
+            timeout_err.to_string(),
+            "Subprocess timeout for java ('mvn' exceeded 5000 ms)"
+        );
+
+        let startup_err = ConformanceError::ServerStartupFailure {
+            language: LanguageId::Rust,
+            mode: "stub".to_string(),
+            port: 8080,
+            reason: "bind failed".to_string(),
+        };
+        assert_eq!(
+            startup_err.to_string(),
+            "Server startup failure for rust (mode 'stub', port 8080): bind failed"
+        );
+
+        let http_err = ConformanceError::HttpTransport {
+            url: "http://127.0.0.1:8080/pets".to_string(),
+            method: "GET".to_string(),
+            reason: "connection refused".to_string(),
+        };
+        assert_eq!(
+            http_err.to_string(),
+            "HTTP transport error for GET http://127.0.0.1:8080/pets: connection refused"
+        );
+
+        let wire_err = ConformanceError::WireContractMismatch {
+            client_lang: LanguageId::TypeScript,
+            server_lang: LanguageId::Rust,
+            endpoint: "GET /pets".to_string(),
+            expected_status: 200,
+            actual_status: 500,
+            diff: "status mismatch".to_string(),
+        };
+        assert!(wire_err.to_string().contains("Wire contract mismatch"));
+
+        let payload_err = ConformanceError::PayloadSchemaViolation {
+            language: LanguageId::Php,
+            pointer: "/id".to_string(),
+            expected: "integer".to_string(),
+            actual: "string".to_string(),
+        };
+        assert_eq!(
+            payload_err.to_string(),
+            "Payload schema violation for php at '/id': expected integer, found string"
+        );
+
+        let drift_err = ConformanceError::AstRoundtripDrift {
+            language: LanguageId::Ruby,
+            spec: SpecId::OpenApi320,
+            semantic_diff: vec!["missing /pets".to_string()],
+        };
+        assert!(drift_err.to_string().contains("AST roundtrip drift"));
+
+        let eq_err = ConformanceError::BackendEquivalenceViolation {
+            backend_a: LanguageId::Rust,
+            backend_b: LanguageId::Go,
+            operation_id: "listPets".to_string(),
+            divergence: "header mismatch".to_string(),
+        };
+        assert!(eq_err.to_string().contains("Backend equivalence violation"));
+
+        let mcp_err = ConformanceError::McpInteropFailure {
+            client_lang: LanguageId::Kotlin,
+            server_lang: LanguageId::Rust,
+            method: "tools/list".to_string(),
+            details: "empty".to_string(),
+        };
+        assert!(mcp_err.to_string().contains("MCP interop failure"));
+
+        let db_err = ConformanceError::DatabaseStateMismatch {
+            language: LanguageId::CSharp,
+            table: "users".to_string(),
+            expected_count: 0,
+            actual_count: 1,
+        };
+        assert_eq!(
+            db_err.to_string(),
+            "Database state mismatch for csharp on table 'users': expected 0 rows, found 1"
+        );
+
+        let wasm_err = ConformanceError::WasmRuntimeFailure {
+            language: LanguageId::Cpp,
+            module_path: PathBuf::from("mod.wasm"),
+            function: "run".to_string(),
+            trap_message: "unreachable".to_string(),
+        };
+        assert_eq!(
+            wasm_err.to_string(),
+            "WASM runtime failure for cpp in mod.wasm (fn 'run'): unreachable"
+        );
     }
 }

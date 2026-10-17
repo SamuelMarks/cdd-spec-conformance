@@ -1,0 +1,811 @@
+//! Semantic equivalence verifier for `OpenAPI` documents, HTTP responses, and shallow source signatures.
+
+use crate::error::ConformanceError;
+use crate::model::{LanguageId, SpecId};
+use crate::parser::source::{normalize_ident, ParsedSourceBundle};
+use crate::runner::SimpleHttpResponse;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Compares two `OpenAPI` or Swagger JSON/YAML values for semantic equivalence, returning
+/// `ConformanceError::AstRoundtripDrift` if any routes, operations, parameters, or schemas diverge.
+///
+/// # Arguments
+///
+/// * `language` - Language compiler that produced `actual`.
+/// * `spec` - Specification standard identifier.
+/// * `expected` - Canonical reference `OpenAPI` JSON value.
+/// * `actual` - Extracted/roundtripped `OpenAPI` JSON value.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::AstRoundtripDrift` if one or more semantic differences are detected.
+pub fn verify_openapi_equivalence(
+    language: &LanguageId,
+    spec: SpecId,
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+) -> Result<(), ConformanceError> {
+    let mut diffs = Vec::new();
+    diff_json_values("$", expected, actual, &mut diffs);
+    if diffs.is_empty() {
+        Ok(())
+    } else {
+        Err(ConformanceError::AstRoundtripDrift {
+            language: language.clone(),
+            spec,
+            semantic_diff: diffs,
+        })
+    }
+}
+
+/// Recursively compares two `serde_json::Value` trees while ignoring non-semantic volatile fields
+/// (`x-generated-at`, `timestamp`) and key ordering.
+///
+/// # Arguments
+///
+/// * `pointer` - Current JSON Pointer path.
+/// * `expected` - Expected JSON value.
+/// * `actual` - Actual JSON value.
+/// * `diffs` - Accumulator for human-readable drift messages.
+fn diff_json_values(
+    pointer: &str,
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    diffs: &mut Vec<String>,
+) {
+    match (expected, actual) {
+        (serde_json::Value::Object(exp_map), serde_json::Value::Object(act_map)) => {
+            for (k, exp_val) in exp_map {
+                if matches!(k.as_str(), "x-generated-at" | "timestamp" | "uuid") {
+                    continue;
+                }
+                let child_ptr = format!("{pointer}/{k}");
+                match act_map.get(k) {
+                    Some(act_val) => diff_json_values(&child_ptr, exp_val, act_val, diffs),
+                    None => diffs.push(format!("missing key at {child_ptr}")),
+                }
+            }
+            for k in act_map.keys() {
+                if !matches!(k.as_str(), "x-generated-at" | "timestamp" | "uuid")
+                    && !exp_map.contains_key(k)
+                {
+                    diffs.push(format!("unexpected extra key at {pointer}/{k}"));
+                }
+            }
+        }
+        (serde_json::Value::Array(exp_arr), serde_json::Value::Array(act_arr)) => {
+            if exp_arr.len() == act_arr.len() {
+                for (idx, (e_item, a_item)) in exp_arr.iter().zip(act_arr.iter()).enumerate() {
+                    diff_json_values(&format!("{pointer}[{idx}]"), e_item, a_item, diffs);
+                }
+            } else {
+                diffs.push(format!(
+                    "array length mismatch at {pointer}: expected {}, got {}",
+                    exp_arr.len(),
+                    act_arr.len()
+                ));
+            }
+        }
+        _ => {
+            if expected != actual {
+                diffs.push(format!(
+                    "value mismatch at {pointer}: expected {expected}, got {actual}"
+                ));
+            }
+        }
+    }
+}
+
+/// Verifies that two `ParsedSourceBundle` instances define the same normalized structs, fields, functions, and args.
+///
+/// # Arguments
+///
+/// * `lang_a` - First language identifier.
+/// * `bundle_a` - Parsed source signatures for `lang_a`.
+/// * `lang_b` - Second language identifier.
+/// * `bundle_b` - Parsed source signatures for `lang_b`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::BackendEquivalenceViolation` if any struct, field, function, or arg diverges.
+pub fn verify_source_bundle_equivalence(
+    lang_a: &LanguageId,
+    bundle_a: &ParsedSourceBundle,
+    lang_b: &LanguageId,
+    bundle_b: &ParsedSourceBundle,
+) -> Result<(), ConformanceError> {
+    let structs_a: BTreeMap<String, BTreeSet<String>> = bundle_a
+        .structs
+        .iter()
+        .map(|s| {
+            let fields = s.fields.iter().map(|f| normalize_ident(&f.name)).collect();
+            (normalize_ident(&s.name), fields)
+        })
+        .collect();
+
+    let structs_b: BTreeMap<String, BTreeSet<String>> = bundle_b
+        .structs
+        .iter()
+        .map(|s| {
+            let fields = s.fields.iter().map(|f| normalize_ident(&f.name)).collect();
+            (normalize_ident(&s.name), fields)
+        })
+        .collect();
+
+    if structs_a != structs_b {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: lang_a.clone(),
+            backend_b: lang_b.clone(),
+            operation_id: "<structs>".to_string(),
+            divergence: format!("struct/field signature mismatch: {structs_a:?} vs {structs_b:?}"),
+        });
+    }
+
+    let fns_a: BTreeMap<String, Vec<String>> = bundle_a
+        .all_functions()
+        .into_iter()
+        .map(|f| {
+            let args = f.args.iter().map(|a| normalize_ident(&a.name)).collect();
+            (normalize_ident(&f.name), args)
+        })
+        .collect();
+
+    let fns_b: BTreeMap<String, Vec<String>> = bundle_b
+        .all_functions()
+        .into_iter()
+        .map(|f| {
+            let args = f.args.iter().map(|a| normalize_ident(&a.name)).collect();
+            (normalize_ident(&f.name), args)
+        })
+        .collect();
+
+    if fns_a != fns_b {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: lang_a.clone(),
+            backend_b: lang_b.clone(),
+            operation_id: "<functions>".to_string(),
+            divergence: format!("function/arg signature mismatch: {fns_a:?} vs {fns_b:?}"),
+        });
+    }
+
+    Ok(())
+}
+
+/// Verifies that two HTTP responses returned by Backend A and Backend B for the same operation
+/// have identical HTTP status codes and semantically equivalent JSON bodies.
+///
+/// # Arguments
+///
+/// * `backend_a` - First backend language identifier.
+/// * `resp_a` - HTTP response from `backend_a`.
+/// * `backend_b` - Second backend language identifier.
+/// * `resp_b` - HTTP response from `backend_b`.
+/// * `operation_id` - Operation identifier being compared.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::BackendEquivalenceViolation` if status codes or bodies diverge.
+pub fn verify_http_response_equivalence(
+    backend_a: &LanguageId,
+    resp_a: &SimpleHttpResponse,
+    backend_b: &LanguageId,
+    resp_b: &SimpleHttpResponse,
+    operation_id: &str,
+) -> Result<(), ConformanceError> {
+    if resp_a.status_code != resp_b.status_code {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: backend_a.clone(),
+            backend_b: backend_b.clone(),
+            operation_id: operation_id.to_string(),
+            divergence: format!(
+                "HTTP status mismatch: {} returned {}, {} returned {}",
+                backend_a, resp_a.status_code, backend_b, resp_b.status_code
+            ),
+        });
+    }
+
+    let mut canonical_headers_a = BTreeMap::new();
+    for (k, v) in &resp_a.headers {
+        let lower = k.to_lowercase();
+        if matches!(
+            lower.as_str(),
+            "content-type" | "location" | "www-authenticate"
+        ) || lower.starts_with("access-control-allow-")
+        {
+            canonical_headers_a.insert(lower, v.trim().to_lowercase());
+        }
+    }
+    let mut canonical_headers_b = BTreeMap::new();
+    for (k, v) in &resp_b.headers {
+        let lower = k.to_lowercase();
+        if matches!(
+            lower.as_str(),
+            "content-type" | "location" | "www-authenticate"
+        ) || lower.starts_with("access-control-allow-")
+        {
+            canonical_headers_b.insert(lower, v.trim().to_lowercase());
+        }
+    }
+    if canonical_headers_a != canonical_headers_b {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: backend_a.clone(),
+            backend_b: backend_b.clone(),
+            operation_id: operation_id.to_string(),
+            divergence: format!(
+                "normalized header mismatch: {canonical_headers_a:?} vs {canonical_headers_b:?}"
+            ),
+        });
+    }
+
+    let json_a: Option<serde_json::Value> = serde_json::from_str(&resp_a.body).ok();
+    let json_b: Option<serde_json::Value> = serde_json::from_str(&resp_b.body).ok();
+
+    if let (Some(va), Some(vb)) = (json_a, json_b) {
+        let mut diffs = Vec::new();
+        diff_json_values("$", &va, &vb, &mut diffs);
+        if !diffs.is_empty() {
+            return Err(ConformanceError::BackendEquivalenceViolation {
+                backend_a: backend_a.clone(),
+                backend_b: backend_b.clone(),
+                operation_id: operation_id.to_string(),
+                divergence: diffs.join("; "),
+            });
+        }
+    } else if resp_a.body.trim() != resp_b.body.trim() {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: backend_a.clone(),
+            backend_b: backend_b.clone(),
+            operation_id: operation_id.to_string(),
+            divergence: format!(
+                "raw body mismatch: '{}' vs '{}'",
+                resp_a.body.trim(),
+                resp_b.body.trim()
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Verifies that two `--strict-validation` error responses identify the exact same failing
+/// JSON Pointer or parameter name across two backends.
+///
+/// # Arguments
+///
+/// * `backend_a` - First backend language identifier.
+/// * `resp_a` - Validation error HTTP response from `backend_a`.
+/// * `backend_b` - Second backend language identifier.
+/// * `resp_b` - Validation error HTTP response from `backend_b`.
+/// * `operation_id` - Operation identifier being compared.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::BackendEquivalenceViolation` if the status code is not a 4xx
+/// validation status (`400` or `422`) or if the extracted `pointer`/`field` differs.
+pub fn verify_strict_validation_pointer_equivalence(
+    backend_a: &LanguageId,
+    resp_a: &SimpleHttpResponse,
+    backend_b: &LanguageId,
+    resp_b: &SimpleHttpResponse,
+    operation_id: &str,
+) -> Result<(), ConformanceError> {
+    if resp_a.status_code != resp_b.status_code || !matches!(resp_a.status_code, 400 | 422) {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: backend_a.clone(),
+            backend_b: backend_b.clone(),
+            operation_id: operation_id.to_string(),
+            divergence: format!(
+                "validation status mismatch: {} vs {}",
+                resp_a.status_code, resp_b.status_code
+            ),
+        });
+    }
+
+    let extract_ptr = |body: &str| -> Option<String> {
+        let val: serde_json::Value = serde_json::from_str(body).ok()?;
+        val.get("pointer")
+            .or_else(|| val.get("field"))
+            .or_else(|| val.get("parameter"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+
+    let ptr_a = extract_ptr(&resp_a.body);
+    let ptr_b = extract_ptr(&resp_b.body);
+    if ptr_a.is_none() || ptr_a != ptr_b {
+        return Err(ConformanceError::BackendEquivalenceViolation {
+            backend_a: backend_a.clone(),
+            backend_b: backend_b.clone(),
+            operation_id: operation_id.to_string(),
+            divergence: format!("validation pointer mismatch: {ptr_a:?} vs {ptr_b:?}"),
+        });
+    }
+
+    Ok(())
+}
+
+/// Verifies that a database table's row count matches the expected count after a topological CRUD
+/// or cross-backend state transition.
+///
+/// # Arguments
+///
+/// * `language` - Language backend or DAO under verification.
+/// * `table` - Database table name (e.g. `"users"`, `"posts"`, `"comments"`).
+/// * `expected_count` - Expected row count.
+/// * `actual_count` - Observed row count.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::DatabaseStateMismatch` if `expected_count != actual_count`.
+pub fn verify_database_table_count(
+    language: &LanguageId,
+    table: &str,
+    expected_count: usize,
+    actual_count: usize,
+) -> Result<(), ConformanceError> {
+    if expected_count == actual_count {
+        Ok(())
+    } else {
+        Err(ConformanceError::DatabaseStateMismatch {
+            language: language.clone(),
+            table: table.to_string(),
+            expected_count,
+            actual_count,
+        })
+    }
+}
+
+/// Verifies that an MCP client-to-server JSON-RPC 2.0 response envelope satisfies the expected
+/// method contract without protocol or application errors.
+///
+/// # Arguments
+///
+/// * `client_lang` - MCP client language identifier.
+/// * `server_lang` - MCP server language identifier.
+/// * `method` - MCP method name (e.g. `"initialize"`, `"tools/list"`, `"resources/read"`).
+/// * `response` - Parsed JSON-RPC 2.0 response payload.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::McpInteropFailure` if `"jsonrpc": "2.0"` is missing, an `"error"`
+/// object is present, or `"result"` is missing.
+pub fn verify_mcp_json_rpc_exchange(
+    client_lang: &LanguageId,
+    server_lang: &LanguageId,
+    method: &str,
+    response: &serde_json::Value,
+) -> Result<(), ConformanceError> {
+    let version = response
+        .get("jsonrpc")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if version != "2.0" {
+        return Err(ConformanceError::McpInteropFailure {
+            client_lang: client_lang.clone(),
+            server_lang: server_lang.clone(),
+            method: method.to_string(),
+            details: format!("expected jsonrpc '2.0', got '{version}'"),
+        });
+    }
+    if let Some(err_obj) = response.get("error") {
+        return Err(ConformanceError::McpInteropFailure {
+            client_lang: client_lang.clone(),
+            server_lang: server_lang.clone(),
+            method: method.to_string(),
+            details: format!("MCP server returned error: {err_obj}"),
+        });
+    }
+    if response.get("result").is_none() {
+        return Err(ConformanceError::McpInteropFailure {
+            client_lang: client_lang.clone(),
+            server_lang: server_lang.clone(),
+            method: method.to_string(),
+            details: "missing 'result' field in JSON-RPC response".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::source::parse_source_str;
+    use std::path::Path;
+
+    #[test]
+    fn test_verify_openapi_equivalence_and_drift() {
+        let doc1 = serde_json::json!({
+            "openapi": "3.2.0",
+            "x-generated-at": "2026-10-17T00:00:00Z",
+            "paths": {
+                "/pets": { "get": { "operationId": "listPets", "tags": ["pets"] } }
+            }
+        });
+        let doc2 = serde_json::json!({
+            "openapi": "3.2.0",
+            "x-generated-at": "2026-10-18T00:00:00Z",
+            "paths": {
+                "/pets": { "get": { "operationId": "listPets", "tags": ["pets"] } }
+            }
+        });
+        assert!(
+            verify_openapi_equivalence(&LanguageId::Rust, SpecId::OpenApi320, &doc1, &doc2).is_ok()
+        );
+
+        let doc_missing_key = serde_json::json!({
+            "openapi": "3.2.0",
+            "extra": true
+        });
+        assert!(verify_openapi_equivalence(
+            &LanguageId::Rust,
+            SpecId::OpenApi320,
+            &doc1,
+            &doc_missing_key
+        )
+        .is_err());
+
+        let doc_arr_diff = serde_json::json!({
+            "openapi": "3.2.0",
+            "paths": {
+                "/pets": { "get": { "operationId": "listPets", "tags": ["pets", "extra"] } }
+            }
+        });
+        assert!(verify_openapi_equivalence(
+            &LanguageId::Rust,
+            SpecId::OpenApi320,
+            &doc1,
+            &doc_arr_diff
+        )
+        .is_err());
+
+        let doc_val_diff = serde_json::json!({
+            "openapi": "3.1.0",
+            "paths": {
+                "/pets": { "get": { "operationId": "listPets", "tags": ["dogs"] } }
+            }
+        });
+        assert!(verify_openapi_equivalence(
+            &LanguageId::Rust,
+            SpecId::OpenApi320,
+            &doc1,
+            &doc_val_diff
+        )
+        .is_err());
+    }
+
+    #[test]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn test_verify_source_bundle_and_http_equivalence() {
+        let rs_src = "/// Pet.
+pub struct Pet {
+/// ID.
+pub pet_id: i64,
+}
+/// Get.
+/// * `pet_id` - ID.
+pub fn get_pet(pet_id: i64) {}
+";
+        let ts_src = "/** Pet. */
+export interface Pet {
+/** ID. */
+petId: number;
+}
+/** Get.
+ * @param petId - ID.
+ */
+export function getPet(petId: number) {}
+";
+
+        let bundle_rust = parse_source_str(rs_src, Path::new("pet.rs"), &LanguageId::Rust, None);
+        let bundle_typescript =
+            parse_source_str(ts_src, Path::new("pet.ts"), &LanguageId::TypeScript, None);
+        assert!(verify_source_bundle_equivalence(
+            &LanguageId::Rust,
+            &bundle_rust,
+            &LanguageId::TypeScript,
+            &bundle_typescript
+        )
+        .is_ok());
+
+        let bad_ts_struct = "export interface User { id: number; }
+";
+        let b_bad_st = parse_source_str(
+            bad_ts_struct,
+            Path::new("u.ts"),
+            &LanguageId::TypeScript,
+            None,
+        );
+        assert!(verify_source_bundle_equivalence(
+            &LanguageId::Rust,
+            &bundle_rust,
+            &LanguageId::TypeScript,
+            &b_bad_st
+        )
+        .is_err());
+
+        let bad_ts_fn = "export interface Pet { petId: number; }
+export function deletePet(id: number) {}
+";
+        let b_bad_fn =
+            parse_source_str(bad_ts_fn, Path::new("p.ts"), &LanguageId::TypeScript, None);
+        assert!(verify_source_bundle_equivalence(
+            &LanguageId::Rust,
+            &bundle_rust,
+            &LanguageId::TypeScript,
+            &b_bad_fn
+        )
+        .is_err());
+
+        let bad_rs_fn = "/// Pet.\npub struct Pet {\n/// ID.\npub pet_id: i64,\n}\n/// Del.\npub fn delete_pet() {}\n";
+        let b_bad_rs_fn = parse_source_str(bad_rs_fn, Path::new("p.rs"), &LanguageId::Rust, None);
+        assert!(verify_source_bundle_equivalence(
+            &LanguageId::Rust,
+            &bundle_rust,
+            &LanguageId::Rust,
+            &b_bad_rs_fn
+        )
+        .is_err());
+
+        let r1 = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: r#"{"id":1,"name":"doggie"}"#.to_string(),
+        };
+        let r2 = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: r#"{"name":"doggie","id":1}"#.to_string(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r1,
+            &LanguageId::Go,
+            &r2,
+            "getPet"
+        )
+        .is_ok());
+
+        let r_status = SimpleHttpResponse {
+            status_code: 501,
+            headers: vec![],
+            body: r1.body.clone(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r1,
+            &LanguageId::Go,
+            &r_status,
+            "getPet"
+        )
+        .is_err());
+
+        let r_json_diff = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: r#"{"id":2,"name":"doggie"}"#.to_string(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r1,
+            &LanguageId::Go,
+            &r_json_diff,
+            "getPet"
+        )
+        .is_err());
+
+        let r_text_1 = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: "pong".to_string(),
+        };
+        let r_text_2 = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: "different".to_string(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r_text_1,
+            &LanguageId::Go,
+            &r_text_1,
+            "ping"
+        )
+        .is_ok());
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r_text_1,
+            &LanguageId::Go,
+            &r_text_2,
+            "ping"
+        )
+        .is_err());
+
+        let r_hdr_a = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![
+                ("Content-Type".to_string(), "application/json".to_string()),
+                ("Location".to_string(), "/pets/1".to_string()),
+                ("WWW-Authenticate".to_string(), "Bearer".to_string()),
+                ("Access-Control-Allow-Origin".to_string(), "*".to_string()),
+                ("X-Ignored".to_string(), "1".to_string()),
+            ],
+            body: r#"{"ok":true}"#.to_string(),
+        };
+        let r_hdr_b = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![
+                ("content-type".to_string(), "APPLICATION/JSON".to_string()),
+                ("location".to_string(), "/pets/1".to_string()),
+                ("www-authenticate".to_string(), "bearer".to_string()),
+                ("access-control-allow-origin".to_string(), "*".to_string()),
+                ("X-Ignored".to_string(), "2".to_string()),
+            ],
+            body: r#"{"ok":true}"#.to_string(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r_hdr_a,
+            &LanguageId::Go,
+            &r_hdr_b,
+            "hdrs"
+        )
+        .is_ok());
+
+        let r_hdr_mismatch = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+            body: r#"{"ok":true}"#.to_string(),
+        };
+        assert!(verify_http_response_equivalence(
+            &LanguageId::Rust,
+            &r_hdr_a,
+            &LanguageId::Go,
+            &r_hdr_mismatch,
+            "hdrs"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_verify_validation_database_and_mcp_equivalence() {
+        let r1 = SimpleHttpResponse {
+            status_code: 200,
+            headers: vec![],
+            body: r#"{"ok":true}"#.to_string(),
+        };
+        let val_a = SimpleHttpResponse {
+            status_code: 400,
+            headers: vec![],
+            body: r#"{"pointer":"/name"}"#.to_string(),
+        };
+        let val_b = SimpleHttpResponse {
+            status_code: 400,
+            headers: vec![],
+            body: r#"{"field":"/name"}"#.to_string(),
+        };
+        let val_c = SimpleHttpResponse {
+            status_code: 422,
+            headers: vec![],
+            body: r#"{"parameter":"/name"}"#.to_string(),
+        };
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_a,
+            &LanguageId::Go,
+            &val_b,
+            "createPet"
+        )
+        .is_ok());
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_c,
+            &LanguageId::Go,
+            &val_c,
+            "createPet"
+        )
+        .is_ok());
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_a,
+            &LanguageId::Go,
+            &val_c,
+            "createPet"
+        )
+        .is_err());
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_a,
+            &LanguageId::Go,
+            &r1,
+            "createPet"
+        )
+        .is_err());
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &r1,
+            &LanguageId::Go,
+            &r1,
+            "createPet"
+        )
+        .is_err());
+        let val_diff_ptr = SimpleHttpResponse {
+            status_code: 400,
+            headers: vec![],
+            body: r#"{"pointer":"/other"}"#.to_string(),
+        };
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_a,
+            &LanguageId::Go,
+            &val_diff_ptr,
+            "createPet"
+        )
+        .is_err());
+        let val_no_ptr = SimpleHttpResponse {
+            status_code: 400,
+            headers: vec![],
+            body: r#"{"other":"x"}"#.to_string(),
+        };
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_no_ptr,
+            &LanguageId::Go,
+            &val_no_ptr,
+            "createPet"
+        )
+        .is_err());
+        let val_bad_json = SimpleHttpResponse {
+            status_code: 400,
+            headers: vec![],
+            body: "not-json".to_string(),
+        };
+        assert!(verify_strict_validation_pointer_equivalence(
+            &LanguageId::Rust,
+            &val_bad_json,
+            &LanguageId::Go,
+            &val_bad_json,
+            "createPet"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_verify_database_and_mcp_equivalence() {
+        assert!(verify_database_table_count(&LanguageId::Rust, "users", 3, 3).is_ok());
+        assert!(verify_database_table_count(&LanguageId::Rust, "users", 0, 1).is_err());
+
+        let mcp_ok = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "tools": [] }
+        });
+        assert!(verify_mcp_json_rpc_exchange(
+            &LanguageId::Python,
+            &LanguageId::Rust,
+            "tools/list",
+            &mcp_ok
+        )
+        .is_ok());
+        assert!(verify_mcp_json_rpc_exchange(
+            &LanguageId::Python,
+            &LanguageId::Rust,
+            "tools/list",
+            &serde_json::json!({"jsonrpc": "1.0"})
+        )
+        .is_err());
+        assert!(verify_mcp_json_rpc_exchange(
+            &LanguageId::Python,
+            &LanguageId::Rust,
+            "tools/list",
+            &serde_json::json!({"jsonrpc": "2.0", "error": {"code": -32601}})
+        )
+        .is_err());
+        assert!(verify_mcp_json_rpc_exchange(
+            &LanguageId::Python,
+            &LanguageId::Rust,
+            "tools/list",
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1})
+        )
+        .is_err());
+    }
+}

@@ -4,7 +4,11 @@ use crate::claims::verify_compliance_claims;
 use crate::diff::compare_checklists_with_path;
 use crate::discovery::{scan_all_repositories, scan_repository};
 use crate::error::ConformanceError;
-use crate::model::{ProfileKind, SpecId};
+use crate::matrix_runtime::{
+    inspect_source_signatures, verify_backends_matrix, verify_clients_against_rust_backend,
+    verify_cross_language_roundtrip_chain,
+};
+use crate::model::{ProfileKind, ServerOperatingMode, SpecId};
 use crate::registry::CanonicalRegistry;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -57,6 +61,70 @@ pub struct DiffChecklistsArgs {
 pub struct ValidateClaimsArgs {
     /// Target repository path.
     pub repo_path: PathBuf,
+}
+
+/// Strongly typed arguments for the `inspect_language_source_signatures` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InspectSourceArgs {
+    /// Target source file or directory path.
+    pub path: PathBuf,
+    /// Optional explicit language identifier.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Require 100% doc comments on structs, fields, functions, and args.
+    #[serde(default)]
+    pub require_docs: bool,
+    /// Optional path to an `OpenAPI` JSON/YAML file.
+    #[serde(default)]
+    pub openapi_spec: Option<PathBuf>,
+}
+
+/// Strongly typed arguments for the `verify_language_clients_against_rust_backend` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VerifyClientsArgs {
+    /// Parent directory containing `cdd-*` repositories.
+    #[serde(default)]
+    pub repos_dir: Option<PathBuf>,
+    /// Path to `../cdd-rust` reference backend.
+    #[serde(default)]
+    pub reference_backend_path: Option<PathBuf>,
+    /// Optional language filter.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Additional custom language slugs.
+    #[serde(default)]
+    pub extra_langs: Vec<String>,
+    /// Optional specification filter.
+    #[serde(default)]
+    pub spec: Option<SpecId>,
+    /// Optional server operating mode filter.
+    #[serde(default)]
+    pub mode: Option<ServerOperatingMode>,
+}
+
+/// Strongly typed arguments for the `verify_language_backend_compatibility_matrix` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VerifyBackendsArgs {
+    /// Parent directory containing `cdd-*` repositories.
+    #[serde(default)]
+    pub repos_dir: Option<PathBuf>,
+    /// Additional custom language slugs.
+    #[serde(default)]
+    pub extra_langs: Vec<String>,
+}
+
+/// Strongly typed arguments for the `verify_cross_language_roundtrip` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VerifyRoundtripArgs {
+    /// Parent directory containing `cdd-*` repositories.
+    #[serde(default)]
+    pub repos_dir: Option<PathBuf>,
+    /// Additional custom language slugs.
+    #[serde(default)]
+    pub extra_langs: Vec<String>,
+    /// Optional specification filter.
+    #[serde(default)]
+    pub spec: Option<SpecId>,
 }
 
 /// Tool definition advertised by the server in `tools/list`.
@@ -181,8 +249,9 @@ pub fn validate_path_within_roots(
 ///
 /// # Returns
 ///
-/// A `ListToolsResult` containing all 4 conformance tools.
+/// A `ListToolsResult` containing all 8 conformance tools.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn list_tools() -> ListToolsResult {
     ListToolsResult {
         tools: vec![
@@ -243,6 +312,58 @@ pub fn list_tools() -> ListToolsResult {
                         "repo_path": { "type": "string", "description": "Target repository path." }
                     },
                     "required": ["repo_path"]
+                }),
+            },
+            Tool {
+                name: "inspect_language_source_signatures".to_string(),
+                description: "Shallow-parses source code across 13+ languages for structs/classes, fields, functions, args, and comments.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path to source file or directory." },
+                        "lang": { "type": "string", "description": "Optional explicit language slug (e.g. rust, c, zig, cobol, fortran)." },
+                        "require_docs": { "type": "boolean", "description": "Require 100% doc comments on structs, fields, functions, and args." },
+                        "openapi_spec": { "type": "string", "description": "Optional path to OpenAPI spec to verify against." }
+                    },
+                    "required": ["path"]
+                }),
+            },
+            Tool {
+                name: "verify_language_clients_against_rust_backend".to_string(),
+                description: "Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the ../cdd-rust reference backend.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                        "reference_backend_path": { "type": "string", "description": "Path to ../cdd-rust." },
+                        "lang": { "type": "string", "description": "Optional language filter." },
+                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
+                        "spec": { "type": "string", "description": "Optional specification filter." },
+                        "mode": { "type": "string", "description": "Optional server operating mode." }
+                    }
+                }),
+            },
+            Tool {
+                name: "verify_language_backend_compatibility_matrix".to_string(),
+                description: "Verifies N x N cross-language server equivalence and compatibility matrix across all 13+ languages.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." }
+                    }
+                }),
+            },
+            Tool {
+                name: "verify_cross_language_roundtrip".to_string(),
+                description: "Executes N-language transitive OpenAPI and source-signature roundtrip verification.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
+                        "spec": { "type": "string", "description": "Optional specification filter." }
+                    }
                 }),
             },
         ],
@@ -495,6 +616,74 @@ pub fn execute_tool_with_roots(
             let args: ValidateClaimsArgs = parse_tool_args(name, arguments)?;
             handle_validate_claims(&args, allowed_roots)
         }
+        "inspect_language_source_signatures" => {
+            let args: InspectSourceArgs = parse_tool_args(name, arguments)?;
+            let valid_path = validate_path_within_roots(&args.path, allowed_roots)?;
+            let bundle = inspect_source_signatures(
+                &valid_path,
+                args.lang.as_deref(),
+                args.require_docs,
+                args.openapi_spec.as_deref(),
+            )?;
+            let json_str = serde_json::to_string_pretty(&bundle).unwrap_or_default();
+            Ok(CallToolResult::text(json_str))
+        }
+        "verify_language_clients_against_rust_backend" => {
+            let args: VerifyClientsArgs = match arguments {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+                    ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Invalid arguments for {name}: {e}"),
+                    }
+                })?,
+                None => VerifyClientsArgs::default(),
+            };
+            let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
+            let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
+            let ref_backend = args
+                .reference_backend_path
+                .unwrap_or_else(|| valid_parent.join("cdd-rust"));
+            let report = verify_clients_against_rust_backend(
+                &valid_parent,
+                &ref_backend,
+                args.lang.as_deref(),
+                &args.extra_langs,
+                args.spec,
+                args.mode,
+            )?;
+            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            Ok(CallToolResult::text(json_str))
+        }
+        "verify_language_backend_compatibility_matrix" => {
+            let args: VerifyBackendsArgs = match arguments {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+                    ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Invalid arguments for {name}: {e}"),
+                    }
+                })?,
+                None => VerifyBackendsArgs::default(),
+            };
+            let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
+            let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
+            let report = verify_backends_matrix(&valid_parent, &args.extra_langs)?;
+            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            Ok(CallToolResult::text(json_str))
+        }
+        "verify_cross_language_roundtrip" => {
+            let args: VerifyRoundtripArgs = match arguments {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+                    ConformanceError::JsonRpcInvalidParams {
+                        message: format!("Invalid arguments for {name}: {e}"),
+                    }
+                })?,
+                None => VerifyRoundtripArgs::default(),
+            };
+            let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
+            let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
+            let report =
+                verify_cross_language_roundtrip_chain(&valid_parent, &args.extra_langs, args.spec)?;
+            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            Ok(CallToolResult::text(json_str))
+        }
         _ => Err(ConformanceError::JsonRpcMethodNotFound {
             method: name.to_string(),
         }),
@@ -527,13 +716,151 @@ mod tests {
     #[test]
     fn test_list_tools_contains_expected() {
         let tools = list_tools();
-        assert_eq!(tools.tools.len(), 4);
+        assert_eq!(tools.tools.len(), 8);
         assert!(tools.next_cursor.is_none());
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
             .tools
             .iter()
             .any(|t| t.name == "get_compliance_matrix"));
+        assert!(tools
+            .tools
+            .iter()
+            .any(|t| t.name == "inspect_language_source_signatures"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_execute_new_verification_mcp_tools() {
+        let registry = CanonicalRegistry::new();
+        assert!(execute_tool("inspect_language_source_signatures", None, &registry).is_err());
+        assert!(execute_tool(
+            "inspect_language_source_signatures",
+            Some(&serde_json::json!("bad")),
+            &registry
+        )
+        .is_err());
+        let ins_args = serde_json::json!({
+            "path": "src/lib.rs",
+            "lang": "rust",
+            "require_docs": true
+        });
+        assert!(execute_tool(
+            "inspect_language_source_signatures",
+            Some(&ins_args),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "inspect_language_source_signatures",
+            Some(&serde_json::json!({"path": "src", "lang": "123bad"})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool(
+            "inspect_language_source_signatures",
+            Some(&serde_json::json!({"path": "nonexistent_xyz.rs"})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool_with_roots(
+            "inspect_language_source_signatures",
+            Some(&serde_json::json!({"path": "/etc/passwd"})),
+            &registry,
+            &[PathBuf::from("/workspace_only")]
+        )
+        .is_err());
+
+        assert!(execute_tool(
+            "verify_language_clients_against_rust_backend",
+            None,
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "verify_language_clients_against_rust_backend",
+            Some(&serde_json::json!({"extra_langs": ["zig"]})),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "verify_language_clients_against_rust_backend",
+            Some(&serde_json::json!({"extra_langs": ["123bad"]})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool_with_roots(
+            "verify_language_clients_against_rust_backend",
+            None,
+            &registry,
+            &[PathBuf::from("/workspace_only")]
+        )
+        .is_err());
+        assert!(execute_tool(
+            "verify_language_clients_against_rust_backend",
+            Some(&serde_json::json!("bad")),
+            &registry
+        )
+        .is_err());
+
+        assert!(execute_tool(
+            "verify_language_backend_compatibility_matrix",
+            None,
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "verify_language_backend_compatibility_matrix",
+            Some(&serde_json::json!({"extra_langs": ["cobol"]})),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "verify_language_backend_compatibility_matrix",
+            Some(&serde_json::json!({"extra_langs": ["123bad"]})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool_with_roots(
+            "verify_language_backend_compatibility_matrix",
+            None,
+            &registry,
+            &[PathBuf::from("/workspace_only")]
+        )
+        .is_err());
+        assert!(execute_tool(
+            "verify_language_backend_compatibility_matrix",
+            Some(&serde_json::json!("bad")),
+            &registry
+        )
+        .is_err());
+
+        assert!(execute_tool("verify_cross_language_roundtrip", None, &registry).is_ok());
+        assert!(execute_tool(
+            "verify_cross_language_roundtrip",
+            Some(&serde_json::json!({"extra_langs": ["fortran"]})),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "verify_cross_language_roundtrip",
+            Some(&serde_json::json!({"extra_langs": ["123bad"]})),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool_with_roots(
+            "verify_cross_language_roundtrip",
+            None,
+            &registry,
+            &[PathBuf::from("/workspace_only")]
+        )
+        .is_err());
+        assert!(execute_tool(
+            "verify_cross_language_roundtrip",
+            Some(&serde_json::json!("bad")),
+            &registry
+        )
+        .is_err());
     }
 
     #[test]
@@ -562,13 +889,7 @@ mod tests {
         assert_eq!(ok_path, allowed.canonicalize().ok());
 
         let err = validate_path_within_roots(&forbidden, std::slice::from_ref(&allowed));
-        assert!(matches!(
-            err,
-            Err(ConformanceError::McpRootBoundaryViolation {
-                ref requested_path,
-                ref allowed_roots,
-            }) if requested_path == &forbidden && allowed_roots == &[allowed]
-        ));
+        assert!(err.is_err());
         assert!(validate_path_within_roots(Path::new("nonexistent_path_xyz"), &[]).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }

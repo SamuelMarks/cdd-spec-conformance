@@ -335,15 +335,11 @@ impl McpServer {
     /// # Errors
     ///
     /// Returns `ConformanceError` if I/O communication fails.
-    pub async fn run_stream<R, W>(
+    pub async fn run_stream(
         &mut self,
-        reader: R,
-        mut writer: W,
-    ) -> Result<(), ConformanceError>
-    where
-        R: tokio::io::AsyncRead + Unpin,
-        W: tokio::io::AsyncWrite + Unpin,
-    {
+        reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+        writer: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), ConformanceError> {
         let mut lines = BufReader::new(reader).lines();
         while let Some(line) = lines.next_line().await.map_err(|e| ConformanceError::Io {
             source: e,
@@ -374,8 +370,9 @@ impl McpServer {
     ///
     /// Returns `ConformanceError` if I/O communication fails.
     pub async fn run_stdio(&mut self) -> Result<(), ConformanceError> {
-        self.run_stream(tokio::io::stdin(), tokio::io::stdout())
-            .await
+        let mut stdin = tokio::io::stdin();
+        let mut stdout = tokio::io::stdout();
+        self.run_stream(&mut stdin, &mut stdout).await
     }
 }
 
@@ -554,6 +551,12 @@ mod tests {
                 .map(|e| e.code),
             Some(error_codes::INVALID_REQUEST)
         );
+
+        // Non-initialize request after initialized in strict mode -> succeeds
+        let ok_post_init = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
+        assert!(server
+            .handle_message(ok_post_init)
+            .is_some_and(|r| r.result.is_some()));
     }
 
     #[test]
@@ -650,7 +653,7 @@ mod tests {
             .handle_message(tools_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
-        assert_eq!(tools_payload.map(|p| p.tools.len()), Some(4));
+        assert_eq!(tools_payload.map(|p| p.tools.len()), Some(8));
 
         let bad_cursor_tools =
             r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{"cursor":"invalid"}}"#;
@@ -879,7 +882,8 @@ mod tests {
         .ok();
         assert!(target.zip(canonical).is_some_and(|(t, c)| {
             let diff = crate::diff::compare_checklists(&t, &c);
-            diff.missing_features.is_empty() && diff.score.implemented_to > 0
+            assert!(diff.missing_features.is_empty());
+            diff.score.implemented_to > 0
         }));
     }
 }

@@ -374,6 +374,7 @@ mod tests {
 | Feature | Status |
 | :--- | :---: |
 | | ✅ |
+| --- | ✅ |
 | Total | ✅ |
 | Unknown Feature XYZ | ✅ |
 | Paths Object | ❌ |
@@ -445,6 +446,7 @@ mod tests {
         assert!(matches_feature_tokens("webhook", "webhooks object"));
         assert!(matches_feature_tokens("webhooks", "webhook object"));
         assert!(!matches_feature_tokens("a", "apple"));
+        assert!(!matches_feature_tokens("apple", "a"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

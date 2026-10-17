@@ -225,7 +225,7 @@ fn scan_spec_dir(dir: &Path, spec_id: SpecId, checklists: &mut Vec<DiscoveredChe
                     path,
                 });
             }
-        } else if path.is_dir() && spec_id == SpecId::MockServer {
+        } else if spec_id == SpecId::MockServer {
             let nested = path.join("mock-server-plan.md");
             if nested.is_file() {
                 checklists.push(DiscoveredChecklist {
@@ -268,10 +268,42 @@ fn is_candidate_cdd_repo_name(name: &str) -> bool {
 pub fn scan_all_repositories(
     parent_dir: &Path,
 ) -> Result<Vec<DiscoveredProject>, ConformanceError> {
+    scan_all_repositories_with_extras(parent_dir, &[])
+}
+
+/// Scans a parent directory for the 13 core language repositories and any enrolled extra languages.
+///
+/// Enrolls the 13 canonical repositories plus any `cdd-<lang>` repository that matches `extra_langs`
+/// or defines an explicit `language` or `toolchain` in `.cdd-conformance.yaml`.
+///
+/// # Arguments
+///
+/// * `parent_dir` - Parent directory containing `cdd-*` language repositories.
+/// * `extra_langs` - Optional slice of additional language slugs (`--extra-lang`).
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if directory reading or scanning a candidate repository fails.
+pub fn scan_all_repositories_with_extras(
+    parent_dir: &Path,
+    extra_langs: &[String],
+) -> Result<Vec<DiscoveredProject>, ConformanceError> {
     let entries = std::fs::read_dir(parent_dir).map_err(|e| ConformanceError::Io {
         source: e,
         path: parent_dir.to_path_buf(),
     })?;
+
+    let extra_repo_names: HashSet<String> = extra_langs
+        .iter()
+        .map(|s| {
+            let trimmed = s.trim().to_lowercase();
+            if trimmed.starts_with("cdd-") {
+                trimmed
+            } else {
+                format!("cdd-{trimmed}")
+            }
+        })
+        .collect();
 
     let has_target_repos = TARGET_ECOSYSTEM_REPOS
         .iter()
@@ -283,11 +315,19 @@ pub fn scan_all_repositories(
         .filter(|p| {
             p.is_dir()
                 && p.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
-                    if has_target_repos {
-                        TARGET_ECOSYSTEM_REPOS.contains(&name)
-                    } else {
-                        is_candidate_cdd_repo_name(name)
+                    if !is_candidate_cdd_repo_name(name) {
+                        return false;
                     }
+                    if !has_target_repos {
+                        return true;
+                    }
+                    if TARGET_ECOSYSTEM_REPOS.contains(&name) || extra_repo_names.contains(name) {
+                        return true;
+                    }
+                    ProjectConfig::find_and_load(p)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|cfg| cfg.language.is_some() || cfg.toolchain.is_some())
                 })
         })
         .collect();
@@ -472,6 +512,8 @@ mod tests {
 
         let bak_repo = parent.join("cdd-other_bak");
         let _ = create_dir_all(&bak_repo);
+        let _ = create_dir_all(parent.join("cdd-rust-OLD"));
+        let _ = create_dir_all(parent.join("cdd-kotlin-og"));
 
         let _ = create_dir_all(parent.join("cdd-spec-conformance"));
         let _ = create_dir_all(parent.join("cdd-openapi-test-harness"));
@@ -495,6 +537,25 @@ mod tests {
             assert!(projects[0].compliance_file.is_none());
             projects[0].checklists.is_empty()
         }));
+
+        let _ = create_dir_all(parent.join("cdd-rust"));
+        let zig_repo = parent.join("cdd-zig");
+        let _ = create_dir_all(&zig_repo);
+        let _ = std::fs::write(zig_repo.join(".cdd-conformance.yaml"), b"language: zig\n");
+
+        let cobol_repo = parent.join("cdd-cobol");
+        let _ = create_dir_all(&cobol_repo);
+
+        let projs_extra = scan_all_repositories_with_extras(
+            &parent,
+            &["cobol".to_string(), "cdd-fortran".to_string()],
+        )
+        .unwrap_or_default();
+        let names: Vec<&str> = projs_extra
+            .iter()
+            .map(|p| p.language_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["cobol", "rust", "zig"]);
         let _ = std::fs::remove_dir_all(&parent);
     }
 }

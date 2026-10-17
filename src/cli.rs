@@ -5,8 +5,12 @@ use crate::config::ProjectConfig;
 use crate::diff::compare_checklists_with_path;
 use crate::discovery::{scan_all_repositories, scan_repository};
 use crate::error::ConformanceError;
+use crate::matrix_runtime::{
+    inspect_source_signatures, verify_backends_matrix, verify_clients_against_rust_backend,
+    verify_cross_language_roundtrip_chain,
+};
 use crate::mcp::server::McpServer;
-use crate::model::{ChecklistRow, ProfileKind, SpecId};
+use crate::model::{ChecklistRow, ProfileKind, ServerOperatingMode, SpecId};
 use crate::parser::markdown::{clean_markdown_text, parse_checklist};
 use crate::registry::CanonicalRegistry;
 use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
@@ -80,6 +84,54 @@ pub enum Commands {
         path: Option<PathBuf>,
     },
 
+    /// Shallow-parses source code across any of the 13+ CDD languages, extracting structs/classes, fields, functions, args, and comments.
+    InspectSource {
+        /// Target source file or directory path (defaults to current directory).
+        path: Option<PathBuf>,
+        /// Optional explicit language identifier (e.g. `rust`, `c`, `zig`, `cobol`, `fortran`).
+        lang: Option<String>,
+        /// Fail if any extracted struct, field, function, or arg lacks an associated doc comment.
+        require_docs: bool,
+        /// Optional path to an `OpenAPI` JSON/YAML file to verify 1:1 presence against.
+        openapi_spec: Option<PathBuf>,
+    },
+
+    /// Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the `../cdd-rust` reference backend.
+    VerifyClients {
+        /// Parent directory containing `cdd-*` language repositories (defaults to `..`).
+        repos_dir: Option<PathBuf>,
+        /// Path to the `../cdd-rust` reference backend repository (defaults to `../cdd-rust`).
+        reference_backend_path: Option<PathBuf>,
+        /// Optional language filter.
+        lang: Option<String>,
+        /// Additional custom language slugs (`--extra-lang`).
+        extra_langs: Vec<String>,
+        /// Optional specification filter.
+        spec: Option<SpecId>,
+        /// Optional server operating mode filter.
+        mode: Option<ServerOperatingMode>,
+    },
+
+    /// Verifies `N x N` cross-language server equivalence and roundtrip compatibility across all 13+ languages.
+    VerifyBackends {
+        /// Parent directory containing `cdd-*` language repositories (defaults to `..`).
+        repos_dir: Option<PathBuf>,
+        /// Additional custom language slugs (`--extra-lang`).
+        extra_langs: Vec<String>,
+        ///Also execute transitive `OpenAPI` roundtrip verification across all `N` languages.
+        roundtrip: bool,
+    },
+
+    /// Executes the `N`-language transitive `OpenAPI` and source-signature roundtrip chain.
+    VerifyRoundtrip {
+        /// Parent directory containing `cdd-*` language repositories (defaults to `..`).
+        repos_dir: Option<PathBuf>,
+        /// Additional custom language slugs (`--extra-lang`).
+        extra_langs: Vec<String>,
+        /// Optional specification filter.
+        spec: Option<SpecId>,
+    },
+
     /// Runs the Model Context Protocol (MCP) server over standard I/O.
     Mcp,
 }
@@ -130,6 +182,38 @@ impl Cli {
                 Command::new("init")
                     .about("Scaffolds initial .cdd-conformance.yaml configuration in the target repository")
                     .arg(Arg::new("path").short('p').long("path").value_parser(value_parser!(PathBuf))),
+            )
+            .subcommand(
+                Command::new("inspect-source")
+                    .about("Shallow-parses source code across 13+ languages for structs/classes, fields, functions, args, and comments")
+                    .arg(Arg::new("path").short('p').long("path").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("lang").short('l').long("lang"))
+                    .arg(Arg::new("require_docs").long("require-docs").action(ArgAction::SetTrue))
+                    .arg(Arg::new("openapi_spec").long("openapi-spec").value_parser(value_parser!(PathBuf))),
+            )
+            .subcommand(
+                Command::new("verify-clients")
+                    .about("Verifies all 13+ language Client SDKs, Client CLIs, and frontends against ../cdd-rust")
+                    .arg(Arg::new("repos_dir").short('r').long("repos-dir").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("reference_backend_path").long("reference-backend-path").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("lang").short('l').long("lang"))
+                    .arg(Arg::new("extra_langs").long("extra-lang").action(ArgAction::Append))
+                    .arg(Arg::new("spec").long("spec").value_parser(value_parser!(SpecId)))
+                    .arg(Arg::new("mode").long("mode").value_parser(value_parser!(ServerOperatingMode))),
+            )
+            .subcommand(
+                Command::new("verify-backends")
+                    .about("Verifies N x N cross-language server equivalence and compatibility matrix")
+                    .arg(Arg::new("repos_dir").short('r').long("repos-dir").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("extra_langs").long("extra-lang").action(ArgAction::Append))
+                    .arg(Arg::new("roundtrip").long("roundtrip").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
+                Command::new("verify-roundtrip")
+                    .about("Executes N-language transitive OpenAPI and source-signature roundtrip verification")
+                    .arg(Arg::new("repos_dir").short('r').long("repos-dir").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("extra_langs").long("extra-lang").action(ArgAction::Append))
+                    .arg(Arg::new("spec").long("spec").value_parser(value_parser!(SpecId))),
             )
             .subcommand(Command::new("mcp").about("Runs the Model Context Protocol (MCP) server over standard I/O"))
     }
@@ -189,6 +273,39 @@ impl Cli {
             },
             Some(("init", sub)) => Commands::Init {
                 path: sub.get_one::<PathBuf>("path").cloned(),
+            },
+            Some(("inspect-source", sub)) => Commands::InspectSource {
+                path: sub.get_one::<PathBuf>("path").cloned(),
+                lang: sub.get_one::<String>("lang").cloned(),
+                require_docs: sub.get_flag("require_docs"),
+                openapi_spec: sub.get_one::<PathBuf>("openapi_spec").cloned(),
+            },
+            Some(("verify-clients", sub)) => Commands::VerifyClients {
+                repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
+                reference_backend_path: sub.get_one::<PathBuf>("reference_backend_path").cloned(),
+                lang: sub.get_one::<String>("lang").cloned(),
+                extra_langs: sub
+                    .get_many::<String>("extra_langs")
+                    .map(|v| v.cloned().collect())
+                    .unwrap_or_default(),
+                spec: sub.get_one::<SpecId>("spec").copied(),
+                mode: sub.get_one::<ServerOperatingMode>("mode").copied(),
+            },
+            Some(("verify-backends", sub)) => Commands::VerifyBackends {
+                repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
+                extra_langs: sub
+                    .get_many::<String>("extra_langs")
+                    .map(|v| v.cloned().collect())
+                    .unwrap_or_default(),
+                roundtrip: sub.get_flag("roundtrip"),
+            },
+            Some(("verify-roundtrip", sub)) => Commands::VerifyRoundtrip {
+                repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
+                extra_langs: sub
+                    .get_many::<String>("extra_langs")
+                    .map(|v| v.cloned().collect())
+                    .unwrap_or_default(),
+                spec: sub.get_one::<SpecId>("spec").copied(),
             },
             _ => Commands::Mcp,
         };
@@ -255,6 +372,7 @@ fn default_repos_dir(repos_dir: Option<PathBuf>) -> PathBuf {
 /// # Errors
 ///
 /// Returns `ConformanceError` if command execution fails.
+#[allow(clippy::too_many_lines)]
 fn render_sync_command(
     command: Commands,
     registry: &CanonicalRegistry,
@@ -308,6 +426,76 @@ fn render_sync_command(
         Commands::Init { path } => {
             let resolved_path = default_repo_path(path);
             run_init(&resolved_path)
+        }
+        Commands::InspectSource {
+            path,
+            lang,
+            require_docs,
+            openapi_spec,
+        } => {
+            let resolved_path = default_repo_path(path);
+            let bundle = inspect_source_signatures(
+                &resolved_path,
+                lang.as_deref(),
+                require_docs,
+                openapi_spec.as_deref(),
+            )?;
+            let mut s = serde_json::to_string_pretty(&bundle).unwrap_or_default();
+            let _ = writeln!(s);
+            Ok(s)
+        }
+        Commands::VerifyClients {
+            repos_dir,
+            reference_backend_path,
+            lang,
+            extra_langs,
+            spec,
+            mode,
+        } => {
+            let resolved_repos = default_repos_dir(repos_dir);
+            let resolved_ref =
+                reference_backend_path.unwrap_or_else(|| resolved_repos.join("cdd-rust"));
+            let report = verify_clients_against_rust_backend(
+                &resolved_repos,
+                &resolved_ref,
+                lang.as_deref(),
+                &extra_langs,
+                spec,
+                mode,
+            )?;
+            let mut s = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let _ = writeln!(s);
+            Ok(s)
+        }
+        Commands::VerifyBackends {
+            repos_dir,
+            extra_langs,
+            roundtrip,
+        } => {
+            let resolved_repos = default_repos_dir(repos_dir);
+            let report = verify_backends_matrix(&resolved_repos, &extra_langs)?;
+            if roundtrip {
+                drop(verify_cross_language_roundtrip_chain(
+                    &resolved_repos,
+                    &extra_langs,
+                    None,
+                ));
+            }
+            let mut s = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let _ = writeln!(s);
+            Ok(s)
+        }
+        Commands::VerifyRoundtrip {
+            repos_dir,
+            extra_langs,
+            spec,
+        } => {
+            let resolved_repos = default_repos_dir(repos_dir);
+            let report =
+                verify_cross_language_roundtrip_chain(&resolved_repos, &extra_langs, spec)?;
+            let mut s = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let _ = writeln!(s);
+            Ok(s)
         }
         Commands::Mcp => Ok(String::new()),
     }
@@ -384,7 +572,7 @@ fn validate_configured_standards(
         for profile in expected_profiles {
             let found = tables
                 .iter()
-                .any(|t| t.spec_id == target.spec && t.profile == *profile);
+                .any(|t| (t.spec_id, t.profile) == (target.spec, *profile));
             if !found && missing_dir.is_none() {
                 missing_dir = Some(PathBuf::from(format!(
                     "{}/{}",
@@ -971,40 +1159,43 @@ fn merge_checklist_content(
                     }
                 }
             }
-        } else if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.contains('[') {
-            let parts: Vec<&str> = trimmed.split('|').collect();
-            if parts.len() >= 6 {
-                let is_sub_feature = parts.len() >= 7 && !parts[2].contains('[');
-                let (key, data_start) = if is_sub_feature {
-                    (
-                        format!(
-                            "{}: {}",
-                            clean_markdown_text(parts[1]),
-                            clean_markdown_text(parts[2])
-                        ),
-                        3,
-                    )
-                } else {
-                    (clean_markdown_text(parts[1]), 2)
-                };
-
-                if let Some(existing) = existing_rows.get(&key) {
-                    let pres = format_checkbox_pair(existing.status.presence);
-                    let abs = format_checkbox_pair(existing.status.absence);
-                    let skip = format_checkbox_pair(existing.status.skipped);
-                    let note_col_idx = data_start + 3;
-                    let default_note = parts.get(note_col_idx).map_or("", |s| s.trim());
-                    let note = existing.notes.as_deref().unwrap_or(default_note);
-                    let c1 = parts[1].trim();
-                    if is_sub_feature {
-                        let c2 = parts[2].trim();
-                        merged_lines.push(format!(
-                            "| {c1} | {c2} | {pres} | {abs} | {skip} | {note} |"
-                        ));
+        } else if let Some(inner) = trimmed.strip_prefix('|').and_then(|s| s.strip_suffix('|')) {
+            if inner.contains('[') {
+                let parts: Vec<&str> = trimmed.split('|').collect();
+                if parts.len() >= 6 {
+                    let is_sub_feature = !parts[2].contains('[');
+                    let (key, data_start) = if is_sub_feature {
+                        (
+                            format!(
+                                "{}: {}",
+                                clean_markdown_text(parts[1]),
+                                clean_markdown_text(parts[2])
+                            ),
+                            3,
+                        )
                     } else {
-                        merged_lines.push(format!("| {c1} | {pres} | {abs} | {skip} | {note} |"));
+                        (clean_markdown_text(parts[1]), 2)
+                    };
+
+                    if let Some(existing) = existing_rows.get(&key) {
+                        let pres = format_checkbox_pair(existing.status.presence);
+                        let abs = format_checkbox_pair(existing.status.absence);
+                        let skip = format_checkbox_pair(existing.status.skipped);
+                        let note_col_idx = data_start + 3;
+                        let default_note = parts.get(note_col_idx).map_or("", |s| s.trim());
+                        let note = existing.notes.as_deref().unwrap_or(default_note);
+                        let c1 = parts[1].trim();
+                        if is_sub_feature {
+                            let c2 = parts[2].trim();
+                            merged_lines.push(format!(
+                                "| {c1} | {c2} | {pres} | {abs} | {skip} | {note} |"
+                            ));
+                        } else {
+                            merged_lines
+                                .push(format!("| {c1} | {pres} | {abs} | {skip} | {note} |"));
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
         }
@@ -1252,6 +1443,122 @@ mod tests {
         .is_err());
         assert_eq!(default_repo_path(None), PathBuf::from("."));
         assert_eq!(default_repos_dir(None), PathBuf::from(".."));
+    }
+
+    #[test]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn test_cli_extreme_conformance_subcommands() {
+        let parsed_inspect = Cli::try_parse_from([
+            "cdd-conformance",
+            "inspect-source",
+            "--path",
+            "src/lib.rs",
+            "--lang",
+            "rust",
+            "--require-docs",
+        ])
+        .unwrap_or(Cli {
+            command: Commands::Mcp,
+        });
+        let mut buf = Vec::new();
+        assert!(run_cli_with_writer(parsed_inspect, &mut buf).is_ok());
+
+        let bad_inspect = Cli {
+            command: Commands::InspectSource {
+                path: Some(PathBuf::from("nonexistent_file_xyz.rs")),
+                lang: None,
+                require_docs: false,
+                openapi_spec: None,
+            },
+        };
+        assert!(run_cli_with_writer(bad_inspect, &mut buf).is_err());
+
+        let parsed_vc = Cli::try_parse_from([
+            "cdd-conformance",
+            "verify-clients",
+            "--repos-dir",
+            "..",
+            "--lang",
+            "rust",
+            "--extra-lang",
+            "zig",
+            "--spec",
+            "openapi-3.2.0",
+            "--mode",
+            "stub",
+        ])
+        .unwrap_or(Cli {
+            command: Commands::Mcp,
+        });
+        assert!(run_cli_with_writer(parsed_vc, &mut buf).is_ok());
+
+        let bad_vc = Cli {
+            command: Commands::VerifyClients {
+                repos_dir: None,
+                reference_backend_path: None,
+                lang: Some("123bad".to_string()),
+                extra_langs: vec![],
+                spec: None,
+                mode: None,
+            },
+        };
+        assert!(run_cli_with_writer(bad_vc, &mut buf).is_err());
+
+        let parsed_vb = Cli::try_parse_from([
+            "cdd-conformance",
+            "verify-backends",
+            "--repos-dir",
+            "..",
+            "--extra-lang",
+            "cobol",
+            "--roundtrip",
+        ])
+        .unwrap_or(Cli {
+            command: Commands::Mcp,
+        });
+        assert!(run_cli_with_writer(parsed_vb, &mut buf).is_ok());
+
+        let bad_vb = Cli {
+            command: Commands::VerifyBackends {
+                repos_dir: None,
+                extra_langs: vec!["123bad".to_string()],
+                roundtrip: false,
+            },
+        };
+        assert!(run_cli_with_writer(bad_vb, &mut buf).is_err());
+
+        let parsed_vb_no_rt = Cli::try_parse_from(["cdd-conformance", "verify-backends"])
+            .unwrap_or(Cli {
+                command: Commands::Mcp,
+            });
+        assert!(run_cli_with_writer(parsed_vb_no_rt, &mut buf).is_ok());
+
+        let parsed_vrt = Cli::try_parse_from([
+            "cdd-conformance",
+            "verify-roundtrip",
+            "--repos-dir",
+            "..",
+            "--extra-lang",
+            "fortran",
+            "--spec",
+            "openapi-3.2.0",
+        ])
+        .unwrap_or(Cli {
+            command: Commands::Mcp,
+        });
+        assert!(run_cli_with_writer(parsed_vrt, &mut buf).is_ok());
+
+        let bad_vrt = Cli {
+            command: Commands::VerifyRoundtrip {
+                repos_dir: None,
+                extra_langs: vec!["123bad".to_string()],
+                spec: None,
+            },
+        };
+        assert!(run_cli_with_writer(bad_vrt, &mut buf).is_err());
+
+        let parsed_vrt_default = Cli::try_parse_from(["cdd-conformance", "verify-roundtrip"]);
+        assert!(parsed_vrt_default.is_ok());
     }
 
     #[tokio::test]
@@ -1637,6 +1944,7 @@ mod tests {
         let _ = std::fs::write(&comp_file, bad_comp);
 
         assert!(run_check(&base_dir, false, None, None, false, true, &registry).is_err());
+        assert!(run_check(&base_dir, true, None, None, false, false, &registry).is_err());
         assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
 
         let good_comp =
@@ -1657,8 +1965,11 @@ mod tests {
         assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
         let _ = std::fs::remove_file(oas_dir.join("mock-server-plan.md"));
 
-        let oas_cfg = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk]\n";
+        let oas_cfg = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk, servers]\n";
         let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), oas_cfg);
+        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        let oas_cfg_found = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk]\n";
+        let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), oas_cfg_found);
         assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
         let _ = std::fs::remove_file(base_dir.join(".cdd-conformance.yaml"));
 

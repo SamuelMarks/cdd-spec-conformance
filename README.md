@@ -3,13 +3,15 @@ CDD Spec Conformance Tables
 
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-100.00%25-brightgreen.svg)](README.md)
 
-A comprehensive collection of conformance tables designed to ensure your Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are fully compliant with their respective specifications.
+A comprehensive collection of canonical specification conformance tables and the **`cdd-conformance`** Rust verification engine, pre-commit hook suite, and Model Context Protocol (MCP) server designed to ensure Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are 100% compliant with their respective specifications.
 
 ## Overview
 
 When building API or protocol tooling (such as client SDK generators, server stubs, CLIs, or MCP servers), it is critical to know which parts of a specification your tool supports, ignores, or drops. While you *could* feed the raw specification markdown or JSON schema directly to an LLM to check compliance, raw specifications are dense and unoptimized for systematic verification and progress tracking.
 
-This repository solves that problem by providing structured, easy-to-parse Markdown checklists for major specifications like OpenAPI, Swagger, Arazzo, and the Model Context Protocol (MCP). These tables are specifically designed to be **LLM-friendly** and **human-readable**, making it easy to confirm compliance, identify gaps, and track implementation progress over time.
+This repository solves that problem in two ways:
+1. **Canonical Conformance Checklists**: Structured, easy-to-parse Markdown checklists for **OpenAPI (3.0.0, 3.1.0, 3.1.1, 3.2.0)**, **Swagger 2.0**, **Arazzo 1.1.0**, **Model Context Protocol (`mcp-1.0.0` & `mcp-2026-07-28`)**, and **Mock Server Plans**, specifically designed to be **LLM-friendly** and **human-readable**.
+2. **`cdd-conformance` Verification Engine & MCP Server**: A fast, zero-panic Rust CLI, library, pre-commit hook runner, and stdio MCP server that audits language repositories against embedded canonical tables, cross-checks `COMPLIANCE.md` claims, shallow-parses source code & doc comments across 13+ languages, and orchestrates cross-language runtime equivalence and roundtrip verification.
 
 ---
 
@@ -196,11 +198,128 @@ Each checklist contains Markdown checkboxes (`[ ]`). Mark `[x]` as conformance i
 
 ## How to Use
 
-### Manual Auditing
-Navigate to the directory of the target specification and inspect the relevant checklist (e.g. `openapi-3.1.1/client-sdk.md`). Work through each object and feature, marking checkboxes and recording implementation notes in the provided column.
+### 1. `cdd-conformance` CLI
 
-### Automated / LLM-Assisted Auditing
-Provide the target checklist markdown file alongside your generator or framework source code to an LLM. Instruct the model to audit each feature in the table against your code repository and output updated checkboxes along with justification in the notes column.
+Install or build the `cdd-conformance` binary with Cargo:
+
+```bash
+cargo install --path .
+```
+
+#### Subcommands
+
+*   **`cdd-conformance check`**: Audits a repository against embedded canonical checklists and verifies `COMPLIANCE.md` claims.
+    ```bash
+    cdd-conformance check --path ../cdd-rust --strict --min-coverage 100.0 --diff
+    cdd-conformance check --path ../cdd-python-all --spec openapi-3.2.0
+    cdd-conformance check --path ../cdd-go --claims-only
+    ```
+*   **`cdd-conformance report`**: Outputs a directional (`To` / `From`) conformance report in terminal table, Markdown (`--markdown`), or JSON (`--json`) format.
+    ```bash
+    cdd-conformance report --path ../cdd-rust --markdown
+    cdd-conformance report --path ../cdd-ts --json
+    ```
+*   **`cdd-conformance matrix`**: Scans all `cdd-*` language repositories and generates the ecosystem compliance matrix (or updates `README.md` in-place).
+    ```bash
+    cdd-conformance matrix --repos-dir .. --readme README.md
+    ```
+*   **`cdd-conformance sync`**: Scaffolds missing canonical checklists or synchronizes existing checklists with upstream canonical updates while preserving checked statuses and notes.
+    ```bash
+    cdd-conformance sync --path ../cdd-c --spec openapi-3.2.0 --dry-run
+    ```
+*   **`cdd-conformance init`**: Scaffolds an initial `.cdd-conformance.yaml` configuration file in a target repository.
+    ```bash
+    cdd-conformance init --path ../cdd-kotlin
+    ```
+*   **`cdd-conformance inspect-source`**: Shallow-parses source files or directories across all 13 core CDD languages (`c`, `cpp`, `csharp`, `go`, `java`, `kotlin`, `php`, `python`, `ruby`, `rust`, `sh`, `swift`, `ts`) plus custom extension languages (`zig`, `cobol`, `fortran`, etc.), extracting structs/classes, fields, functions/methods, arguments, and doc comments.
+    ```bash
+    cdd-conformance inspect-source --path src --lang rust --require-docs
+    cdd-conformance inspect-source --path ../cdd-go --openapi-spec openapi.json
+    ```
+*   **`cdd-conformance verify-clients`**: Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the `../cdd-rust` reference backend.
+    ```bash
+    cdd-conformance verify-clients --repos-dir .. --reference-backend-path ../cdd-rust
+    ```
+*   **`cdd-conformance verify-backends`**: Verifies the $N \times N$ cross-language server equivalence and compatibility matrix (and optional `--roundtrip`).
+    ```bash
+    cdd-conformance verify-backends --repos-dir .. --roundtrip
+    ```
+*   **`cdd-conformance verify-roundtrip`**: Executes the $N$-language transitive OpenAPI and source-signature roundtrip verification chain (`Code -> OpenAPI -> Code`).
+    ```bash
+    cdd-conformance verify-roundtrip --repos-dir .. --spec openapi-3.2.0
+    ```
+*   **`cdd-conformance mcp`**: Runs the Model Context Protocol (MCP) server over standard I/O (`stdin`/`stdout`). Running `cdd-conformance` with no subcommand also defaults to launching the MCP server.
+
+---
+
+### 2. Model Context Protocol (MCP) Server
+
+`cdd-conformance` includes a built-in MCP server conforming to both **`mcp-1.0.0` (`2024-11-05`)** and **`mcp-2026-07-28`** (self-conformance tracked in [`conformance/mcp-1.0.0/servers.md`](conformance/mcp-1.0.0/servers.md) and [`conformance/mcp-2026-07-28/servers.md`](conformance/mcp-2026-07-28/servers.md)).
+
+#### Exposed MCP Tools (`tools/list` & `tools/call`)
+1. `check_conformance` — Audits a target CDD repository and returns per-specification directional conformance scores.
+2. `get_compliance_matrix` — Generates the unified ecosystem compliance matrix across all `cdd-*` language repositories.
+3. `diff_checklists` — Diffs a target repository checklist against its canonical specification table.
+4. `validate_claims` — Cross-checks documented claims in `COMPLIANCE.md` against checklist ground truth.
+5. `inspect_language_source_signatures` — Shallow-parses source code across 13+ languages for structs/classes, fields, functions, args, and 100% doc comments.
+6. `verify_language_clients_against_rust_backend` — Verifies Client SDKs and CLIs against the `../cdd-rust` reference backend.
+7. `verify_language_backend_compatibility_matrix` — Runs the $N \times N$ cross-language server compatibility matrix.
+8. `verify_cross_language_roundtrip` — Executes transitive $N$-language OpenAPI and source-signature roundtrip verification.
+
+#### Exposed MCP Resources (`resources/list`, `resources/templates/list`, & `resources/read`)
+*   `conformance://specs` — JSON catalog of all supported specification identifiers.
+*   `conformance://specs/{spec_id}/{profile}` — Raw canonical Markdown checklist for any specification and profile (e.g. `conformance://specs/openapi-3.2.0/client-sdk`).
+
+#### Exposed MCP Prompts (`prompts/list` & `prompts/get`)
+*   `audit_repo_conformance` (`repo_path`, `spec_id`) — Guides an AI assistant through auditing a language repository against CDD conformance checklists.
+*   `implement_conformance_feature` (`feature_name`, `spec_id`) — Guides implementation of an absent or unreviewed specification feature with 100% test and doc coverage.
+
+---
+
+### 3. Pre-commit Hooks (`.pre-commit-hooks.yaml`)
+
+Add `cdd-spec-conformance` to your repository's `.pre-commit-config.yaml` to enforce conformance automatically before every commit:
+
+```yaml
+repos:
+  - repo: https://github.com/SamuelMarks/cdd-spec-conformance
+    rev: master
+    hooks:
+      - id: cdd-conformance-check          # Validates checklists and implemented standards
+      - id: cdd-conformance-strict         # Enforces 100% canonical schema parity and zero unreviewed rows
+      - id: cdd-conformance-claims         # Verifies COMPLIANCE.md claims match checklist tables
+      - id: cdd-conformance-update-matrix  # Updates the Ecosystem Conformance Matrix in README.md
+```
+
+---
+
+### 4. Project Configuration (`.cdd-conformance.yaml`)
+
+Repositories can customize verification targets, coverage thresholds, custom language toolchains, and shallow parser syntax rules via a `.cdd-conformance.yaml` file at the repository root (scaffolded via `cdd-conformance init`):
+
+```yaml
+language: rust
+strict: true
+min_coverage:
+  to: 100.0
+  from: 100.0
+  overall: 100.0
+standards:
+  - spec: openapi-3.2.0
+    profiles: [client-sdk, client-sdk-cli, servers]
+  - spec: mcp-1.0.0
+    profiles: [client-sdk, client-sdk-cli, servers]
+paths:
+  conformance_dir: conformance
+  compliance_file: COMPLIANCE.md
+```
+
+---
+
+### 5. Manual & LLM-Assisted Checklist Auditing
+
+*   **Manual Auditing**: Navigate to the directory of the target specification and inspect the relevant checklist (e.g. `openapi-3.2.0/client-sdk.md`). Work through each object and feature, marking checkboxes and recording implementation notes in the provided column.
+*   **Automated / LLM-Assisted Auditing**: Connect your AI client to `cdd-conformance mcp` (or provide the target checklist markdown file alongside your source code) to systematically audit each feature against your repository and update checkboxes with justification notes.
 
 ---
 
