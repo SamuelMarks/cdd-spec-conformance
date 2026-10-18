@@ -77,6 +77,9 @@ cdd-conformance inspect-source -p ../cdd-go
 # Require 100% doc comments on all extracted symbols and verify against an OpenAPI spec
 cdd-conformance inspect-source -p ../cdd-go --require-docs --openapi-spec openapi.yaml
 
+# Require 100% doc comments and verify 1:1 workflow/input parity against an Arazzo 1.1.0 spec
+cdd-conformance inspect-source -p ../cdd-go --require-docs --arazzo-spec workflow.arazzo.yaml
+
 # Include test, fixture, and example directories during inspection
 cdd-conformance inspect-source -p ../cdd-go --include-tests
 ```
@@ -150,3 +153,23 @@ cdd-conformance verify-roundtrip --repos-dir .. --spec openapi-3.2.0
 | `mcp-1.0.0` | Model Context Protocol 1.0.0 (`2024-11-05`) | `client-sdk`, `client-sdk-cli`, `servers` |
 | `mcp-2026-07-28` | Model Context Protocol (`2026-07-28`) | `client-sdk`, `client-sdk-cli`, `servers` |
 | `mock-server` | Stateful / Ephemeral Mock Server Plan | `mock-server-plan` |
+
+---
+
+## 4. Per-Agent Arazzo 1.1.0 Verification Contract (`cdd-c` .. `cdd-ts`)
+
+When each of the 13 autonomous language agents (`cdd-c`, `cdd-cpp`, `cdd-csharp`, `cdd-go`, `cdd-java`, `cdd-kotlin`, `cdd-php`, `cdd-python-all`, `cdd-ruby`, `cdd-rust`, `cdd-sh`, `cdd-swift`, `cdd-ts`) implements Arazzo 1.1.0 (`from_arazzo` and `to_arazzo`), it must run the following verification gates:
+
+```bash
+# 1. Ensure canonical Arazzo 1.1.0 checklists exist under conformance/arazzo-1.1.0/
+cdd-conformance sync ../<repo> -s arazzo-1.1.0
+
+# 2. Verify 100% [To, From] Arazzo 1.1.0 checklist coverage and COMPLIANCE.md claims
+cdd-conformance check ../<repo> -s arazzo-1.1.0 --strict --min-coverage 100.0 --diff
+
+# 3. Verify 100% doc coverage (args, functions, fields, classes/structs) and 1:1 Arazzo workflow/input parity
+cdd-conformance inspect-source -p ../<repo> --require-docs --arazzo-spec <workflow.arazzo.yaml>
+
+# 4. Verify lossless cross-language Arazzo 1.1.0 roundtrip equivalence
+cdd-conformance verify-roundtrip --repos-dir .. -s arazzo-1.1.0
+```

@@ -36,6 +36,9 @@ pub struct LanguageCapabilities {
     /// Supports Model Context Protocol server/client generation (`mcp`).
     #[serde(default)]
     pub mcp: bool,
+    /// Supports Arazzo 1.1.0 workflow orchestration code generation and extraction (`from_arazzo` / `to_arazzo`).
+    #[serde(default)]
+    pub arazzo: bool,
     /// Supports compiling or running as a WebAssembly target (`wasm`).
     #[serde(default)]
     pub wasm: bool,
@@ -58,6 +61,7 @@ impl LanguageCapabilities {
             sync: true,
             json_rpc: true,
             mcp: true,
+            arazzo: true,
             wasm: false,
         }
     }
@@ -663,6 +667,48 @@ impl LanguageToolchainSpec {
             },
         }
     }
+
+    /// Constructs the command-line argument sequence to generate code from an Arazzo 1.1.0 specification.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_spec` - Path to the input `.arazzo.yaml` or `.arazzo.json` specification file.
+    /// * `output_dir` - Target output directory for generated workflow code.
+    ///
+    /// # Returns
+    ///
+    /// Full command token vector combining `self.cli_binary_cmd` with `from_arazzo -i <input_spec> -o <output_dir>`.
+    #[must_use]
+    pub fn build_from_arazzo_cmd(&self, input_spec: &str, output_dir: &str) -> Vec<String> {
+        let mut cmd = self.cli_binary_cmd.clone();
+        cmd.push("from_arazzo".to_string());
+        cmd.push("-i".to_string());
+        cmd.push(input_spec.to_string());
+        cmd.push("-o".to_string());
+        cmd.push(output_dir.to_string());
+        cmd
+    }
+
+    /// Constructs the command-line argument sequence to extract an Arazzo 1.1.0 specification from source code.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_src` - Path to the source directory or file containing workflow code.
+    /// * `output_spec` - Target path for the emitted `.arazzo.yaml` or `.arazzo.json` file.
+    ///
+    /// # Returns
+    ///
+    /// Full command token vector combining `self.cli_binary_cmd` with `to_arazzo -i <input_src> -o <output_spec>`.
+    #[must_use]
+    pub fn build_to_arazzo_cmd(&self, input_src: &str, output_spec: &str) -> Vec<String> {
+        let mut cmd = self.cli_binary_cmd.clone();
+        cmd.push("to_arazzo".to_string());
+        cmd.push("-i".to_string());
+        cmd.push(input_src.to_string());
+        cmd.push("-o".to_string());
+        cmd.push(output_spec.to_string());
+        cmd
+    }
 }
 
 /// Target client artifact emitted by a language compiler.
@@ -814,6 +860,13 @@ mod tests {
             assert!(!spec.cli_binary_cmd.is_empty());
             assert!(spec.supported_targets.sdk);
             assert!(spec.supported_targets.server);
+            assert!(spec.supported_targets.arazzo);
+            let from_cmd = spec.build_from_arazzo_cmd("wf.arazzo.yaml", "out_dir");
+            assert!(from_cmd.contains(&"from_arazzo".to_string()));
+            assert!(from_cmd.contains(&"wf.arazzo.yaml".to_string()));
+            let to_cmd = spec.build_to_arazzo_cmd("src_dir", "emitted.arazzo.json");
+            assert!(to_cmd.contains(&"to_arazzo".to_string()));
+            assert!(to_cmd.contains(&"emitted.arazzo.json".to_string()));
         }
 
         for ext in ["zig", "cobol", "fortran", "ada"] {

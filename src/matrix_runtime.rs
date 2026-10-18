@@ -9,8 +9,8 @@
 use crate::config::ProjectConfig;
 use crate::ecosystem::{discover_language_toolchains, LanguageToolchainSpec};
 use crate::equivalence::{
-    verify_database_table_count, verify_http_response_equivalence, verify_mcp_json_rpc_exchange,
-    verify_openapi_equivalence, verify_source_bundle_equivalence,
+    verify_arazzo_equivalence, verify_database_table_count, verify_http_response_equivalence,
+    verify_mcp_json_rpc_exchange, verify_openapi_equivalence, verify_source_bundle_equivalence,
     verify_strict_validation_pointer_equivalence,
 };
 use crate::error::ConformanceError;
@@ -285,7 +285,7 @@ pub fn inspect_source_signatures_with_options(
                 path: spec_path.to_path_buf(),
                 reason: e.to_string(),
             })?;
-        bundle.verify_against_openapi(&val, &lang)?;
+        bundle.verify_against_spec_doc(&val, &lang)?;
     }
 
     Ok(bundle)
@@ -697,6 +697,14 @@ pub fn evaluate_cli_verification(client_lang: &LanguageId) -> CliVerificationDet
 }
 
 /// Checks whether a repository's discovered conformance checklists are valid (zero contradictory rows).
+///
+/// # Arguments
+///
+/// * `repo_path` - Path to the language repository root.
+///
+/// # Returns
+///
+/// `true` if all discovered checklists parse cleanly without contradictory directional flags.
 fn repo_checklists_valid(repo_path: &Path) -> bool {
     let tables = crate::discovery::scan_repository(repo_path)
         .and_then(|proj| proj.parse_all_checklists())
@@ -748,7 +756,12 @@ pub fn verify_clients_against_rust_backend(
     let toolchains = discover_language_toolchains(repos_dir, extra_langs)?;
     let reference_backend_present = reference_backend_path.is_dir();
     let reference_backend_summary = evaluate_reference_backend_summary(reference_backend_path);
-    let canonical_oas = canonical_conformance_openapi_doc();
+    let is_arazzo = spec == SpecId::Arazzo110;
+    let canonical_spec_doc = if is_arazzo {
+        canonical_conformance_arazzo_doc()
+    } else {
+        canonical_conformance_openapi_doc()
+    };
     let port_ok = crate::runner::PortAllocator::allocate(&LanguageId::Rust).is_ok();
 
     let mut results = Vec::new();
@@ -767,16 +780,20 @@ pub fn verify_clients_against_rust_backend(
         };
         let checklists_ok = !repo_present || repo_checklists_valid(&repo_path);
 
-        let (virt_name, snippet) = canonical_generated_snippet(&tc.language_id, false);
+        let (virt_name, snippet) = if is_arazzo {
+            canonical_arazzo_generated_snippet(&tc.language_id, false)
+        } else {
+            canonical_generated_snippet(&tc.language_id, false)
+        };
         let generated_bundle =
             parse_source_str(&snippet, Path::new(virt_name), &tc.language_id, None);
         let docs_ok = generated_bundle
             .verify_100_percent_docs(&tc.language_id)
             .is_ok();
-        let oas_ok = generated_bundle
-            .verify_against_openapi(&canonical_oas, &tc.language_id)
+        let spec_ok = generated_bundle
+            .verify_against_spec_doc(&canonical_spec_doc, &tc.language_id)
             .is_ok();
-        let generated_signatures_verified = docs_ok & oas_ok & checklists_ok & port_ok;
+        let generated_signatures_verified = docs_ok & spec_ok & checklists_ok & port_ok;
 
         let wire_edge_cases = evaluate_wire_edge_cases(&tc.language_id);
         let cli_verification = evaluate_cli_verification(&tc.language_id);
@@ -1127,6 +1144,266 @@ pub fn verify_backends_matrix(
     })
 }
 
+/// Returns a canonical generated Arazzo 1.1.0 workflow source snippet for custom extension languages.
+///
+/// # Arguments
+///
+/// * `slug` - Custom language slug string.
+/// * `mutated` - If `true`, includes the synchronized `tag` field.
+///
+/// # Returns
+///
+/// Tuple of `(virtual_filename, source_code_string)`.
+#[must_use]
+fn canonical_arazzo_custom_snippet(slug: &str, mutated: bool) -> (&'static str, String) {
+    let extra_zig = if mutated {
+        "\n    /// Tag.\n    tag: []const u8,"
+    } else {
+        ""
+    };
+    let extra_cobol = if mutated {
+        "\n       *> Tag.\n       05 TAG PIC X(32)."
+    } else {
+        ""
+    };
+    let extra_fortran = if mutated {
+        "\n    !> Tag.\n    character(len=32) :: tag"
+    } else {
+        ""
+    };
+
+    match slug {
+        "cobol" => (
+            "workflow.cbl",
+            format!(
+                "       *> Purchase input.\n       01 PURCHASE-INPUT.\n       *> Pet ID.\n       05 PET-ID PIC 9(9).\n       *> Coupon code.\n       05 COUPON-CODE PIC X(32).{extra_cobol}\n       *> Purchase pet workflow.\n       *> @param PET-ID Pet ID.\n       PROGRAM-ID. PURCHASE-PET-WORKFLOW.\n       PROCEDURE DIVISION USING PET-ID.\n"
+            ),
+        ),
+        "fortran" => (
+            "workflow.f90",
+            format!(
+                "!> Purchase input.\ntype :: PurchaseInput\n    !> Pet ID.\n    integer :: pet_id\n    !> Coupon code.\n    character(len=32) :: coupon_code{extra_fortran}\nend type PurchaseInput\n!> Purchase pet workflow.\n!> @param pet_id Pet ID.\nsubroutine purchase_pet_workflow(pet_id)\nend subroutine purchase_pet_workflow\n"
+            ),
+        ),
+        _ => (
+            "workflow.zig",
+            format!(
+                "/// Purchase input.\npub const PurchaseInput = struct {{\n    /// Pet ID.\n    petId: i64,\n    /// Coupon code.\n    couponCode: []const u8,{extra_zig}\n}};\n/// Purchase pet workflow.\n/// @param petId Pet ID.\npub fn purchasePetWorkflow(petId: i64) void {{}}\n"
+            ),
+        ),
+    }
+}
+
+/// Returns a canonical generated Arazzo 1.1.0 workflow source snippet for any of the 13+ languages.
+///
+/// Models `PurchaseInput` (`petId`, `couponCode`) and `purchasePetWorkflow(petId)`.
+///
+/// # Arguments
+///
+/// * `lang` - Target `LanguageId`.
+/// * `mutated` - If `true`, includes a synchronized `tag` field.
+///
+/// # Returns
+///
+/// Tuple of `(virtual_filename, source_code_string)`.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn canonical_arazzo_generated_snippet(
+    lang: &LanguageId,
+    mutated: bool,
+) -> (&'static str, String) {
+    let opt = |s: &'static str| if mutated { s } else { "" };
+    match lang {
+        LanguageId::C => (
+            "workflow.h",
+            format!(
+                "/** Purchase input. */\nstruct PurchaseInput {{\n    /** Pet ID. */\n    long pet_id;\n    /** Coupon code. */\n    char *coupon_code;{}\n}};\n/** Purchase pet workflow.\n * @param pet_id Pet ID.\n */\nint purchase_pet_workflow(long pet_id);\n",
+                opt("\n    /** Tag. */\n    char *tag;")
+            ),
+        ),
+        LanguageId::Cpp => (
+            "workflow.hpp",
+            format!(
+                "/** Purchase input. */\nclass PurchaseInput {{\npublic:\n    /** Pet ID. */\n    long pet_id;\n    /** Coupon code. */\n    std::string coupon_code;{}\n}};\n/** Purchase pet workflow.\n * @param pet_id Pet ID.\n */\nint purchase_pet_workflow(long pet_id);\n",
+                opt("\n    /** Tag. */\n    std::string tag;")
+            ),
+        ),
+        LanguageId::CSharp => (
+            "Workflow.cs",
+            format!(
+                "/// <summary>Purchase input.</summary>\npublic class PurchaseInput {{\n    /// <summary>Pet ID.</summary>\n    public long PetId {{ get; set; }}\n    /// <summary>Coupon code.</summary>\n    public string CouponCode {{ get; set; }}{}\n    /// <summary>Purchase pet workflow.</summary>\n    /// <param name=\"petId\">Pet ID.</param>\n    public void PurchasePetWorkflow(long petId) {{}}\n}}\n",
+                opt("\n    /// <summary>Tag.</summary>\n    public string Tag { get; set; }")
+            ),
+        ),
+        LanguageId::Go => (
+            "workflow.go",
+            format!(
+                "// PurchaseInput model.\ntype PurchaseInput struct {{\n    // Pet ID.\n    PetId int64\n    // Coupon code.\n    CouponCode string{}\n}}\n// PurchasePetWorkflow executes workflow for petId.\nfunc PurchasePetWorkflow(petId int64) {{}}\n",
+                opt("\n    // Tag.\n    Tag string")
+            ),
+        ),
+        LanguageId::Java => (
+            "PurchaseInput.java",
+            format!(
+                "/** Purchase input. */\npublic class PurchaseInput {{\n    /** Pet ID. */\n    public long petId;\n    /** Coupon code. */\n    public String couponCode;{}\n    /** Purchase pet workflow.\n     * @param petId Pet ID.\n     */\n    public void purchasePetWorkflow(long petId) {{}}\n}}\n",
+                opt("\n    /** Tag. */\n    public String tag;")
+            ),
+        ),
+        LanguageId::Kotlin => (
+            "Workflow.kt",
+            format!(
+                "/** Purchase input.\n * @property petId Pet ID.\n * @property couponCode Coupon code.{}\n */\ndata class PurchaseInput(val petId: Long, val couponCode: String{})\n/** Purchase pet workflow.\n * @param petId Pet ID.\n */\nfun purchasePetWorkflow(petId: Long) {{}}\n",
+                opt("\n * @property tag Tag."),
+                opt(", val tag: String")
+            ),
+        ),
+        LanguageId::Php => (
+            "Workflow.php",
+            format!(
+                "<?php\n/** Purchase input. */\nclass PurchaseInput {{\n    /** @var int Pet ID. */\n    public int $petId;\n    /** @var string Coupon code. */\n    public string $couponCode;{}\n    /** Purchase pet workflow.\n     * @param int $petId Pet ID.\n     */\n    public function purchasePetWorkflow(int $petId): void {{}}\n}}\n",
+                opt("\n    /** @var string Tag. */\n    public string $tag;")
+            ),
+        ),
+        LanguageId::Python => (
+            "workflow.py",
+            format!(
+                "class PurchaseInput:\n    \"\"\"Purchase input.\"\"\"\n    #: Pet ID.\n    pet_id: int\n    #: Coupon code.\n    coupon_code: str{}\n\ndef purchase_pet_workflow(pet_id: int) -> None:\n    \"\"\"Purchase pet workflow.\n    :param pet_id: Pet ID.\n    \"\"\"\n    pass\n",
+                opt("\n    #: Tag.\n    tag: str")
+            ),
+        ),
+        LanguageId::Ruby => (
+            "workflow.rb",
+            format!(
+                "# Purchase input.\nclass PurchaseInput\n  # Pet ID.\n  attr_accessor :pet_id\n  # Coupon code.\n  attr_accessor :coupon_code{}\n  # Purchase pet workflow.\n  # @param [Integer] pet_id Pet ID.\n  def purchase_pet_workflow(pet_id)\n  end\nend\n",
+                opt("\n  # Tag.\n  attr_accessor :tag")
+            ),
+        ),
+        LanguageId::Rust => (
+            "workflow.rs",
+            format!(
+                "/// Purchase input.\npub struct PurchaseInput {{\n/// Pet ID.\npub pet_id: i64,\n/// Coupon code.\npub coupon_code: String,{}\n}}\n/// Purchase pet workflow.\n/// * `pet_id` - Pet ID.\npub fn purchase_pet_workflow(pet_id: i64) {{}}\n",
+                opt("\n/// Tag.\npub tag: String,")
+            ),
+        ),
+        LanguageId::Sh => (
+            "workflow.sh",
+            format!(
+                "# @struct PurchaseInput Purchase input.\n# @field pet_id Pet ID.\n# @field coupon_code Coupon code.{}\n# Purchase pet workflow.\n# @param pet_id Pet ID.\npurchase_pet_workflow() {{\n  local pet_id=\"$1\"\n}}\n",
+                opt("\n# @field tag Tag.")
+            ),
+        ),
+        LanguageId::Swift => (
+            "Workflow.swift",
+            format!(
+                "/// Purchase input.\npublic struct PurchaseInput {{\n    /// Pet ID.\n    public let petId: Int64\n    /// Coupon code.\n    public let couponCode: String{}\n}}\n/// Purchase pet workflow.\n/// - Parameter petId: Pet ID.\npublic func purchasePetWorkflow(petId: Int64) {{}}\n",
+                opt("\n    /// Tag.\n    public let tag: String")
+            ),
+        ),
+        LanguageId::TypeScript => (
+            "workflow.ts",
+            format!(
+                "/** Purchase input. */\nexport interface PurchaseInput {{\n  /** Pet ID. */\n  petId: number;\n  /** Coupon code. */\n  couponCode: string;{}\n}}\n/** Purchase pet workflow.\n * @param petId - Pet ID.\n */\nexport function purchasePetWorkflow(petId: number): void {{}}\n",
+                opt("\n  /** Tag. */\n  tag: string;")
+            ),
+        ),
+        LanguageId::Custom(slug) => canonical_arazzo_custom_snippet(slug.as_str(), mutated),
+    }
+}
+
+/// Returns the canonical conformance Arazzo 1.1.0 specification JSON value used for
+/// cross-language workflow signature and roundtrip verification.
+///
+/// # Returns
+///
+/// Canonical Arazzo 1.1.0 `serde_json::Value`.
+#[must_use]
+pub fn canonical_conformance_arazzo_doc() -> serde_json::Value {
+    serde_json::json!({
+        "arazzo": "1.1.0",
+        "$self": "https://example.com/workflows/pet-purchase.arazzo.yaml",
+        "info": {
+            "title": "CDD Canonical Arazzo 1.1.0 Workflow",
+            "summary": "Multi-step pet lookup and purchase orchestration",
+            "version": "1.0.0"
+        },
+        "sourceDescriptions": [
+            {
+                "name": "petStoreApi",
+                "url": "https://example.com/openapi.yaml",
+                "type": "openapi"
+            },
+            {
+                "name": "petEvents",
+                "url": "https://example.com/asyncapi.yaml",
+                "type": "asyncapi"
+            }
+        ],
+        "components": {
+            "inputs": {
+                "PurchaseInput": {
+                    "type": "object",
+                    "properties": {
+                        "petId": { "type": "integer" },
+                        "couponCode": { "type": "string" }
+                    }
+                }
+            }
+        },
+        "workflows": [
+            {
+                "workflowId": "purchasePetWorkflow",
+                "inputs": {
+                    "type": "object",
+                    "properties": {
+                        "petId": { "type": "integer" }
+                    }
+                },
+                "steps": [
+                    {
+                        "stepId": "findPetStep",
+                        "operationId": "listPets",
+                        "timeout": 5000,
+                        "parameters": [
+                            {
+                                "name": "petId",
+                                "in": "query",
+                                "value": "$inputs.petId"
+                            }
+                        ],
+                        "successCriteria": [
+                            {
+                                "context": "$statusCode",
+                                "condition": "$statusCode == 200",
+                                "type": {
+                                    "type": "jsonpath",
+                                    "version": "rfc9535"
+                                }
+                            }
+                        ],
+                        "outputs": {
+                            "selectedPetId": {
+                                "context": "$response.body",
+                                "selector": "$.items[0].id",
+                                "selectorType": {
+                                    "type": "jsonpath",
+                                    "version": "rfc9535"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "stepId": "emitOrderEvent",
+                        "channelPath": "{$sourceDescriptions.petEvents.url}#/channels/~1orderPlaced",
+                        "action": "send",
+                        "dependsOn": ["findPetStep"],
+                        "correlationId": "$message.header#/correlationId"
+                    }
+                ]
+            }
+        ]
+    })
+}
+
 /// Returns the canonical conformance `OpenAPI` 3.2.0 specification JSON value used for
 /// cross-language signature and roundtrip verification.
 #[must_use]
@@ -1158,9 +1435,9 @@ fn canonical_conformance_openapi_doc() -> serde_json::Value {
     })
 }
 
-/// Executes the `N`-language transitive `OpenAPI` roundtrip verification chain.
+/// Executes the `N`-language transitive `OpenAPI` or Arazzo 1.1.0 roundtrip verification chain.
 ///
-/// Verifies both shallow source signatures and `OpenAPI` semantic equivalence at every hop
+/// Verifies both shallow source signatures and specification semantic equivalence at every hop
 /// (`Spec_0 -> B_1 -> Spec_1 -> ... -> B_N -> Spec_N`).
 ///
 /// # Arguments
@@ -1183,26 +1460,35 @@ pub fn verify_cross_language_roundtrip_chain(
 ) -> Result<RoundtripReport, ConformanceError> {
     let target_spec = spec.unwrap_or(SpecId::OpenApi320);
     let toolchains = discover_language_toolchains(repos_dir, extra_langs)?;
-    let canonical_doc = canonical_conformance_openapi_doc();
+    let is_arazzo = target_spec == SpecId::Arazzo110;
+    let canonical_doc = if is_arazzo {
+        canonical_conformance_arazzo_doc()
+    } else {
+        canonical_conformance_openapi_doc()
+    };
 
     let mut hops = Vec::with_capacity(toolchains.len());
     for (idx, tc) in toolchains.iter().enumerate() {
         let repo_path = repos_dir.join(&tc.repo_name);
         let repo_ok = !repo_path.is_dir() || repo_checklists_valid(&repo_path);
-        let (vname, snippet) = canonical_generated_snippet(&tc.language_id, false);
+        let (vname, snippet) = if is_arazzo {
+            canonical_arazzo_generated_snippet(&tc.language_id, false)
+        } else {
+            canonical_generated_snippet(&tc.language_id, false)
+        };
         let bundle = parse_source_str(&snippet, Path::new(vname), &tc.language_id, None);
         let docs_ok = bundle.verify_100_percent_docs(&tc.language_id).is_ok();
-        let oas_ok = bundle
-            .verify_against_openapi(&canonical_doc, &tc.language_id)
+        let sig_ok = bundle
+            .verify_against_spec_doc(&canonical_doc, &tc.language_id)
             .is_ok();
-        let eq_ok = verify_openapi_equivalence(
-            &tc.language_id,
-            target_spec,
-            &canonical_doc,
-            &canonical_doc,
-        )
-        .is_ok();
-        let equivalent = docs_ok & oas_ok & eq_ok & repo_ok;
+        let eq_ok = if is_arazzo {
+            verify_arazzo_equivalence(&tc.language_id, target_spec, &canonical_doc, &canonical_doc)
+                .is_ok()
+        } else {
+            verify_openapi_equivalence(&tc.language_id, target_spec, &canonical_doc, &canonical_doc)
+                .is_ok()
+        };
+        let equivalent = docs_ok & sig_ok & eq_ok & repo_ok;
         hops.push(RoundtripHop {
             hop_index: idx + 1,
             language: tc.language_id.clone(),
@@ -1217,6 +1503,15 @@ pub fn verify_cross_language_roundtrip_chain(
 }
 
 /// Counts shallow-parsed `(structs, functions)` in a repository's `src/` directory if present.
+///
+/// # Arguments
+///
+/// * `repo_path` - Path to the language repository root.
+/// * `tc` - Language toolchain specification.
+///
+/// # Returns
+///
+/// Tuple of `(parsed_struct_count, parsed_function_count)`.
 fn count_repo_signatures(repo_path: &Path, tc: &LanguageToolchainSpec) -> (usize, usize) {
     let candidate = if repo_path.join("src").is_dir() {
         repo_path.join("src")
@@ -1232,7 +1527,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     fn test_inspect_source_and_verify_clients_backends_roundtrip() {
         let base = std::env::temp_dir().join(format!("cdd_mat_t1_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -1394,6 +1689,49 @@ paths:
         assert!(
             verify_cross_language_roundtrip_chain(&base, &["123bad".to_string()], None).is_err()
         );
+
+        // Verify Arazzo 1.1.0 client and roundtrip chains across all 13 + custom languages
+        let arazzo_clients = verify_clients_against_rust_backend(
+            &base,
+            &rust_repo,
+            None,
+            &[
+                "zig".to_string(),
+                "cobol".to_string(),
+                "fortran".to_string(),
+            ],
+            Some(SpecId::Arazzo110),
+            None,
+        )
+        .ok();
+        assert_eq!(arazzo_clients.map(|r| r.results.len()), Some(16));
+
+        let arazzo_rt = verify_cross_language_roundtrip_chain(
+            &base,
+            &[
+                "zig".to_string(),
+                "cobol".to_string(),
+                "fortran".to_string(),
+            ],
+            Some(SpecId::Arazzo110),
+        )
+        .ok();
+        assert_eq!(arazzo_rt.as_ref().map(|r| r.hops.len()), Some(16));
+
+        let arazzo_doc = canonical_conformance_arazzo_doc();
+        for lang in LanguageId::core_13() {
+            let (vname, src_mut) = canonical_arazzo_generated_snippet(lang, true);
+            let b_mut = parse_source_str(&src_mut, Path::new(vname), lang, None);
+            assert!(b_mut.verify_100_percent_docs(lang).is_ok());
+            assert!(b_mut.verify_against_spec_doc(&arazzo_doc, lang).is_ok());
+        }
+        for ext in ["zig", "cobol", "fortran"] {
+            let lang = LanguageId::from_str(ext).unwrap_or(LanguageId::Rust);
+            let (vname, src_mut) = canonical_arazzo_generated_snippet(&lang, true);
+            let b_mut = parse_source_str(&src_mut, Path::new(vname), &lang, None);
+            assert!(b_mut.verify_100_percent_docs(&lang).is_ok());
+            assert!(b_mut.verify_against_spec_doc(&arazzo_doc, &lang).is_ok());
+        }
 
         let _ = std::fs::remove_dir_all(&base);
     }

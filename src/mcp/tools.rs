@@ -2,17 +2,19 @@
 
 use crate::claims::verify_compliance_claims;
 use crate::diff::compare_checklists_with_path;
-use crate::discovery::{scan_all_repositories, scan_repository};
+use crate::discovery::{resolve_repo_path, scan_all_repositories, scan_repository};
+use crate::equivalence::{validate_arazzo_110_document, verify_arazzo_equivalence};
 use crate::error::ConformanceError;
 use crate::matrix_runtime::{
     inspect_source_signatures, verify_backends_matrix, verify_clients_against_rust_backend,
     verify_cross_language_roundtrip_chain,
 };
-use crate::model::{ProfileKind, ServerOperatingMode, SpecId};
+use crate::model::{LanguageId, ProfileKind, ServerOperatingMode, SpecId};
 use crate::registry::CanonicalRegistry;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 /// Parameter payload for `tools/call`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +108,9 @@ pub struct InspectSourceArgs {
     /// Optional path to an `OpenAPI` JSON/YAML file.
     #[serde(default)]
     pub openapi_spec: Option<PathBuf>,
+    /// Optional path to an Arazzo 1.1.0 JSON/YAML file.
+    #[serde(default)]
+    pub arazzo_spec: Option<PathBuf>,
 }
 
 /// Strongly typed arguments for the `verify_language_clients_against_rust_backend` tool.
@@ -154,6 +159,19 @@ pub struct VerifyRoundtripArgs {
     /// Optional specification filter.
     #[serde(default)]
     pub spec: Option<SpecId>,
+}
+
+/// Strongly typed arguments for the `validate_arazzo_spec` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidateArazzoSpecArgs {
+    /// Path to the Arazzo 1.1.0 JSON/YAML file to validate.
+    pub spec_path: PathBuf,
+    /// Optional path to an expected Arazzo 1.1.0 JSON/YAML file to verify semantic equivalence against.
+    #[serde(default)]
+    pub expected_spec_path: Option<PathBuf>,
+    /// Optional language slug for error attribution (defaults to `rust`).
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// Tool definition advertised by the server in `tools/list`.
@@ -254,7 +272,8 @@ pub fn validate_path_within_roots(
     requested: &Path,
     allowed_roots: &[PathBuf],
 ) -> Result<PathBuf, ConformanceError> {
-    let canonical_req = requested.canonicalize().map_err(|e| ConformanceError::Io {
+    let resolved = resolve_repo_path(requested);
+    let canonical_req = resolved.canonicalize().map_err(|e| ConformanceError::Io {
         source: e,
         path: requested.to_path_buf(),
     })?;
@@ -379,7 +398,8 @@ pub fn list_tools() -> ListToolsResult {
                         "path": { "type": "string", "description": "Path to source file or directory." },
                         "lang": { "type": "string", "description": "Optional explicit language slug (e.g. rust, c, zig, cobol, fortran)." },
                         "require_docs": { "type": "boolean", "description": "Require 100% doc comments on structs, fields, functions, and args." },
-                        "openapi_spec": { "type": "string", "description": "Optional path to OpenAPI spec to verify against." }
+                        "openapi_spec": { "type": "string", "description": "Optional path to OpenAPI spec to verify against." },
+                        "arazzo_spec": { "type": "string", "description": "Optional path to Arazzo 1.1.0 spec to verify against." }
                     },
                     "required": ["path"]
                 }),
@@ -420,6 +440,19 @@ pub fn list_tools() -> ListToolsResult {
                         "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
                         "spec": { "type": "string", "description": "Optional specification filter." }
                     }
+                }),
+            },
+            Tool {
+                name: "validate_arazzo_spec".to_string(),
+                description: "Validates an Arazzo 1.1.0 JSON/YAML file against normative structural rules and optional semantic equivalence.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "spec_path": { "type": "string", "description": "Path to the Arazzo 1.1.0 JSON/YAML specification file." },
+                        "expected_spec_path": { "type": "string", "description": "Optional path to expected Arazzo 1.1.0 specification for equivalence checking." },
+                        "lang": { "type": "string", "description": "Optional language slug (e.g. rust, go, python)." }
+                    },
+                    "required": ["spec_path"]
                 }),
             },
         ],
@@ -630,6 +663,73 @@ fn handle_validate_claims(
     }
 }
 
+/// Reads and parses a YAML or JSON file within `allowed_roots` into a `serde_json::Value`.
+///
+/// # Arguments
+///
+/// * `path` - File path to validate and read.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// Tuple of `(validated_path, parsed_json_value)`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if root validation, file reading, or YAML/JSON parsing fails.
+fn read_and_parse_yaml_within_roots(
+    path: &Path,
+    allowed_roots: &[PathBuf],
+) -> Result<(PathBuf, serde_json::Value), ConformanceError> {
+    let valid_path = validate_path_within_roots(path, allowed_roots)?;
+    let raw = std::fs::read_to_string(&valid_path).map_err(|e| ConformanceError::Io {
+        source: e,
+        path: valid_path.clone(),
+    })?;
+    let doc: serde_json::Value =
+        serde_yaml::from_str(&raw).map_err(|e| ConformanceError::InvalidConfig {
+            path: valid_path.clone(),
+            reason: e.to_string(),
+        })?;
+    Ok((valid_path, doc))
+}
+
+/// Handles `validate_arazzo_spec` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `ValidateArazzoSpecArgs`.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` confirming Arazzo 1.1.0 structural validity and optional semantic equivalence.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if reading, parsing, or Arazzo 1.1.0 validation fails.
+fn handle_validate_arazzo_spec(
+    args: &ValidateArazzoSpecArgs,
+    allowed_roots: &[PathBuf],
+) -> Result<CallToolResult, ConformanceError> {
+    let lang = match args.lang.as_deref() {
+        Some(raw) => LanguageId::from_str(raw)?,
+        None => LanguageId::Rust,
+    };
+    let (valid_spec, actual_doc) =
+        read_and_parse_yaml_within_roots(&args.spec_path, allowed_roots)?;
+    validate_arazzo_110_document(&actual_doc, &lang)?;
+
+    if let Some(ref exp_path) = args.expected_spec_path {
+        let (_, exp_doc) = read_and_parse_yaml_within_roots(exp_path, allowed_roots)?;
+        verify_arazzo_equivalence(&lang, SpecId::Arazzo110, &exp_doc, &actual_doc)?;
+    }
+
+    Ok(CallToolResult::text(format!(
+        "PASS: {} is a valid Arazzo 1.1.0 specification.",
+        valid_spec.display()
+    )))
+}
 /// Executes a tool call request with root boundary validation.
 ///
 /// # Arguments
@@ -694,11 +794,12 @@ pub fn execute_tool_with_roots(
         "inspect_language_source_signatures" => {
             let args: InspectSourceArgs = parse_tool_args(name, arguments)?;
             let valid_path = validate_path_within_roots(&args.path, allowed_roots)?;
+            let spec_path = args.arazzo_spec.as_deref().or(args.openapi_spec.as_deref());
             let bundle = inspect_source_signatures(
                 &valid_path,
                 args.lang.as_deref(),
                 args.require_docs,
-                args.openapi_spec.as_deref(),
+                spec_path,
             )?;
             let json_str = serde_json::to_string_pretty(&bundle).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
@@ -759,6 +860,10 @@ pub fn execute_tool_with_roots(
             let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
+        "validate_arazzo_spec" => {
+            let args: ValidateArazzoSpecArgs = parse_tool_args(name, arguments)?;
+            handle_validate_arazzo_spec(&args, allowed_roots)
+        }
         _ => Err(ConformanceError::JsonRpcMethodNotFound {
             method: name.to_string(),
         }),
@@ -791,7 +896,7 @@ mod tests {
     #[test]
     fn test_list_tools_contains_expected() {
         let tools = list_tools();
-        assert_eq!(tools.tools.len(), 10);
+        assert_eq!(tools.tools.len(), 11);
         assert!(tools.next_cursor.is_none());
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
@@ -804,6 +909,7 @@ mod tests {
             .any(|t| t.name == "inspect_language_source_signatures"));
         assert!(tools.tools.iter().any(|t| t.name == "sync_checklists"));
         assert!(tools.tools.iter().any(|t| t.name == "generate_report"));
+        assert!(tools.tools.iter().any(|t| t.name == "validate_arazzo_spec"));
     }
 
     #[test]
@@ -941,6 +1047,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_execute_unknown_tool() {
         let registry = CanonicalRegistry::new();
         let res = execute_tool("unknown_tool", None, &registry);
@@ -990,6 +1097,121 @@ mod tests {
             &registry
         )
         .is_err());
+
+        let arazzo_file = bad_dir.join("wf.arazzo.json");
+        let arazzo_doc = crate::matrix_runtime::canonical_conformance_arazzo_doc();
+        let _ = std::fs::write(
+            &arazzo_file,
+            serde_json::to_string_pretty(&arazzo_doc).unwrap_or_default(),
+        );
+        let arazzo_str = arazzo_file.to_str().unwrap_or(".");
+        assert!(execute_tool("validate_arazzo_spec", None, &registry).is_err());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+                "expected_spec_path": arazzo_str,
+                "lang": "rust"
+            })),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+            })),
+            &registry
+        )
+        .is_ok());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+                "lang": "123bad"
+            })),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": "nonexistent_wf.yaml"
+            })),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+                "expected_spec_path": "nonexistent_exp.yaml"
+            })),
+            &registry
+        )
+        .is_err());
+        let bad_yaml_file = bad_dir.join(".cdd-conformance.yaml");
+        let bad_yaml_str = bad_yaml_file.to_str().unwrap_or(".");
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": bad_yaml_str
+            })),
+            &registry
+        )
+        .is_err());
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+                "expected_spec_path": bad_yaml_str
+            })),
+            &registry
+        )
+        .is_err());
+
+        // Directory passed as spec_path triggers std::fs::read_to_string Io error after canonicalize succeeds
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": bad_dir_str
+            })),
+            &registry
+        )
+        .is_err());
+
+        // Valid YAML but invalid Arazzo 1.1.0 schema
+        let invalid_arazzo_file = bad_dir.join("invalid.arazzo.json");
+        let _ = std::fs::write(&invalid_arazzo_file, r#"{"arazzo":"1.0.0"}"#);
+        let invalid_arazzo_str = invalid_arazzo_file.to_str().unwrap_or(".");
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": invalid_arazzo_str
+            })),
+            &registry
+        )
+        .is_err());
+
+        // Valid Arazzo 1.1.0 but expected_spec_path differs
+        let mut drifted_doc = arazzo_doc;
+        drifted_doc["info"]["title"] = serde_json::json!("Drifted Title");
+        let drifted_file = bad_dir.join("drifted.arazzo.json");
+        let _ = std::fs::write(
+            &drifted_file,
+            serde_json::to_string_pretty(&drifted_doc).unwrap_or_default(),
+        );
+        let drifted_str = drifted_file.to_str().unwrap_or(".");
+        assert!(execute_tool(
+            "validate_arazzo_spec",
+            Some(&serde_json::json!({
+                "spec_path": arazzo_str,
+                "expected_spec_path": drifted_str
+            })),
+            &registry
+        )
+        .is_err());
+
         let _ = std::fs::remove_dir_all(&bad_dir);
     }
 

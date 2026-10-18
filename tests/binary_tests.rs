@@ -1,5 +1,15 @@
 //! Integration tests for binary execution.
 
+#![deny(
+    missing_docs,
+    rustdoc::broken_intra_doc_links,
+    clippy::all,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use cdd_conformance::error::ConformanceError;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -44,7 +54,13 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
     assert!(out_inspect.status.success());
 
     let out_clients = Command::new(bin_path)
-        .args(["verify-clients", "--extra-lang", "zig"])
+        .args([
+            "verify-clients",
+            "--extra-lang",
+            "zig",
+            "--spec",
+            "arazzo-1.1.0",
+        ])
         .output()
         .map_err(map_io)?;
     assert!(out_clients.status.success());
@@ -56,7 +72,13 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
     assert!(out_backends.status.success());
 
     let out_roundtrip = Command::new(bin_path)
-        .args(["verify-roundtrip", "--extra-lang", "fortran"])
+        .args([
+            "verify-roundtrip",
+            "--extra-lang",
+            "fortran",
+            "--spec",
+            "arazzo-1.1.0",
+        ])
         .output()
         .map_err(map_io)?;
     assert!(out_roundtrip.status.success());

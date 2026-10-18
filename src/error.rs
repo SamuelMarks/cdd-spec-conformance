@@ -507,6 +507,38 @@ pub enum ConformanceError {
         /// Trap or execution error message.
         trap_message: String,
     },
+
+    /// An Arazzo 1.1.0 specification document violated normative structural or semantic rules.
+    #[display(
+        "Arazzo 1.1.0 schema violation for {} at '{}': {}",
+        language,
+        pointer,
+        reason
+    )]
+    ArazzoSchemaViolation {
+        /// Target language identifier.
+        language: LanguageId,
+        /// JSON Pointer to the violating field or element.
+        pointer: String,
+        /// Normative violation reason.
+        reason: String,
+    },
+
+    /// An invalid Arazzo 1.1.0 runtime expression was encountered.
+    #[display(
+        "Invalid Arazzo runtime expression '{}' at '{}': {}",
+        expression,
+        pointer,
+        reason
+    )]
+    ArazzoRuntimeExpressionError {
+        /// Raw runtime expression string.
+        expression: String,
+        /// JSON Pointer or location context.
+        pointer: String,
+        /// Explanation of why the expression is invalid.
+        reason: String,
+    },
 }
 
 impl ConformanceError {
@@ -532,7 +564,9 @@ impl ConformanceError {
             Self::UnknownSpecId { .. }
             | Self::UnknownProfileKind { .. }
             | Self::InvalidLanguageSlug { .. }
-            | Self::McpRootBoundaryViolation { .. } => {
+            | Self::McpRootBoundaryViolation { .. }
+            | Self::ArazzoSchemaViolation { .. }
+            | Self::ArazzoRuntimeExpressionError { .. } => {
                 (error_codes::INVALID_PARAMS, self.to_string())
             }
             Self::McpProtocolViolation { .. } => (error_codes::INVALID_REQUEST, self.to_string()),
@@ -942,6 +976,34 @@ mod tests {
         assert_eq!(
             wasm_err.to_string(),
             "WASM runtime failure for cpp in mod.wasm (fn 'run'): unreachable"
+        );
+
+        let arazzo_schema_err = ConformanceError::ArazzoSchemaViolation {
+            language: LanguageId::Rust,
+            pointer: "/$self".to_string(),
+            reason: "fragment not allowed".to_string(),
+        };
+        assert_eq!(
+            arazzo_schema_err.to_string(),
+            "Arazzo 1.1.0 schema violation for rust at '/$self': fragment not allowed"
+        );
+        assert_eq!(
+            arazzo_schema_err.to_json_rpc_error().0,
+            error_codes::INVALID_PARAMS
+        );
+
+        let arazzo_expr_err = ConformanceError::ArazzoRuntimeExpressionError {
+            expression: "$unknown.foo".to_string(),
+            pointer: "/workflows/0/steps/0/parameters/0/value".to_string(),
+            reason: "unrecognized root".to_string(),
+        };
+        assert_eq!(
+            arazzo_expr_err.to_string(),
+            "Invalid Arazzo runtime expression '$unknown.foo' at '/workflows/0/steps/0/parameters/0/value': unrecognized root"
+        );
+        assert_eq!(
+            arazzo_expr_err.to_json_rpc_error().0,
+            error_codes::INVALID_PARAMS
         );
     }
 }

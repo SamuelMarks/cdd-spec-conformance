@@ -142,10 +142,16 @@ pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, Con
                 .and_then(|a| a.get("spec_id"))
                 .map_or("all specifications", String::as_str);
 
+            let arazzo_note = if spec.contains("arazzo") {
+                " For Arazzo 1.1.0 (`arazzo-1.1.0`), verify bidirectional (`[To, From]`) workflow generation (`from_arazzo`) and extraction (`to_arazzo`), 100% doc coverage (args, functions, fields, structs/classes, files, modules), 100% test coverage (function, line, branch), strong typing, zero `unwrap`, and a single monolithic `derive_more` error enum."
+            } else {
+                ""
+            };
+
             let prompt_text = format!(
                 "You are an expert compiler and API toolchain engineer. Please audit the CDD language repository located at '{repo}'.
                 Review the conformance checklists for '{spec}', compare them with the implementation AST and tests,
-                and identify any missing features, false claims, or regressions."
+                and identify any missing features, false claims, or regressions.{arazzo_note}"
             );
 
             Ok(GetPromptResult {
@@ -167,7 +173,7 @@ pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, Con
 
             let prompt_text = format!(
                 "Please implement the feature '{feature}' according to the '{spec}' specification.
-                Ensure 100% test coverage and 100% documentation coverage. Update the relevant conformance checklist row from [ ] to [x] once tested."
+                Ensure 100% test coverage (function, line, branch), 100% documentation coverage (arg, function, class, file, module), strong typing, zero `unwrap`, and a single monolithic error enum. Update the relevant conformance checklist row (`[To, From]`) from `[ ]` to `[x]` once tested."
             );
 
             Ok(GetPromptResult {
@@ -204,6 +210,16 @@ mod tests {
         })
         .ok();
         assert!(p.is_some_and(|res| res.messages[0].content.contains("../cdd-rust")));
+
+        let mut arazzo_args = HashMap::new();
+        arazzo_args.insert("repo_path".to_string(), "../cdd-go".to_string());
+        arazzo_args.insert("spec_id".to_string(), "arazzo-1.1.0".to_string());
+        let p_arazzo = get_prompt_typed(&GetPromptParams {
+            name: "audit_repo_conformance".to_string(),
+            arguments: Some(arazzo_args),
+        })
+        .ok();
+        assert!(p_arazzo.is_some_and(|res| res.messages[0].content.contains("from_arazzo")));
 
         let mut impl_args = HashMap::new();
         impl_args.insert("feature_name".to_string(), "Webhooks".to_string());

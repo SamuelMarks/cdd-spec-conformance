@@ -109,6 +109,71 @@ pub struct PathConfig {
     pub compliance_file: Option<PathBuf>,
 }
 
+/// Optional capability flag overrides in `.cdd-conformance.yaml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CapabilitiesOverride {
+    /// Override for Client SDK generation capability.
+    pub sdk: Option<bool>,
+    /// Override for Client CLI generation capability.
+    pub sdk_cli: Option<bool>,
+    /// Override for Server generation capability.
+    pub server: Option<bool>,
+    /// Override for `to_openapi` extraction capability.
+    pub to_openapi: Option<bool>,
+    /// Override for `to_docs_json` generation capability.
+    pub to_docs_json: Option<bool>,
+    /// Override for bidirectional `sync` capability.
+    pub sync: Option<bool>,
+    /// Override for JSON-RPC 2.0 daemon capability.
+    pub json_rpc: Option<bool>,
+    /// Override for MCP server/client capability.
+    pub mcp: Option<bool>,
+    /// Override for Arazzo 1.1.0 workflow capability (`from_arazzo` / `to_arazzo`).
+    pub arazzo: Option<bool>,
+    /// Override for WebAssembly target capability.
+    pub wasm: Option<bool>,
+}
+
+impl CapabilitiesOverride {
+    /// Applies any `Some(bool)` capability overrides onto a mutable `LanguageCapabilities`.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The `LanguageCapabilities` struct to mutate in-place.
+    pub fn apply_to(&self, target: &mut LanguageCapabilities) {
+        if let Some(v) = self.sdk {
+            target.sdk = v;
+        }
+        if let Some(v) = self.sdk_cli {
+            target.sdk_cli = v;
+        }
+        if let Some(v) = self.server {
+            target.server = v;
+        }
+        if let Some(v) = self.to_openapi {
+            target.to_openapi = v;
+        }
+        if let Some(v) = self.to_docs_json {
+            target.to_docs_json = v;
+        }
+        if let Some(v) = self.sync {
+            target.sync = v;
+        }
+        if let Some(v) = self.json_rpc {
+            target.json_rpc = v;
+        }
+        if let Some(v) = self.mcp {
+            target.mcp = v;
+        }
+        if let Some(v) = self.arazzo {
+            target.arazzo = v;
+        }
+        if let Some(v) = self.wasm {
+            target.wasm = v;
+        }
+    }
+}
+
 /// Declarative compiler toolchain overrides defined in `.cdd-conformance.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ToolchainConfig {
@@ -136,9 +201,9 @@ pub struct ToolchainConfig {
     /// Command tokens to run the language linter or static type checker.
     #[serde(default)]
     pub linter_cmd: Vec<String>,
-    /// Optional explicit capability flags.
+    /// Optional explicit capability flag overrides.
     #[serde(default)]
-    pub capabilities: Option<LanguageCapabilities>,
+    pub capabilities: Option<CapabilitiesOverride>,
 }
 
 impl ToolchainConfig {
@@ -172,8 +237,8 @@ impl ToolchainConfig {
         if !self.linter_cmd.is_empty() {
             spec.linter_cmd.clone_from(&self.linter_cmd);
         }
-        if let Some(caps) = self.capabilities {
-            spec.supported_targets = caps;
+        if let Some(ref caps) = self.capabilities {
+            caps.apply_to(&mut spec.supported_targets);
         }
     }
 }
@@ -608,6 +673,7 @@ toolchain:
     sync: true
     json_rpc: false
     mcp: true
+    arazzo: false
     wasm: true
 syntax:
   file_extensions: [".zig"]
@@ -638,7 +704,15 @@ syntax:
         assert_eq!(spec.server_start_cmd, vec!["./zig-out/bin/server"]);
         assert_eq!(spec.linter_cmd, vec!["zig", "fmt", "--check", "src/"]);
         assert!(!spec.supported_targets.json_rpc);
+        assert!(!spec.supported_targets.arazzo);
         assert!(spec.supported_targets.wasm);
+
+        let partial_caps = CapabilitiesOverride {
+            arazzo: Some(true),
+            ..CapabilitiesOverride::default()
+        };
+        partial_caps.apply_to(&mut spec.supported_targets);
+        assert!(spec.supported_targets.arazzo);
 
         let empty_tc = ToolchainConfig::default();
         empty_tc.apply_to(&mut spec);

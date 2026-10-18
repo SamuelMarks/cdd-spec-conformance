@@ -125,6 +125,11 @@ impl SpecId {
 }
 
 impl fmt::Display for SpecId {
+    /// Formats the specification identifier as its canonical string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -133,6 +138,11 @@ impl fmt::Display for SpecId {
 impl FromStr for SpecId {
     type Err = ConformanceError;
 
+    /// Parses a `SpecId` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Input specification identifier string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_lowercase().replace('_', "-");
         match normalized.as_str() {
@@ -252,6 +262,11 @@ impl ProfileKind {
 }
 
 impl fmt::Display for ProfileKind {
+    /// Formats the profile kind as its canonical string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -260,6 +275,11 @@ impl fmt::Display for ProfileKind {
 impl FromStr for ProfileKind {
     type Err = ConformanceError;
 
+    /// Parses a `ProfileKind` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Input profile identifier or filename string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_lowercase().replace('_', "-");
         match normalized.as_str() {
@@ -306,6 +326,11 @@ impl Direction {
 }
 
 impl fmt::Display for Direction {
+    /// Formats the direction as its canonical label.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -388,6 +413,11 @@ impl DirectionalFlags {
 }
 
 impl From<[bool; 2]> for DirectionalFlags {
+    /// Converts a `[bool; 2]` array `[to, from]` into `DirectionalFlags`.
+    ///
+    /// # Arguments
+    ///
+    /// * `arr` - Two-element boolean array `[to, from]`.
     fn from(arr: [bool; 2]) -> Self {
         Self {
             to: arr[0],
@@ -397,6 +427,11 @@ impl From<[bool; 2]> for DirectionalFlags {
 }
 
 impl From<DirectionalFlags> for [bool; 2] {
+    /// Converts `DirectionalFlags` into a `[bool; 2]` array `[to, from]`.
+    ///
+    /// # Arguments
+    ///
+    /// * `flags` - Directional flags to convert.
     fn from(flags: DirectionalFlags) -> Self {
         flags.to_array()
     }
@@ -918,6 +953,11 @@ impl CustomLanguageSlug {
 }
 
 impl fmt::Display for CustomLanguageSlug {
+    /// Formats the custom language slug.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -926,6 +966,11 @@ impl fmt::Display for CustomLanguageSlug {
 impl FromStr for CustomLanguageSlug {
     type Err = ConformanceError;
 
+    /// Parses a `CustomLanguageSlug` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw language slug string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::new(s)
     }
@@ -934,12 +979,22 @@ impl FromStr for CustomLanguageSlug {
 impl TryFrom<String> for CustomLanguageSlug {
     type Error = ConformanceError;
 
+    /// Converts an owned `String` into a `CustomLanguageSlug`.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - Owned language slug string.
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::new(&value)
     }
 }
 
 impl From<CustomLanguageSlug> for String {
+    /// Converts a `CustomLanguageSlug` into its underlying `String`.
+    ///
+    /// # Arguments
+    ///
+    /// * `slug` - Validated custom language slug.
     fn from(slug: CustomLanguageSlug) -> Self {
         slug.0
     }
@@ -1051,6 +1106,11 @@ impl LanguageId {
 }
 
 impl fmt::Display for LanguageId {
+    /// Formats the language identifier as its canonical slug.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -1059,6 +1119,11 @@ impl fmt::Display for LanguageId {
 impl FromStr for LanguageId {
     type Err = ConformanceError;
 
+    /// Parses a `LanguageId` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw language identifier or repository name.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim().to_lowercase();
         let stripped = trimmed.strip_prefix("cdd-").unwrap_or(&trimmed);
@@ -1084,12 +1149,22 @@ impl FromStr for LanguageId {
 impl TryFrom<String> for LanguageId {
     type Error = ConformanceError;
 
+    /// Converts an owned `String` into a `LanguageId`.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - Owned language identifier string.
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::from_str(&value)
     }
 }
 
 impl From<LanguageId> for String {
+    /// Converts a `LanguageId` into its canonical `String`.
+    ///
+    /// # Arguments
+    ///
+    /// * `lang` - Language identifier to convert.
     fn from(lang: LanguageId) -> Self {
         lang.as_str().to_string()
     }
@@ -1154,6 +1229,11 @@ impl ServerOperatingMode {
 }
 
 impl fmt::Display for ServerOperatingMode {
+    /// Formats the server operating mode as its kebab-case string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -1162,6 +1242,11 @@ impl fmt::Display for ServerOperatingMode {
 impl FromStr for ServerOperatingMode {
     type Err = ConformanceError;
 
+    /// Parses a `ServerOperatingMode` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw server operating mode string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_lowercase().replace('_', "-").as_str() {
             "stub" => Ok(Self::Stub),
@@ -1194,6 +1279,11 @@ pub enum WireProtocol {
 }
 
 impl fmt::Display for WireProtocol {
+    /// Formats the wire protocol as its canonical kebab-case identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::HttpRest => "http-rest",
@@ -1252,6 +1342,11 @@ impl HttpMethod {
 }
 
 impl fmt::Display for HttpMethod {
+    /// Formats the HTTP method as its uppercase verb.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -1293,9 +1388,687 @@ impl EndpointPath {
 }
 
 impl fmt::Display for EndpointPath {
+    /// Formats the endpoint path string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Validated Arazzo 1.1.x specification version identifier (e.g. `"1.1.0"`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ArazzoVersion(String);
+
+impl ArazzoVersion {
+    /// Validates and constructs an `ArazzoVersion` for the Arazzo 1.1.x specification family.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - Raw version string from the `arazzo` root field.
+    /// * `language` - Language identifier for error attribution.
+    ///
+    /// # Returns
+    ///
+    /// Validated `ArazzoVersion`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoSchemaViolation` if `raw` does not begin with `"1.1."`.
+    pub fn parse_for_language(raw: &str, language: &LanguageId) -> Result<Self, ConformanceError> {
+        let trimmed = raw.trim();
+        let Some(patch) = trimmed.strip_prefix("1.1.") else {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/arazzo".to_string(),
+                reason: format!("expected Arazzo version '1.1.x', found '{trimmed}'"),
+            });
+        };
+        if patch.is_empty() || !patch.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/arazzo".to_string(),
+                reason: format!("invalid numeric patch version in '{trimmed}'"),
+            });
+        }
+        Ok(Self(trimmed.to_string()))
+    }
+
+    /// Returns the underlying version string slice.
+    ///
+    /// # Returns
+    ///
+    /// Version string slice (e.g. `"1.1.0"`).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ArazzoVersion {
+    /// Formats the Arazzo specification version string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for ArazzoVersion {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoVersion` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw version string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_for_language(s, &LanguageId::Rust)
+    }
+}
+
+/// Type of an Arazzo 1.1.0 `Source Description Object`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArazzoSourceType {
+    /// An `OpenAPI` description document (`"openapi"`).
+    OpenApi,
+    /// An `AsyncAPI` description document (`"asyncapi"`, added in Arazzo 1.1.0).
+    AsyncApi,
+    /// A nested `Arazzo` description document (`"arazzo"`).
+    Arazzo,
+}
+
+impl ArazzoSourceType {
+    /// Returns the canonical lowercase string representation.
+    ///
+    /// # Returns
+    ///
+    /// Canonical source description type string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenApi => "openapi",
+            Self::AsyncApi => "asyncapi",
+            Self::Arazzo => "arazzo",
+        }
+    }
+}
+
+impl fmt::Display for ArazzoSourceType {
+    /// Formats the source description type as its canonical lowercase string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ArazzoSourceType {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoSourceType` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw source description type string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "openapi" => Ok(Self::OpenApi),
+            "asyncapi" => Ok(Self::AsyncApi),
+            "arazzo" => Ok(Self::Arazzo),
+            other => Err(ConformanceError::ArazzoSchemaViolation {
+                language: LanguageId::Rust,
+                pointer: "/sourceDescriptions/type".to_string(),
+                reason: format!(
+                    "unknown sourceDescription type '{other}'; expected 'openapi', 'asyncapi', or 'arazzo'"
+                ),
+            }),
+        }
+    }
+}
+
+/// Parameter location (`in`) for an Arazzo 1.1.0 `Parameter Object`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArazzoParameterIn {
+    /// Path parameter (`"path"`).
+    Path,
+    /// Query parameter (`"query"`).
+    Query,
+    /// Raw query string parameter (`"querystring"`, added in Arazzo 1.1.0).
+    QueryString,
+    /// HTTP header parameter (`"header"`).
+    Header,
+    /// Cookie parameter (`"cookie"`).
+    Cookie,
+}
+
+impl ArazzoParameterIn {
+    /// Returns the canonical lowercase parameter location string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical `in` location string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::Query => "query",
+            Self::QueryString => "querystring",
+            Self::Header => "header",
+            Self::Cookie => "cookie",
+        }
+    }
+}
+
+impl fmt::Display for ArazzoParameterIn {
+    /// Formats the parameter location as its canonical lowercase string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ArazzoParameterIn {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoParameterIn` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw parameter location string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "path" => Ok(Self::Path),
+            "query" => Ok(Self::Query),
+            "querystring" => Ok(Self::QueryString),
+            "header" => Ok(Self::Header),
+            "cookie" => Ok(Self::Cookie),
+            other => Err(ConformanceError::ArazzoSchemaViolation {
+                language: LanguageId::Rust,
+                pointer: "/parameters/in".to_string(),
+                reason: format!(
+                    "invalid parameter location '{other}'; expected 'path', 'query', 'querystring', 'header', or 'cookie'"
+                ),
+            }),
+        }
+    }
+}
+
+/// Mutually exclusive target of an Arazzo 1.1.0 `Step Object`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ArazzoStepTarget {
+    /// Invokes an operation by `operationId`.
+    OperationId(String),
+    /// Invokes an operation by JSON Pointer `operationPath`.
+    OperationPath(String),
+    /// Invokes an `AsyncAPI` 3.0 channel by `channelPath` (new in Arazzo 1.1.0).
+    ChannelPath(String),
+    /// Invokes a sub-workflow by `workflowId`.
+    WorkflowId(String),
+}
+
+impl ArazzoStepTarget {
+    /// Returns the target identifier or path string slice.
+    ///
+    /// # Returns
+    ///
+    /// Underlying target identifier or path string slice.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        match self {
+            Self::OperationId(v)
+            | Self::OperationPath(v)
+            | Self::ChannelPath(v)
+            | Self::WorkflowId(v) => v.as_str(),
+        }
+    }
+}
+
+/// `AsyncAPI` message action for an Arazzo 1.1.0 `Step Object (action)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArazzoMessageAction {
+    /// Sends a message to the channel (`"send"`).
+    Send,
+    /// Receives a message from the channel (`"receive"`).
+    Receive,
+}
+
+impl ArazzoMessageAction {
+    /// Returns the canonical lowercase action string (`"send"` or `"receive"`).
+    ///
+    /// # Returns
+    ///
+    /// Canonical message action string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Receive => "receive",
+        }
+    }
+}
+
+impl fmt::Display for ArazzoMessageAction {
+    /// Formats the message action as `"send"` or `"receive"`.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ArazzoMessageAction {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoMessageAction` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw message action string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "send" => Ok(Self::Send),
+            "receive" => Ok(Self::Receive),
+            other => Err(ConformanceError::ArazzoSchemaViolation {
+                language: LanguageId::Rust,
+                pointer: "/steps/action".to_string(),
+                reason: format!("invalid step action '{other}'; expected 'send' or 'receive'"),
+            }),
+        }
+    }
+}
+
+/// Action type for an Arazzo 1.1.0 `Success Action Object`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArazzoSuccessActionType {
+    /// Ends the workflow (`"end"`).
+    End,
+    /// Jumps to another step or workflow (`"goto"`).
+    Goto,
+}
+
+impl ArazzoSuccessActionType {
+    /// Returns the canonical lowercase action string (`"end"` or `"goto"`).
+    ///
+    /// # Returns
+    ///
+    /// Canonical success action type string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::End => "end",
+            Self::Goto => "goto",
+        }
+    }
+}
+
+impl fmt::Display for ArazzoSuccessActionType {
+    /// Formats the success action type as `"end"` or `"goto"`.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ArazzoSuccessActionType {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoSuccessActionType` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw success action type string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "end" => Ok(Self::End),
+            "goto" => Ok(Self::Goto),
+            other => Err(ConformanceError::ArazzoSchemaViolation {
+                language: LanguageId::Rust,
+                pointer: "/onSuccess/type".to_string(),
+                reason: format!("invalid success action type '{other}'; expected 'end' or 'goto'"),
+            }),
+        }
+    }
+}
+
+/// Action type for an Arazzo 1.1.0 `Failure Action Object`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArazzoFailureActionType {
+    /// Ends the workflow with failure (`"end"`).
+    End,
+    /// Retries the step (`"retry"`).
+    Retry,
+    /// Jumps to a recovery step or workflow (`"goto"`).
+    Goto,
+}
+
+impl ArazzoFailureActionType {
+    /// Returns the canonical lowercase failure action string (`"end"`, `"retry"`, or `"goto"`).
+    ///
+    /// # Returns
+    ///
+    /// Canonical failure action type string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::End => "end",
+            Self::Retry => "retry",
+            Self::Goto => "goto",
+        }
+    }
+}
+
+impl fmt::Display for ArazzoFailureActionType {
+    /// Formats the failure action type as `"end"`, `"retry"`, or `"goto"`.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ArazzoFailureActionType {
+    type Err = ConformanceError;
+
+    /// Parses an `ArazzoFailureActionType` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw failure action type string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "end" => Ok(Self::End),
+            "retry" => Ok(Self::Retry),
+            "goto" => Ok(Self::Goto),
+            other => Err(ConformanceError::ArazzoSchemaViolation {
+                language: LanguageId::Rust,
+                pointer: "/onFailure/type".to_string(),
+                reason: format!(
+                    "invalid failure action type '{other}'; expected 'end', 'retry', or 'goto'"
+                ),
+            }),
+        }
+    }
+}
+
+/// Canonical criterion or selector expression dialect in Arazzo 1.1.0 (`Criterion Object` / `Expression Type Object`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ArazzoCriterionType {
+    /// Simple comparison expression (`"simple"`).
+    Simple,
+    /// Regular expression (`"regex"`).
+    Regex,
+    /// `JSONPath` RFC 9535 (`"jsonpath"` / `version: "rfc9535"`).
+    JsonPathRfc9535,
+    /// `XPath` 3.1 (`"xpath"` / `version: "xpath-31"`).
+    XPath31,
+    /// `XPath` 2.0 (`"xpath"` / `version: "xpath-20"`).
+    XPath20,
+    /// `XPath` 1.0 (`"xpath"` / `version: "xpath-10"`).
+    XPath10,
+    /// JSON Pointer RFC 6901 (`"jsonpointer"` / `version: "rfc6901"`).
+    JsonPointerRfc6901,
+}
+
+impl ArazzoCriterionType {
+    /// Parses a criterion/selector type from either a shorthand string or an `Expression Type Object`.
+    ///
+    /// # Arguments
+    ///
+    /// * `val` - JSON value of the `type`, `selectorType`, or `targetSelectorType` field.
+    /// * `language` - Language identifier for error attribution.
+    /// * `pointer` - JSON Pointer for error attribution.
+    ///
+    /// # Returns
+    ///
+    /// Normalized `ArazzoCriterionType`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoSchemaViolation` if the type or version is unrecognized.
+    pub fn from_json_value(
+        val: &serde_json::Value,
+        language: &LanguageId,
+        pointer: &str,
+    ) -> Result<Self, ConformanceError> {
+        match val {
+            serde_json::Value::String(s) => match s.as_str() {
+                "simple" => Ok(Self::Simple),
+                "regex" => Ok(Self::Regex),
+                "jsonpath" => Ok(Self::JsonPathRfc9535),
+                "xpath" => Ok(Self::XPath31),
+                "jsonpointer" => Ok(Self::JsonPointerRfc6901),
+                other => Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: pointer.to_string(),
+                    reason: format!("unrecognized expression type string '{other}'"),
+                }),
+            },
+            serde_json::Value::Object(map) => {
+                let kind = map
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let version = map
+                    .get("version")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                match (kind, version) {
+                    ("jsonpath", "rfc9535" | "draft-goessner-dispatch-jsonpath-00") => {
+                        Ok(Self::JsonPathRfc9535)
+                    }
+                    ("xpath", "xpath-31") => Ok(Self::XPath31),
+                    ("xpath", "xpath-20") => Ok(Self::XPath20),
+                    ("xpath", "xpath-10") => Ok(Self::XPath10),
+                    ("jsonpointer", "rfc6901") => Ok(Self::JsonPointerRfc6901),
+                    _ => Err(ConformanceError::ArazzoSchemaViolation {
+                        language: language.clone(),
+                        pointer: pointer.to_string(),
+                        reason: format!(
+                            "invalid Expression Type Object (type='{kind}', version='{version}')"
+                        ),
+                    }),
+                }
+            }
+            _ => Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: pointer.to_string(),
+                reason: "expression type must be a string or Expression Type Object".to_string(),
+            }),
+        }
+    }
+}
+
+/// Structured output extraction `Selector Object` introduced in Arazzo 1.1.0.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ArazzoSelectorObject {
+    /// Runtime expression establishing the evaluation context (e.g. `"$response.body"`).
+    pub context: String,
+    /// Selector expression (e.g. `"$.items[0].id"`).
+    pub selector: String,
+    /// Optional selector dialect (`selectorType`).
+    pub selector_type: Option<ArazzoCriterionType>,
+}
+
+/// Canonical runtime expression root in Arazzo 1.1.0 (`Runtime Expressions`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ArazzoRuntimeExpressionKind {
+    /// `$url`
+    Url,
+    /// `$method`
+    Method,
+    /// `$statusCode`
+    StatusCode,
+    /// `$request.header.<name>`
+    RequestHeader,
+    /// `$request.query.<name>`
+    RequestQuery,
+    /// `$request.path.<name>`
+    RequestPath,
+    /// `$request.body...`
+    RequestBody,
+    /// `$response.header.<name>`
+    ResponseHeader,
+    /// `$response.body...`
+    ResponseBody,
+    /// `$message.header...` (`AsyncAPI`, Arazzo 1.1.0)
+    MessageHeader,
+    /// `$message.payload...` (`AsyncAPI`, Arazzo 1.1.0)
+    MessagePayload,
+    /// `$inputs.<name>`
+    Inputs,
+    /// `$outputs.<name>`
+    Outputs,
+    /// `$steps.<name>...`
+    Steps,
+    /// `$workflows.<name>...`
+    Workflows,
+    /// `$sourceDescriptions.<name>...`
+    SourceDescriptions,
+    /// `$components.<type>.<name>`
+    Components,
+    /// `$self` (Arazzo 1.1.0)
+    SelfUri,
+}
+
+impl ArazzoRuntimeExpressionKind {
+    /// Parses the root token of an Arazzo 1.1.0 runtime expression (starting with `$`).
+    ///
+    /// # Arguments
+    ///
+    /// * `expr` - Runtime expression string (e.g. `"$steps.loginStep.outputs.token"`).
+    /// * `pointer` - JSON Pointer context for error reporting.
+    ///
+    /// # Returns
+    ///
+    /// The matched `ArazzoRuntimeExpressionKind`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoRuntimeExpressionError` if `expr` is not a valid Arazzo 1.1.0 runtime expression.
+    pub fn parse_root(expr: &str, pointer: &str) -> Result<Self, ConformanceError> {
+        let trimmed = expr.trim();
+        if trimmed == "$url" {
+            return Ok(Self::Url);
+        }
+        if trimmed == "$method" {
+            return Ok(Self::Method);
+        }
+        if trimmed == "$statusCode" {
+            return Ok(Self::StatusCode);
+        }
+        if trimmed == "$self" {
+            return Ok(Self::SelfUri);
+        }
+        if trimmed == "$request.body"
+            || trimmed.starts_with("$request.body#")
+            || trimmed.starts_with("$request.body.")
+        {
+            return Ok(Self::RequestBody);
+        }
+        if trimmed.starts_with("$request.header.") && trimmed.len() > "$request.header.".len() {
+            return Ok(Self::RequestHeader);
+        }
+        if trimmed.starts_with("$request.query.") && trimmed.len() > "$request.query.".len() {
+            return Ok(Self::RequestQuery);
+        }
+        if trimmed.starts_with("$request.path.") && trimmed.len() > "$request.path.".len() {
+            return Ok(Self::RequestPath);
+        }
+        if trimmed == "$response.body"
+            || trimmed.starts_with("$response.body#")
+            || trimmed.starts_with("$response.body.")
+        {
+            return Ok(Self::ResponseBody);
+        }
+        if trimmed.starts_with("$response.header.") && trimmed.len() > "$response.header.".len() {
+            return Ok(Self::ResponseHeader);
+        }
+        if trimmed == "$message.header"
+            || trimmed.starts_with("$message.header#")
+            || trimmed.starts_with("$message.header.")
+        {
+            return Ok(Self::MessageHeader);
+        }
+        if trimmed == "$message.payload"
+            || trimmed.starts_with("$message.payload#")
+            || trimmed.starts_with("$message.payload.")
+        {
+            return Ok(Self::MessagePayload);
+        }
+        if trimmed.starts_with("$inputs.") && trimmed.len() > "$inputs.".len() {
+            return Ok(Self::Inputs);
+        }
+        if trimmed.starts_with("$outputs.") && trimmed.len() > "$outputs.".len() {
+            return Ok(Self::Outputs);
+        }
+        if trimmed.starts_with("$steps.") && trimmed.len() > "$steps.".len() {
+            return Ok(Self::Steps);
+        }
+        if trimmed.starts_with("$workflows.") && trimmed.len() > "$workflows.".len() {
+            return Ok(Self::Workflows);
+        }
+        if trimmed.starts_with("$sourceDescriptions.")
+            && trimmed.len() > "$sourceDescriptions.".len()
+        {
+            return Ok(Self::SourceDescriptions);
+        }
+        if trimmed.starts_with("$components.") && trimmed.len() > "$components.".len() {
+            return Ok(Self::Components);
+        }
+        Err(ConformanceError::ArazzoRuntimeExpressionError {
+            expression: expr.to_string(),
+            pointer: pointer.to_string(),
+            reason: "unrecognized or incomplete Arazzo 1.1.0 runtime expression root".to_string(),
+        })
+    }
+}
+
+/// Summary of a single parsed step inside an Arazzo 1.1.0 workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoStepSummary {
+    /// Unique `stepId` within the workflow.
+    pub step_id: String,
+    /// Mutually exclusive target of the step.
+    pub target: ArazzoStepTarget,
+    /// Optional `AsyncAPI` message action (`send` or `receive`).
+    pub action: Option<ArazzoMessageAction>,
+    /// Output keys defined by this step.
+    pub output_keys: Vec<String>,
+}
+
+/// Summary of a parsed workflow inside an Arazzo 1.1.0 document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoWorkflowSummary {
+    /// Unique `workflowId` within the document.
+    pub workflow_id: String,
+    /// Top-level input property names from `inputs.properties`.
+    pub input_properties: Vec<String>,
+    /// Ordered step summaries in `steps[]`.
+    pub steps: Vec<ArazzoStepSummary>,
+    /// Workflow output keys from `outputs`.
+    pub output_keys: Vec<String>,
 }
 
 #[cfg(test)]
@@ -1633,5 +2406,249 @@ mod tests {
 
         let ep2 = EndpointPath::new("pets/123");
         assert_eq!(ep2.as_str(), "/pets/123");
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    fn test_arazzo_domain_primitives() {
+        let v = ArazzoVersion::from_str("1.1.0").ok();
+        assert_eq!(v.as_ref().map(ArazzoVersion::as_str), Some("1.1.0"));
+        assert_eq!(
+            v.as_ref().map(ToString::to_string),
+            Some("1.1.0".to_string())
+        );
+        assert!(ArazzoVersion::from_str("1.0.0").is_err());
+        assert!(ArazzoVersion::from_str("1.1.").is_err());
+        assert!(ArazzoVersion::from_str("1.1.x").is_err());
+
+        for (raw, expected) in [
+            ("openapi", ArazzoSourceType::OpenApi),
+            ("asyncapi", ArazzoSourceType::AsyncApi),
+            ("arazzo", ArazzoSourceType::Arazzo),
+        ] {
+            assert_eq!(ArazzoSourceType::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ArazzoSourceType::from_str("graphql").is_err());
+
+        for (raw, expected) in [
+            ("path", ArazzoParameterIn::Path),
+            ("query", ArazzoParameterIn::Query),
+            ("querystring", ArazzoParameterIn::QueryString),
+            ("header", ArazzoParameterIn::Header),
+            ("cookie", ArazzoParameterIn::Cookie),
+        ] {
+            assert_eq!(ArazzoParameterIn::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ArazzoParameterIn::from_str("body").is_err());
+
+        for target in [
+            ArazzoStepTarget::OperationId("op1".to_string()),
+            ArazzoStepTarget::OperationPath(
+                "{$sourceDescriptions.pet.url}#/paths/~1pets".to_string(),
+            ),
+            ArazzoStepTarget::ChannelPath(
+                "{$sourceDescriptions.events.url}#/channels/~1petPlaced".to_string(),
+            ),
+            ArazzoStepTarget::WorkflowId("subWf".to_string()),
+        ] {
+            assert!(!target.value().is_empty());
+        }
+
+        for (raw, expected) in [
+            ("send", ArazzoMessageAction::Send),
+            ("receive", ArazzoMessageAction::Receive),
+        ] {
+            assert_eq!(ArazzoMessageAction::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ArazzoMessageAction::from_str("publish").is_err());
+
+        for (raw, expected) in [
+            ("end", ArazzoSuccessActionType::End),
+            ("goto", ArazzoSuccessActionType::Goto),
+        ] {
+            assert_eq!(ArazzoSuccessActionType::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ArazzoSuccessActionType::from_str("retry").is_err());
+
+        for (raw, expected) in [
+            ("end", ArazzoFailureActionType::End),
+            ("retry", ArazzoFailureActionType::Retry),
+            ("goto", ArazzoFailureActionType::Goto),
+        ] {
+            assert_eq!(ArazzoFailureActionType::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ArazzoFailureActionType::from_str("ignore").is_err());
+
+        for (val, expected) in [
+            (serde_json::json!("simple"), ArazzoCriterionType::Simple),
+            (serde_json::json!("regex"), ArazzoCriterionType::Regex),
+            (
+                serde_json::json!("jsonpath"),
+                ArazzoCriterionType::JsonPathRfc9535,
+            ),
+            (serde_json::json!("xpath"), ArazzoCriterionType::XPath31),
+            (
+                serde_json::json!("jsonpointer"),
+                ArazzoCriterionType::JsonPointerRfc6901,
+            ),
+            (
+                serde_json::json!({"type": "jsonpath", "version": "rfc9535"}),
+                ArazzoCriterionType::JsonPathRfc9535,
+            ),
+            (
+                serde_json::json!({"type": "xpath", "version": "xpath-31"}),
+                ArazzoCriterionType::XPath31,
+            ),
+            (
+                serde_json::json!({"type": "xpath", "version": "xpath-20"}),
+                ArazzoCriterionType::XPath20,
+            ),
+            (
+                serde_json::json!({"type": "xpath", "version": "xpath-10"}),
+                ArazzoCriterionType::XPath10,
+            ),
+            (
+                serde_json::json!({"type": "jsonpointer", "version": "rfc6901"}),
+                ArazzoCriterionType::JsonPointerRfc6901,
+            ),
+        ] {
+            assert_eq!(
+                ArazzoCriterionType::from_json_value(&val, &LanguageId::Rust, "/type").ok(),
+                Some(expected)
+            );
+        }
+        assert!(ArazzoCriterionType::from_json_value(
+            &serde_json::json!("unknown"),
+            &LanguageId::Rust,
+            "/type"
+        )
+        .is_err());
+        assert!(ArazzoCriterionType::from_json_value(
+            &serde_json::json!({"type": "jsonpath", "version": "bad"}),
+            &LanguageId::Rust,
+            "/type"
+        )
+        .is_err());
+        assert!(ArazzoCriterionType::from_json_value(
+            &serde_json::json!(123),
+            &LanguageId::Rust,
+            "/type"
+        )
+        .is_err());
+
+        let sel = ArazzoSelectorObject {
+            context: "$response.body".to_string(),
+            selector: "$.id".to_string(),
+            selector_type: Some(ArazzoCriterionType::JsonPathRfc9535),
+        };
+        assert_eq!(sel.selector, "$.id");
+
+        for (expr, expected) in [
+            ("$url", ArazzoRuntimeExpressionKind::Url),
+            ("$method", ArazzoRuntimeExpressionKind::Method),
+            ("$statusCode", ArazzoRuntimeExpressionKind::StatusCode),
+            ("$self", ArazzoRuntimeExpressionKind::SelfUri),
+            (
+                "$request.header.accept",
+                ArazzoRuntimeExpressionKind::RequestHeader,
+            ),
+            (
+                "$request.query.limit",
+                ArazzoRuntimeExpressionKind::RequestQuery,
+            ),
+            ("$request.path.id", ArazzoRuntimeExpressionKind::RequestPath),
+            ("$request.body", ArazzoRuntimeExpressionKind::RequestBody),
+            (
+                "$request.body#/id",
+                ArazzoRuntimeExpressionKind::RequestBody,
+            ),
+            ("$request.body.id", ArazzoRuntimeExpressionKind::RequestBody),
+            (
+                "$response.header.x-rate",
+                ArazzoRuntimeExpressionKind::ResponseHeader,
+            ),
+            ("$response.body", ArazzoRuntimeExpressionKind::ResponseBody),
+            (
+                "$response.body#/id",
+                ArazzoRuntimeExpressionKind::ResponseBody,
+            ),
+            (
+                "$response.body.id",
+                ArazzoRuntimeExpressionKind::ResponseBody,
+            ),
+            (
+                "$message.header",
+                ArazzoRuntimeExpressionKind::MessageHeader,
+            ),
+            (
+                "$message.header#/id",
+                ArazzoRuntimeExpressionKind::MessageHeader,
+            ),
+            (
+                "$message.header.id",
+                ArazzoRuntimeExpressionKind::MessageHeader,
+            ),
+            (
+                "$message.payload",
+                ArazzoRuntimeExpressionKind::MessagePayload,
+            ),
+            (
+                "$message.payload#/id",
+                ArazzoRuntimeExpressionKind::MessagePayload,
+            ),
+            (
+                "$message.payload.id",
+                ArazzoRuntimeExpressionKind::MessagePayload,
+            ),
+            ("$inputs.petId", ArazzoRuntimeExpressionKind::Inputs),
+            ("$outputs.orderId", ArazzoRuntimeExpressionKind::Outputs),
+            (
+                "$steps.step1.outputs.token",
+                ArazzoRuntimeExpressionKind::Steps,
+            ),
+            (
+                "$workflows.wf1.outputs.res",
+                ArazzoRuntimeExpressionKind::Workflows,
+            ),
+            (
+                "$sourceDescriptions.petStore.url",
+                ArazzoRuntimeExpressionKind::SourceDescriptions,
+            ),
+            (
+                "$components.parameters.page",
+                ArazzoRuntimeExpressionKind::Components,
+            ),
+        ] {
+            assert_eq!(
+                ArazzoRuntimeExpressionKind::parse_root(expr, "/expr").ok(),
+                Some(expected)
+            );
+        }
+        assert!(ArazzoRuntimeExpressionKind::parse_root("$unknown.val", "/expr").is_err());
+        assert!(ArazzoRuntimeExpressionKind::parse_root("$inputs.", "/expr").is_err());
+
+        let step_sum = ArazzoStepSummary {
+            step_id: "step1".to_string(),
+            target: ArazzoStepTarget::OperationId("listPets".to_string()),
+            action: Some(ArazzoMessageAction::Send),
+            output_keys: vec!["petId".to_string()],
+        };
+        let wf_sum = ArazzoWorkflowSummary {
+            workflow_id: "wf1".to_string(),
+            input_properties: vec!["coupon".to_string()],
+            steps: vec![step_sum],
+            output_keys: vec!["resultId".to_string()],
+        };
+        assert_eq!(wf_sum.workflow_id, "wf1");
     }
 }

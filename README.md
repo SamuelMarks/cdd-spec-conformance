@@ -40,6 +40,9 @@ The table below tracks live specification compliance across all 13 core language
 
 | Language | Specification | Profile | Implemented Features | Overall Score |
 | :--- | :--- | :--- | :---: | :---: |
+| c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | mcp-1.0.0 | client-sdk | 693/712 | **97.3%** |
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | mcp-1.0.0 | client-sdk-cli | 609/712 | **85.5%** |
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | mcp-1.0.0 | servers | 492/712 | **69.1%** |
@@ -49,6 +52,9 @@ The table below tracks live specification compliance across all 13 core language
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | c ([cdd-c](https://github.com/SamuelMarks/cdd-c)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | mcp-1.0.0 | client-sdk | 672/712 | **94.4%** |
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | mcp-1.0.0 | client-sdk-cli | 696/712 | **97.8%** |
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | mcp-1.0.0 | servers | 616/712 | **86.5%** |
@@ -58,6 +64,9 @@ The table below tracks live specification compliance across all 13 core language
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | swagger-2.0 | client-sdk | 209/426 | **49.1%** |
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | swagger-2.0 | client-sdk-cli | 209/426 | **49.1%** |
 | cpp ([cdd-cpp](https://github.com/SamuelMarks/cdd-cpp)) | swagger-2.0 | servers | 209/426 | **49.1%** |
+| csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | mcp-1.0.0 | client-sdk | 681/712 | **95.6%** |
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | mcp-1.0.0 | client-sdk-cli | 342/712 | **48.0%** |
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | mcp-1.0.0 | servers | 686/712 | **96.3%** |
@@ -67,6 +76,9 @@ The table below tracks live specification compliance across all 13 core language
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | csharp ([cdd-csharp](https://github.com/SamuelMarks/cdd-csharp)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -76,6 +88,9 @@ The table below tracks live specification compliance across all 13 core language
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | go ([cdd-go](https://github.com/SamuelMarks/cdd-go)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk | 686/712 | **96.3%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | client-sdk-cli | 700/712 | **98.3%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | mcp-1.0.0 | servers | 698/712 | **98.0%** |
@@ -85,6 +100,9 @@ The table below tracks live specification compliance across all 13 core language
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | java ([cdd-java](https://github.com/SamuelMarks/cdd-java)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -94,6 +112,9 @@ The table below tracks live specification compliance across all 13 core language
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | kotlin ([cdd-kotlin](https://github.com/SamuelMarks/cdd-kotlin)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | mcp-1.0.0 | client-sdk-cli | 196/712 | **27.5%** |
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | mcp-1.0.0 | servers | 703/712 | **98.7%** |
@@ -103,6 +124,9 @@ The table below tracks live specification compliance across all 13 core language
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | php ([cdd-php](https://github.com/SamuelMarks/cdd-php)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -113,6 +137,9 @@ The table below tracks live specification compliance across all 13 core language
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | python-all ([cdd-python-all](https://github.com/SamuelMarks/cdd-python-all)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | mcp-1.0.0 | client-sdk-cli | 516/712 | **72.5%** |
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -123,6 +150,9 @@ The table below tracks live specification compliance across all 13 core language
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | ruby ([cdd-ruby](https://github.com/SamuelMarks/cdd-ruby)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -133,6 +163,9 @@ The table below tracks live specification compliance across all 13 core language
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | rust ([cdd-rust](https://github.com/SamuelMarks/cdd-rust)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -143,6 +176,9 @@ The table below tracks live specification compliance across all 13 core language
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | sh ([cdd-sh](https://github.com/SamuelMarks/cdd-sh)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |
@@ -153,6 +189,9 @@ The table below tracks live specification compliance across all 13 core language
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | swagger-2.0 | client-sdk | 426/426 | **100.0%** |
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | swagger-2.0 | client-sdk-cli | 426/426 | **100.0%** |
 | swift ([cdd-swift](https://github.com/SamuelMarks/cdd-swift)) | swagger-2.0 | servers | 426/426 | **100.0%** |
+| ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | arazzo-1.1.0 | client-sdk | 0/220 | **0.0%** |
+| ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | arazzo-1.1.0 | client-sdk-cli | 0/220 | **0.0%** |
+| ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | arazzo-1.1.0 | servers | 0/220 | **0.0%** |
 | ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | mcp-1.0.0 | client-sdk | 712/712 | **100.0%** |
 | ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | mcp-1.0.0 | client-sdk-cli | 712/712 | **100.0%** |
 | ts ([cdd-ts](https://github.com/SamuelMarks/cdd-ts)) | mcp-1.0.0 | servers | 712/712 | **100.0%** |

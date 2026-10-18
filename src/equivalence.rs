@@ -1,10 +1,14 @@
 //! Semantic equivalence verifier for `OpenAPI` documents, HTTP responses, and shallow source signatures.
 
 use crate::error::ConformanceError;
-use crate::model::{LanguageId, SpecId};
+use crate::model::{
+    ArazzoCriterionType, ArazzoMessageAction, ArazzoParameterIn, ArazzoRuntimeExpressionKind,
+    ArazzoSourceType, ArazzoVersion, LanguageId, SpecId,
+};
 use crate::parser::source::{normalize_ident, ParsedSourceBundle};
 use crate::runner::SimpleHttpResponse;
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
 /// Compares two `OpenAPI` or Swagger JSON/YAML values for semantic equivalence, returning
 /// `ConformanceError::AstRoundtripDrift` if any routes, operations, parameters, or schemas diverge.
@@ -404,6 +408,361 @@ pub fn verify_mcp_json_rpc_exchange(
         });
     }
     Ok(())
+}
+
+/// Validates that an Arazzo 1.1.0 JSON/YAML document conforms to normative Arazzo 1.1.0 structural
+/// and semantic constraints.
+///
+/// # Arguments
+///
+/// * `doc` - Parsed Arazzo 1.1.0 document (`serde_json::Value`).
+/// * `language` - Target language identifier for error attribution.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` or `ConformanceError::ArazzoRuntimeExpressionError`
+/// if any normative Arazzo 1.1.0 rule is violated.
+#[allow(clippy::too_many_lines)]
+pub fn validate_arazzo_110_document(
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let raw_ver = doc
+        .get("arazzo")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let _ = ArazzoVersion::parse_for_language(raw_ver, language)?;
+
+    if let Some(self_str) = doc.get("$self").and_then(serde_json::Value::as_str) {
+        if self_str.is_empty() || self_str.contains('#') {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/$self".to_string(),
+                reason: "the '$self' URI must be a non-empty string without a fragment identifier"
+                    .to_string(),
+            });
+        }
+    }
+
+    let info_title = doc
+        .get("info")
+        .and_then(|i| i.get("title"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let info_ver = doc
+        .get("info")
+        .and_then(|i| i.get("version"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if info_title.trim().is_empty() || info_ver.trim().is_empty() {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: "/info".to_string(),
+            reason: "'info' object must contain non-empty 'title' and 'version' strings"
+                .to_string(),
+        });
+    }
+
+    let sources = doc
+        .get("sourceDescriptions")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: "/sourceDescriptions".to_string(),
+            reason: "'sourceDescriptions' must be a non-empty array".to_string(),
+        })?;
+
+    let mut seen_sources = BTreeSet::new();
+    for (idx, src) in sources.iter().enumerate() {
+        let ptr = format!("/sourceDescriptions/{idx}");
+        let name = src
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let url = src
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if name.trim().is_empty() || url.trim().is_empty() || !seen_sources.insert(name.to_string())
+        {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: ptr,
+                reason: "each sourceDescription must have a unique 'name' and non-empty 'url'"
+                    .to_string(),
+            });
+        }
+        if let Some(t_val) = src.get("type") {
+            let t_str = t_val.as_str().unwrap_or("");
+            if ArazzoSourceType::from_str(t_str).is_err() {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{ptr}/type"),
+                    reason: format!("invalid sourceDescription type '{t_str}'"),
+                });
+            }
+        }
+    }
+
+    let workflows = doc
+        .get("workflows")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: "/workflows".to_string(),
+            reason: "'workflows' must be a non-empty array".to_string(),
+        })?;
+
+    let mut seen_workflows = BTreeSet::new();
+    for (w_idx, wf) in workflows.iter().enumerate() {
+        let wf_ptr = format!("/workflows/{w_idx}");
+        let wf_id = wf
+            .get("workflowId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if wf_id.trim().is_empty() || !seen_workflows.insert(wf_id.to_string()) {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{wf_ptr}/workflowId"),
+                reason: "each workflow must have a unique, non-empty 'workflowId'".to_string(),
+            });
+        }
+
+        let steps = wf
+            .get("steps")
+            .and_then(serde_json::Value::as_array)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{wf_ptr}/steps"),
+                reason: "each workflow must contain a non-empty 'steps' array".to_string(),
+            })?;
+
+        let mut seen_steps = BTreeSet::new();
+        for (s_idx, step) in steps.iter().enumerate() {
+            let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
+            validate_arazzo_step(step, &step_ptr, &mut seen_steps, language)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates a single Arazzo 1.1.0 `Step Object` for target mutual exclusivity, parameter locations,
+/// action values, criterion types, and runtime expressions.
+///
+/// # Arguments
+///
+/// * `step` - Step JSON value.
+/// * `step_ptr` - JSON Pointer to this step.
+/// * `seen_steps` - Set of `stepId` strings already encountered in the workflow.
+/// * `language` - Language identifier for error reporting.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if any normative step rule is violated.
+#[allow(clippy::too_many_lines)]
+fn validate_arazzo_step(
+    step: &serde_json::Value,
+    step_ptr: &str,
+    seen_steps: &mut BTreeSet<String>,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let step_id = step
+        .get("stepId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if step_id.trim().is_empty() || !seen_steps.insert(step_id.to_string()) {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/stepId"),
+            reason: "each step must have a unique, non-empty 'stepId' within its workflow"
+                .to_string(),
+        });
+    }
+
+    let targets_present = [
+        step.get("operationId").is_some(),
+        step.get("operationPath").is_some(),
+        step.get("channelPath").is_some(),
+        step.get("workflowId").is_some(),
+    ]
+    .into_iter()
+    .filter(|&b| b)
+    .count();
+    if targets_present != 1 {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: step_ptr.to_string(),
+            reason: "step must specify exactly one of 'operationId', 'operationPath', 'channelPath', or 'workflowId'".to_string(),
+        });
+    }
+
+    if let Some(act_val) = step.get("action") {
+        let act_str = act_val.as_str().unwrap_or("");
+        if ArazzoMessageAction::from_str(act_str).is_err() {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{step_ptr}/action"),
+                reason: format!("invalid step action '{act_str}'"),
+            });
+        }
+    }
+
+    if let Some(corr) = step
+        .get("correlationId")
+        .and_then(serde_json::Value::as_str)
+    {
+        if corr.starts_with('$') {
+            let _ = ArazzoRuntimeExpressionKind::parse_root(
+                corr,
+                &format!("{step_ptr}/correlationId"),
+            )?;
+        }
+    }
+
+    let mut has_query = false;
+    let mut has_querystring = false;
+    for (p_idx, param) in step
+        .get("parameters")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let p_ptr = format!("{step_ptr}/parameters/{p_idx}");
+        if let Some(in_val) = param.get("in") {
+            let in_str = in_val.as_str().unwrap_or("");
+            let Ok(loc) = ArazzoParameterIn::from_str(in_str) else {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{p_ptr}/in"),
+                    reason: format!("invalid parameter location '{in_str}'"),
+                });
+            };
+            has_query |= loc == ArazzoParameterIn::Query;
+            has_querystring |= loc == ArazzoParameterIn::QueryString;
+        }
+        if let Some(v_str) = param.get("value").and_then(serde_json::Value::as_str) {
+            if v_str.starts_with('$') {
+                let _ = ArazzoRuntimeExpressionKind::parse_root(v_str, &format!("{p_ptr}/value"))?;
+            }
+        }
+    }
+    if has_query && has_querystring {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/parameters"),
+            reason: "'querystring' and 'query' parameters are mutually exclusive in a single step"
+                .to_string(),
+        });
+    }
+
+    for (c_idx, crit) in step
+        .get("successCriteria")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let c_ptr = format!("{step_ptr}/successCriteria/{c_idx}");
+        if let Some(t_val) = crit.get("type") {
+            let _ =
+                ArazzoCriterionType::from_json_value(t_val, language, &format!("{c_ptr}/type"))?;
+        }
+        if let Some(ctx) = crit
+            .get("context")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| s.starts_with('$'))
+        {
+            let _ = ArazzoRuntimeExpressionKind::parse_root(ctx, &format!("{c_ptr}/context"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Normalizes an Arazzo 1.1.0 JSON tree so shorthand `Criterion Object (type)` strings
+/// (`"jsonpath"` / `"xpath"` / `"jsonpointer"`) and canonical `Expression Type Object`
+/// representations compare identically while preserving distinct dialect versions.
+///
+/// # Arguments
+///
+/// * `val` - Raw Arazzo JSON value.
+///
+/// # Returns
+///
+/// Normalized `serde_json::Value`.
+#[must_use]
+fn normalize_arazzo_value(val: &serde_json::Value) -> serde_json::Value {
+    match val {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                let normalized_val =
+                    if matches!(k.as_str(), "type" | "selectorType" | "targetSelectorType")
+                        && (map.contains_key("condition")
+                            || map.contains_key("selector")
+                            || map.contains_key("target"))
+                    {
+                        ArazzoCriterionType::from_json_value(v, &LanguageId::Rust, "").map_or_else(
+                            |_| normalize_arazzo_value(v),
+                            |canon| serde_json::json!(format!("{canon:?}")),
+                        )
+                    } else {
+                        normalize_arazzo_value(v)
+                    };
+                out.insert(k.clone(), normalized_val);
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(normalize_arazzo_value).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Validates and compares two Arazzo 1.1.0 documents for semantic equivalence.
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if either document is structurally invalid or
+/// `ConformanceError::AstRoundtripDrift` if any workflows, steps, inputs, outputs, or criteria diverge.
+///
+/// # Arguments
+///
+/// * `language` - Language compiler that produced `actual`.
+/// * `spec` - Specification standard identifier (typically `SpecId::Arazzo110`).
+/// * `expected` - Canonical reference Arazzo 1.1.0 JSON value.
+/// * `actual` - Extracted/roundtripped Arazzo 1.1.0 JSON value.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if validation fails or semantic differences are detected.
+pub fn verify_arazzo_equivalence(
+    language: &LanguageId,
+    spec: SpecId,
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+) -> Result<(), ConformanceError> {
+    validate_arazzo_110_document(expected, language)?;
+    validate_arazzo_110_document(actual, language)?;
+
+    let norm_exp = normalize_arazzo_value(expected);
+    let norm_act = normalize_arazzo_value(actual);
+
+    let mut diffs = Vec::new();
+    diff_json_values("$", &norm_exp, &norm_act, &mut diffs);
+    if diffs.is_empty() {
+        Ok(())
+    } else {
+        Err(ConformanceError::AstRoundtripDrift {
+            language: language.clone(),
+            spec,
+            semantic_diff: diffs,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -807,5 +1166,211 @@ export function deletePet(id: number) {}
             &serde_json::json!({"jsonrpc": "2.0", "id": 1})
         )
         .is_err());
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    fn test_validate_and_verify_arazzo_110_equivalence() {
+        let valid_arazzo = serde_json::json!({
+            "arazzo": "1.1.0",
+            "$self": "https://example.com/workflows/pet.arazzo.yaml",
+            "x-generated-at": "2026-10-18T00:00:00Z",
+            "info": {
+                "title": "Pet Purchase Workflow",
+                "version": "1.0.0"
+            },
+            "sourceDescriptions": [
+                {
+                    "name": "petStore",
+                    "url": "https://example.com/openapi.yaml",
+                    "type": "openapi"
+                },
+                {
+                    "name": "petEvents",
+                    "url": "https://example.com/asyncapi.yaml"
+                }
+            ],
+            "workflows": [
+                {
+                    "workflowId": "purchasePetWorkflow",
+                    "steps": [
+                        {
+                            "stepId": "findPet",
+                            "operationId": "listPets",
+                            "action": "send",
+                            "correlationId": "$message.header#/correlationId",
+                            "parameters": [
+                                {
+                                    "name": "limit",
+                                    "in": "query",
+                                    "value": "$inputs.maxLimit"
+                                },
+                                {
+                                    "name": "staticHeader",
+                                    "in": "header",
+                                    "value": "literal-val"
+                                },
+                                {
+                                    "reference": "$components.parameters.sharedParam",
+                                    "value": 10
+                                }
+                            ],
+                            "successCriteria": [
+                                {
+                                    "context": "$statusCode",
+                                    "condition": "$statusCode == 200",
+                                    "type": "jsonpath"
+                                },
+                                {
+                                    "context": "literal_ctx",
+                                    "condition": "true"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let mut canonical_type_arazzo = valid_arazzo.clone();
+        canonical_type_arazzo["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
+            serde_json::json!({"type": "jsonpath", "version": "rfc9535"});
+
+        assert!(verify_arazzo_equivalence(
+            &LanguageId::Rust,
+            SpecId::Arazzo110,
+            &valid_arazzo,
+            &canonical_type_arazzo
+        )
+        .is_ok());
+
+        let mut xpath_10_arazzo = valid_arazzo.clone();
+        xpath_10_arazzo["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
+            serde_json::json!({"type": "xpath", "version": "xpath-10"});
+        assert!(verify_arazzo_equivalence(
+            &LanguageId::Rust,
+            SpecId::Arazzo110,
+            &valid_arazzo,
+            &xpath_10_arazzo
+        )
+        .is_err());
+
+        // Test invalid arazzo version and non-string $self in validate_arazzo_110_document
+        let mut no_self = valid_arazzo.clone();
+        no_self["$self"] = serde_json::Value::Null;
+        assert!(validate_arazzo_110_document(&no_self, &LanguageId::Rust).is_ok());
+
+        let mut bad_ver = valid_arazzo.clone();
+        bad_ver["arazzo"] = serde_json::json!("1.0.0");
+        assert!(validate_arazzo_110_document(&bad_ver, &LanguageId::Rust).is_err());
+        assert!(verify_arazzo_equivalence(
+            &LanguageId::Rust,
+            SpecId::Arazzo110,
+            &bad_ver,
+            &valid_arazzo
+        )
+        .is_err());
+        assert!(verify_arazzo_equivalence(
+            &LanguageId::Rust,
+            SpecId::Arazzo110,
+            &valid_arazzo,
+            &bad_ver
+        )
+        .is_err());
+
+        let _ = normalize_arazzo_value(&serde_json::json!({"condition": "x", "type": "unknown"}));
+
+        // Test invalid $self with fragment
+        let mut bad_self = valid_arazzo.clone();
+        bad_self["$self"] = serde_json::json!("https://example.com/wf.yaml#frag");
+        assert!(validate_arazzo_110_document(&bad_self, &LanguageId::Rust).is_err());
+
+        // Test missing info title
+        let mut bad_info = valid_arazzo.clone();
+        bad_info["info"]["title"] = serde_json::json!("");
+        assert!(validate_arazzo_110_document(&bad_info, &LanguageId::Rust).is_err());
+
+        // Test empty sourceDescriptions
+        let mut bad_sources = valid_arazzo.clone();
+        bad_sources["sourceDescriptions"] = serde_json::json!([]);
+        assert!(validate_arazzo_110_document(&bad_sources, &LanguageId::Rust).is_err());
+
+        // Test duplicate sourceDescription name
+        let mut dup_sources = valid_arazzo.clone();
+        dup_sources["sourceDescriptions"][1]["name"] = serde_json::json!("petStore");
+        assert!(validate_arazzo_110_document(&dup_sources, &LanguageId::Rust).is_err());
+
+        // Test invalid sourceDescription type
+        let mut bad_src_type = valid_arazzo.clone();
+        bad_src_type["sourceDescriptions"][0]["type"] = serde_json::json!("soap");
+        assert!(validate_arazzo_110_document(&bad_src_type, &LanguageId::Rust).is_err());
+
+        // Test empty workflows
+        let mut bad_wfs = valid_arazzo.clone();
+        bad_wfs["workflows"] = serde_json::json!([]);
+        assert!(validate_arazzo_110_document(&bad_wfs, &LanguageId::Rust).is_err());
+
+        // Test empty workflowId
+        let mut bad_wf_id = valid_arazzo.clone();
+        bad_wf_id["workflows"][0]["workflowId"] = serde_json::json!("");
+        assert!(validate_arazzo_110_document(&bad_wf_id, &LanguageId::Rust).is_err());
+
+        // Test empty steps
+        let mut bad_steps = valid_arazzo.clone();
+        bad_steps["workflows"][0]["steps"] = serde_json::json!([]);
+        assert!(validate_arazzo_110_document(&bad_steps, &LanguageId::Rust).is_err());
+
+        // Test empty stepId
+        let mut bad_step_id = valid_arazzo.clone();
+        bad_step_id["workflows"][0]["steps"][0]["stepId"] = serde_json::json!("");
+        assert!(validate_arazzo_110_document(&bad_step_id, &LanguageId::Rust).is_err());
+
+        // Test mutually non-exclusive step targets (both operationId and channelPath)
+        let mut multi_target = valid_arazzo.clone();
+        multi_target["workflows"][0]["steps"][0]["channelPath"] = serde_json::json!("/ch");
+        assert!(validate_arazzo_110_document(&multi_target, &LanguageId::Rust).is_err());
+
+        // Test invalid step action
+        let mut bad_action = valid_arazzo.clone();
+        bad_action["workflows"][0]["steps"][0]["action"] = serde_json::json!("invalid");
+        assert!(validate_arazzo_110_document(&bad_action, &LanguageId::Rust).is_err());
+
+        // Test literal correlationId (not starting with $) and invalid $ correlationId
+        let mut lit_corr = valid_arazzo.clone();
+        lit_corr["workflows"][0]["steps"][0]["correlationId"] = serde_json::json!("literal-id");
+        assert!(validate_arazzo_110_document(&lit_corr, &LanguageId::Rust).is_ok());
+
+        let mut bad_corr = valid_arazzo.clone();
+        bad_corr["workflows"][0]["steps"][0]["correlationId"] = serde_json::json!("$bad.expr");
+        assert!(validate_arazzo_110_document(&bad_corr, &LanguageId::Rust).is_err());
+
+        // Test invalid parameter in
+        let mut bad_param_in = valid_arazzo.clone();
+        bad_param_in["workflows"][0]["steps"][0]["parameters"][0]["in"] =
+            serde_json::json!("invalid_in");
+        assert!(validate_arazzo_110_document(&bad_param_in, &LanguageId::Rust).is_err());
+
+        // Test invalid parameter runtime expression
+        let mut bad_param_val = valid_arazzo.clone();
+        bad_param_val["workflows"][0]["steps"][0]["parameters"][0]["value"] =
+            serde_json::json!("$bad.val");
+        assert!(validate_arazzo_110_document(&bad_param_val, &LanguageId::Rust).is_err());
+
+        // Test mutually exclusive query and querystring in same step
+        let mut query_and_qs = valid_arazzo.clone();
+        query_and_qs["workflows"][0]["steps"][0]["parameters"][1]["in"] =
+            serde_json::json!("querystring");
+        assert!(validate_arazzo_110_document(&query_and_qs, &LanguageId::Rust).is_err());
+
+        // Test invalid successCriteria type and context
+        let mut bad_crit_type = valid_arazzo.clone();
+        bad_crit_type["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
+            serde_json::json!("bad_type");
+        assert!(validate_arazzo_110_document(&bad_crit_type, &LanguageId::Rust).is_err());
+
+        let mut bad_crit_ctx = valid_arazzo;
+        bad_crit_ctx["workflows"][0]["steps"][0]["successCriteria"][0]["context"] =
+            serde_json::json!("$bad.ctx");
+        assert!(validate_arazzo_110_document(&bad_crit_ctx, &LanguageId::Rust).is_err());
     }
 }

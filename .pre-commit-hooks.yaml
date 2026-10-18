@@ -3,7 +3,7 @@
   description: Validates checklists and verifies implemented standards for the repository
   entry: cdd-conformance check
   language: rust
-  files: ^(conformance/|compliance-|mcp-|mock-server|COMPLIANCE\.md|\.cdd-conformance\.ya?ml)
+  files: ^(conformance/|compliance-|openapi-|swagger-|arazzo-|mcp-|mock-server|COMPLIANCE\.md|\.cdd-conformance\.ya?ml)
   pass_filenames: false
 
 - id: cdd-conformance-claims
@@ -11,7 +11,7 @@
   description: Verifies documented claims in COMPLIANCE.md against checklist ground truth
   entry: cdd-conformance check --claims-only
   language: rust
-  files: ^(COMPLIANCE\.md)
+  files: ^(COMPLIANCE\.md|conformance/|arazzo-)
   pass_filenames: false
 
 - id: cdd-conformance-matrix
@@ -19,5 +19,5 @@
   description: Scans ecosystem repositories and updates the conformance matrix table in README.md
   entry: python3 scripts/update_readme_matrix.py
   language: system
-  files: ^(README\.md|conformance/|compliance-|mcp-|mock-server)
+  files: ^(README\.md|conformance/|compliance-|openapi-|swagger-|arazzo-|mcp-|mock-server)
   pass_filenames: false

@@ -1,6 +1,14 @@
 //! CDD Conformance library for specification compliance auditing and pre-commit verification.
 
-#![deny(missing_docs)]
+#![deny(
+    missing_docs,
+    rustdoc::broken_intra_doc_links,
+    clippy::all,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 /// Documentation compliance claim verification engine.
 pub mod claims;

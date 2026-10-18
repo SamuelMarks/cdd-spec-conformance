@@ -214,6 +214,12 @@ mod tests {
             read_resource("conformance://specs/openapi-3.2.0/client-sdk", &registry).ok();
         assert_eq!(spec_res.map(|r| r.contents.len()), Some(1));
 
+        for profile in ["client-sdk", "client-sdk-cli", "servers"] {
+            let uri = format!("conformance://specs/arazzo-1.1.0/{profile}");
+            let arazzo_res = read_resource(&uri, &registry).ok();
+            assert_eq!(arazzo_res.map(|r| r.contents.len()), Some(1));
+        }
+
         assert!(read_resource("conformance://invalid", &registry).is_err());
         assert!(read_resource("conformance://specs/one", &registry).is_err());
         assert!(read_resource("conformance://specs/a/b/c", &registry).is_err());

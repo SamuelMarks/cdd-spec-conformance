@@ -120,6 +120,32 @@ fn collect_spec_dirs(base_dir: &Path, visited: &mut HashSet<PathBuf>, out: &mut 
     }
 }
 
+/// Resolves a repository path, falling back to `../<repo_path>` when needed.
+///
+/// If `repo_path` is a relative directory name (such as `cdd-c`) that does not exist in the
+/// current working directory, checks whether `../<repo_path>` exists in the parent workspace.
+///
+/// # Arguments
+///
+/// * `repo_path` - Candidate repository path provided by the caller.
+///
+/// # Returns
+///
+/// Resolved `PathBuf` pointing to the repository directory.
+#[must_use]
+pub fn resolve_repo_path(repo_path: &Path) -> PathBuf {
+    if repo_path.exists() {
+        return repo_path.to_path_buf();
+    }
+    if repo_path.is_relative() {
+        let parent_candidate = Path::new("..").join(repo_path);
+        if parent_candidate.exists() {
+            return parent_candidate;
+        }
+    }
+    repo_path.to_path_buf()
+}
+
 /// Scans a repository directory to discover its target specifications and checklists.
 ///
 /// Supports custom `paths.conformance_dir` from `.cdd-conformance.yaml`, standard (`conformance/`),
@@ -133,10 +159,13 @@ fn collect_spec_dirs(base_dir: &Path, visited: &mut HashSet<PathBuf>, out: &mut 
 ///
 /// Returns `ConformanceError` if filesystem traversal or configuration loading fails.
 pub fn scan_repository(repo_path: &Path) -> Result<DiscoveredProject, ConformanceError> {
-    let canonical_repo = repo_path.canonicalize().map_err(|e| ConformanceError::Io {
-        source: e,
-        path: repo_path.to_path_buf(),
-    })?;
+    let resolved_repo = resolve_repo_path(repo_path);
+    let canonical_repo = resolved_repo
+        .canonicalize()
+        .map_err(|e| ConformanceError::Io {
+            source: e,
+            path: repo_path.to_path_buf(),
+        })?;
 
     let repo_dir_name = canonical_repo
         .file_name()
@@ -403,6 +432,19 @@ mod tests {
 
     #[test]
     fn test_discovery_error_paths() {
+        assert_eq!(resolve_repo_path(Path::new(".")), PathBuf::from("."));
+        assert_eq!(
+            resolve_repo_path(Path::new("cdd-spec-conformance")),
+            PathBuf::from("../cdd-spec-conformance")
+        );
+        assert_eq!(
+            resolve_repo_path(Path::new("nonexistent-dir-12345")),
+            PathBuf::from("nonexistent-dir-12345")
+        );
+        assert_eq!(
+            resolve_repo_path(Path::new("/nonexistent-abs-dir-12345")),
+            PathBuf::from("/nonexistent-abs-dir-12345")
+        );
         assert!(scan_repository(Path::new("nonexistent-dir-12345")).is_err());
         assert!(scan_all_repositories(Path::new("nonexistent-parent-dir-12345")).is_err());
 

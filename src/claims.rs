@@ -56,7 +56,34 @@ impl ClaimVerificationReport {
 /// Space-delimited lowercased alphanumeric key.
 fn normalize_feature_key(s: &str) -> String {
     let base = s.split('(').next().unwrap_or(s);
-    base.chars()
+    normalize_alphanumeric_words(base)
+}
+
+/// Normalizes a feature string including any parenthetical discriminator tokens
+/// (e.g. `"Runtime Expressions ($steps)"` -> `"runtime expressions steps"`).
+///
+/// # Arguments
+///
+/// * `s` - Raw feature name string.
+///
+/// # Returns
+///
+/// Space-delimited lowercased alphanumeric key retaining parenthetical tokens.
+fn normalize_feature_key_with_parens(s: &str) -> String {
+    normalize_alphanumeric_words(s)
+}
+
+/// Normalizes a raw string into lowercased space-delimited alphanumeric words.
+///
+/// # Arguments
+///
+/// * `s` - Input string slice.
+///
+/// # Returns
+///
+/// Space-delimited lowercased alphanumeric words.
+fn normalize_alphanumeric_words(s: &str) -> String {
+    s.chars()
         .map(|c| {
             if c.is_alphanumeric() || c.is_whitespace() {
                 c.to_ascii_lowercase()
@@ -143,9 +170,11 @@ fn evaluate_claim_feature(
         let mut found_any = false;
         let mut all_impl = true;
         for part in feature_cell.split('/') {
-            let part_key = normalize_feature_key(part);
+            let part_key = normalize_feature_key_with_parens(part);
             if !part_key.is_empty() {
-                match lookup_single_claim_key(&part_key, implemented_features) {
+                match implemented_features.get(&part_key).copied().or_else(|| {
+                    lookup_single_claim_key(&normalize_feature_key(part), implemented_features)
+                }) {
                     Some(true) => found_any = true,
                     Some(false) => {
                         found_any = true;
@@ -158,6 +187,10 @@ fn evaluate_claim_feature(
         if found_any {
             return Some(all_impl);
         }
+    }
+    let with_parens = normalize_feature_key_with_parens(feature_cell);
+    if let Some(&exact) = implemented_features.get(&with_parens) {
+        return Some(exact);
     }
     let key = normalize_feature_key(feature_cell);
     lookup_single_claim_key(&key, implemented_features)
@@ -287,16 +320,23 @@ pub fn verify_compliance_claims(
     // Build lookup map of normalized feature name -> whether it is implemented in at least one profile/direction
     let mut implemented_features: HashMap<String, bool> = HashMap::new();
     for table in tables {
+        let mut table_any_impl = false;
         for row in &table.rows {
-            let full_key = normalize_feature_key(&row.feature_name);
+            let base_key = normalize_feature_key(&row.feature_name);
+            let paren_key = normalize_feature_key_with_parens(&row.feature_name);
             let is_impl = row.status.is_to_present() || row.status.is_from_present();
+            table_any_impl |= is_impl;
             implemented_features
-                .entry(full_key)
+                .entry(base_key)
+                .and_modify(|v| *v = *v || is_impl)
+                .or_insert(is_impl);
+            implemented_features
+                .entry(paren_key)
                 .and_modify(|v| *v = *v || is_impl)
                 .or_insert(is_impl);
             if let Some((_, after_open)) = row.feature_name.split_once('(') {
                 if let Some((prop, _)) = after_open.split_once(')') {
-                    let prop_key = normalize_feature_key(prop);
+                    let prop_key = normalize_feature_key_with_parens(prop);
                     if !prop_key.is_empty() {
                         let prev = implemented_features
                             .get(&prop_key)
@@ -307,6 +347,12 @@ pub fn verify_compliance_claims(
                 }
             }
         }
+        let spec_alias = normalize_feature_key_with_parens(table.spec_id.as_str());
+        let prev_spec = implemented_features
+            .get(&spec_alias)
+            .copied()
+            .unwrap_or(false);
+        implemented_features.insert(spec_alias, prev_spec | table_any_impl);
     }
 
     let mut total_claims = 0;
@@ -560,6 +606,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_verify_composite_and_bullet_claims() {
         let dir = std::env::temp_dir().join(format!("cdd_claims_test3_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -629,6 +676,53 @@ Introductory paragraph outside list items.
             rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
             Some((7, 4, 3))
         );
+
+        // Test Arazzo 1.1.0 parenthetical discriminator claims and spec-level claim
+        let arazzo_comp_path = dir.join("ARAZZO_COMPLIANCE.md");
+        let arazzo_comp_md = r#"# Arazzo 1.1.0 Compliance
+- Arazzo 1.1.0: ✅ Supported
+- Runtime Expressions ($steps): ✅ Supported
+- Runtime Expressions ($message.payload): ✅ Supported
+- Step Object (channelPath) / Selector Object: ✅ Supported
+"#;
+        let _ = std::fs::write(&arazzo_comp_path, arazzo_comp_md);
+        let arazzo_table = ChecklistTable {
+            spec_id: SpecId::Arazzo110,
+            profile: ProfileKind::ClientSdk,
+            title: "Arazzo 1.1.0".to_string(),
+            rows: vec![
+                ChecklistRow {
+                    feature_name: "Runtime Expressions (`$steps`)".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 1,
+                },
+                ChecklistRow {
+                    feature_name: "Runtime Expressions (`$message.payload`)".to_string(),
+                    status: FeatureStatus::new(),
+                    notes: None,
+                    line_number: 2,
+                },
+                ChecklistRow {
+                    feature_name: "Step Object (`channelPath`)".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 3,
+                },
+                ChecklistRow {
+                    feature_name: "Selector Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 4,
+                },
+            ],
+        };
+        let arazzo_rep = verify_compliance_claims(&arazzo_comp_path, &[arazzo_table]).ok();
+        assert_eq!(
+            arazzo_rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
+            Some((4, 3, 1))
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

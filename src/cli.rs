@@ -3,7 +3,7 @@
 use crate::claims::verify_compliance_claims;
 use crate::config::ProjectConfig;
 use crate::diff::compare_checklists_with_path;
-use crate::discovery::{scan_all_repositories, scan_repository};
+use crate::discovery::{resolve_repo_path, scan_all_repositories, scan_repository};
 use crate::error::ConformanceError;
 use crate::matrix_runtime::{
     inspect_source_signatures_with_options, verify_backends_matrix,
@@ -112,6 +112,8 @@ pub enum Commands {
         include_tests: bool,
         /// Optional path to an `OpenAPI` JSON/YAML file to verify 1:1 presence against.
         openapi_spec: Option<PathBuf>,
+        /// Optional path to an Arazzo 1.1.0 JSON/YAML file to verify 1:1 workflow/input presence against.
+        arazzo_spec: Option<PathBuf>,
     },
 
     /// Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the `../cdd-rust` reference backend.
@@ -218,7 +220,8 @@ impl Cli {
                     .arg(Arg::new("lang").short('l').long("lang"))
                     .arg(Arg::new("require_docs").long("require-docs").action(ArgAction::SetTrue))
                     .arg(Arg::new("include_tests").long("include-tests").action(ArgAction::SetTrue))
-                    .arg(Arg::new("openapi_spec").long("openapi-spec").value_parser(value_parser!(PathBuf))),
+                    .arg(Arg::new("openapi_spec").long("openapi-spec").value_parser(value_parser!(PathBuf)))
+                    .arg(Arg::new("arazzo_spec").long("arazzo-spec").value_parser(value_parser!(PathBuf))),
             )
             .subcommand(
                 Command::new("verify-clients")
@@ -318,6 +321,7 @@ impl Cli {
                 require_docs: sub.get_flag("require_docs"),
                 include_tests: sub.get_flag("include_tests"),
                 openapi_spec: sub.get_one::<PathBuf>("openapi_spec").cloned(),
+                arazzo_spec: sub.get_one::<PathBuf>("arazzo_spec").cloned(),
             },
             Some(("verify-clients", sub)) => Commands::VerifyClients {
                 repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
@@ -416,7 +420,7 @@ fn extract_paths(sub: &ArgMatches) -> Vec<PathBuf> {
 ///
 /// Resolved `PathBuf`.
 fn default_repo_path(path: Option<PathBuf>) -> PathBuf {
-    path.unwrap_or_else(|| PathBuf::from("."))
+    path.map_or_else(|| PathBuf::from("."), |p| resolve_repo_path(&p))
 }
 
 /// Resolves an optional `-p/--path` and positional `paths` into a non-empty list of repository paths.
@@ -432,9 +436,11 @@ fn default_repo_path(path: Option<PathBuf>) -> PathBuf {
 fn resolve_repo_paths(path: Option<PathBuf>, paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(p) = path {
-        out.push(p);
+        out.push(resolve_repo_path(&p));
     }
-    out.extend(paths);
+    for p in paths {
+        out.push(resolve_repo_path(&p));
+    }
     if out.is_empty() {
         out.push(PathBuf::from("."));
     }
@@ -559,13 +565,15 @@ fn render_sync_command(
             require_docs,
             include_tests,
             openapi_spec,
+            arazzo_spec,
         } => {
             let resolved_path = default_repo_path(path);
+            let spec_path = arazzo_spec.as_deref().or(openapi_spec.as_deref());
             let bundle = inspect_source_signatures_with_options(
                 &resolved_path,
                 lang.as_deref(),
                 require_docs,
-                openapi_spec.as_deref(),
+                spec_path,
                 include_tests,
             )?;
             let mut s = serde_json::to_string_pretty(&bundle).unwrap_or_default();
@@ -1691,6 +1699,8 @@ standards:
     min_coverage:
       to: 80.0
       from: 100.0
+  - spec: arazzo-1.1.0
+    profiles: [client-sdk, client-sdk-cli, servers]
   - spec: mcp-1.0.0
     profiles: [client-sdk, client-sdk-cli, servers]
 
@@ -1910,9 +1920,20 @@ mod tests {
                 require_docs: false,
                 include_tests: false,
                 openapi_spec: None,
+                arazzo_spec: None,
             },
         };
         assert!(run_cli_with_writer(bad_inspect, &mut buf).is_err());
+
+        let parsed_inspect_arazzo = Cli::try_parse_from([
+            "cdd-conformance",
+            "inspect-source",
+            "--path",
+            "src/lib.rs",
+            "--arazzo-spec",
+            "nonexistent.arazzo.yaml",
+        ]);
+        assert!(parsed_inspect_arazzo.is_ok());
 
         let parsed_vc = Cli::try_parse_from([
             "cdd-conformance",

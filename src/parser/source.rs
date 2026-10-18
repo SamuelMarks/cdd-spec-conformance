@@ -263,6 +263,163 @@ impl ParsedSourceBundle {
 
         Ok(())
     }
+
+    /// Verifies that all reusable input schemas (`components.inputs`), input properties,
+    /// workflows (`workflows[].workflowId`), and workflow input parameters declared in an
+    /// Arazzo 1.1.0 JSON/YAML document are present in this parsed source bundle.
+    ///
+    /// # Arguments
+    ///
+    /// * `arazzo_doc` - Parsed `serde_json::Value` representing an Arazzo 1.1.0 document.
+    /// * `fallback_lang` - Language identifier for error reporting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::MissingSourceSymbol` if any expected reusable input struct,
+    /// property field, workflow function/struct, or workflow input argument is missing.
+    pub fn verify_against_arazzo(
+        &self,
+        arazzo_doc: &serde_json::Value,
+        fallback_lang: &LanguageId,
+    ) -> Result<(), ConformanceError> {
+        let lang = self.language.as_ref().unwrap_or(fallback_lang);
+        let struct_map: BTreeMap<String, &ParsedStructOrClass> = self
+            .structs
+            .iter()
+            .map(|s| (normalize_ident(&s.name), s))
+            .collect();
+
+        let inputs_opt = arazzo_doc
+            .get("components")
+            .and_then(|c| c.get("inputs"))
+            .and_then(serde_json::Value::as_object);
+
+        for (schema_name, schema_val) in inputs_opt.into_iter().flatten() {
+            let norm_schema = normalize_ident(schema_name);
+            let Some(parsed_struct) = struct_map.get(&norm_schema) else {
+                return Err(ConformanceError::MissingSourceSymbol {
+                    language: lang.clone(),
+                    symbol_kind: "struct".to_string(),
+                    expected_name: schema_name.clone(),
+                });
+            };
+            let field_names: BTreeSet<String> = parsed_struct
+                .fields
+                .iter()
+                .map(|f| normalize_ident(&f.name))
+                .collect();
+            for prop_name in schema_val
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .into_iter()
+                .flat_map(serde_json::Map::keys)
+            {
+                if !field_names.contains(&normalize_ident(prop_name)) {
+                    return Err(ConformanceError::MissingSourceSymbol {
+                        language: lang.clone(),
+                        symbol_kind: "field".to_string(),
+                        expected_name: format!("{schema_name}.{prop_name}"),
+                    });
+                }
+            }
+        }
+
+        let func_map: BTreeMap<String, &ParsedFunction> = self
+            .all_functions()
+            .into_iter()
+            .map(|f| (normalize_ident(&f.name), f))
+            .collect();
+
+        for wf_val in arazzo_doc
+            .get("workflows")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(wf_id) = wf_val.get("workflowId").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let norm_wf = normalize_ident(wf_id);
+            let input_props: Vec<&String> = wf_val
+                .get("inputs")
+                .and_then(|i| i.get("properties"))
+                .and_then(serde_json::Value::as_object)
+                .map(|m| m.keys().collect())
+                .unwrap_or_default();
+
+            if let Some(parsed_fn) = func_map.get(&norm_wf) {
+                let arg_names: BTreeSet<String> = parsed_fn
+                    .args
+                    .iter()
+                    .map(|a| normalize_ident(&a.name))
+                    .collect();
+                for prop_name in input_props {
+                    if !arg_names.contains(&normalize_ident(prop_name)) {
+                        return Err(ConformanceError::MissingSourceSymbol {
+                            language: lang.clone(),
+                            symbol_kind: "arg".to_string(),
+                            expected_name: format!("{wf_id}({prop_name})"),
+                        });
+                    }
+                }
+            } else if let Some(parsed_struct) = struct_map.get(&norm_wf) {
+                let field_names: BTreeSet<String> = parsed_struct
+                    .fields
+                    .iter()
+                    .map(|f| normalize_ident(&f.name))
+                    .collect();
+                for prop_name in input_props {
+                    if !field_names.contains(&normalize_ident(prop_name)) {
+                        return Err(ConformanceError::MissingSourceSymbol {
+                            language: lang.clone(),
+                            symbol_kind: "field".to_string(),
+                            expected_name: format!("{wf_id}.{prop_name}"),
+                        });
+                    }
+                }
+            } else {
+                return Err(ConformanceError::MissingSourceSymbol {
+                    language: lang.clone(),
+                    symbol_kind: "workflow".to_string(),
+                    expected_name: wf_id.to_string(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Automatically detects whether `spec_doc` is an Arazzo 1.1.0 document (`arazzo` root key)
+    /// or an `OpenAPI` / Swagger document (`openapi` / `swagger` root key) and verifies this
+    /// source bundle against it.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_doc` - Parsed JSON/YAML specification document.
+    /// * `fallback_lang` - Language identifier for error reporting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError` if any expected symbol is missing or if `spec_doc` is neither Arazzo nor `OpenAPI`.
+    pub fn verify_against_spec_doc(
+        &self,
+        spec_doc: &serde_json::Value,
+        fallback_lang: &LanguageId,
+    ) -> Result<(), ConformanceError> {
+        if spec_doc.get("arazzo").is_some() {
+            self.verify_against_arazzo(spec_doc, fallback_lang)
+        } else if spec_doc.get("openapi").is_some() || spec_doc.get("swagger").is_some() {
+            self.verify_against_openapi(spec_doc, fallback_lang)
+        } else {
+            let lang = self.language.as_ref().unwrap_or(fallback_lang);
+            Err(ConformanceError::ArazzoSchemaViolation {
+                language: lang.clone(),
+                pointer: "/".to_string(),
+                reason: "specification document missing 'arazzo', 'openapi', or 'swagger' root key"
+                    .to_string(),
+            })
+        }
+    }
 }
 
 /// Checks whether an optional doc comment string is present and non-empty after trimming.
@@ -999,6 +1156,11 @@ fn split_code_and_inline_comment(line: &str) -> (&str, Option<String>) {
 }
 
 /// Parses Rust source code (`.rs`) for `struct`, fields, `fn`, args, and `///` doc comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Rust source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -1008,7 +1170,6 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut brace_depth: i32 = 0;
     let mut struct_brace_depth: i32 = 0;
     let mut impl_brace_depth: i32 = 0;
-
     for (idx, raw_line) in source.lines().enumerate() {
         let line_num = idx + 1;
         let trimmed = raw_line.trim();
@@ -1018,6 +1179,9 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
             doc_buf.push(c);
             continue;
+        }
+        if trimmed == "#[cfg(test)]" {
+            break;
         }
         if trimmed.starts_with("#[") {
             continue;
@@ -1130,6 +1294,11 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses C and C++ source code (`.h`, `.c`, `.hpp`, `.cpp`).
+///
+/// # Arguments
+///
+/// * `source` - Raw C/C++ source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -1253,6 +1422,11 @@ fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses C# (`.cs`) and Java (`.java`) source code for classes/records/structs, fields/properties, methods, and args.
+///
+/// # Arguments
+///
+/// * `source` - Raw C# or Java source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -1385,6 +1559,11 @@ fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Go source code (`.go`) for `type <Name> struct`, fields, `func`, args, and `//` `GoDoc` comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Go source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -1507,6 +1686,15 @@ fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Go function parameters (`a int, b string` or `a, b int`).
+///
+/// # Arguments
+///
+/// * `params_str` - Raw parameter list inside parentheses.
+/// * `line` - 1-based line number of the declaration.
+///
+/// # Returns
+///
+/// Vector of `ParsedArg` entries.
 fn parse_go_args(params_str: &str, line: usize) -> Vec<ParsedArg> {
     let mut args = Vec::new();
     for seg in split_top_level_params(params_str) {
@@ -1524,6 +1712,11 @@ fn parse_go_args(params_str: &str, line: usize) -> Vec<ParsedArg> {
 }
 
 /// Parses Kotlin source code (`.kt`) for `class` / `data class`, properties, `fun`, args, and `KDoc` comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Kotlin source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -1639,6 +1832,11 @@ fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses PHP source code (`.php`) for `class`, `$fields`, `function`, `$args`, and `PHPDoc` comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw PHP source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut in_block_comment = false;
@@ -1735,6 +1933,11 @@ fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Python source code (`.py`) for `class`, fields, `def`, args, and `"""..."""` or `#` docstrings.
+///
+/// # Arguments
+///
+/// * `source` - Raw Python source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_python_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let lines: Vec<&str> = source.lines().collect();
@@ -1861,6 +2064,15 @@ fn parse_python_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Consumes an optional triple-quoted Python docstring (`"""..."""` or `'''...'''`) starting at `start_idx`.
+///
+/// # Arguments
+///
+/// * `lines` - Slice of all lines in the Python file.
+/// * `start_idx` - Line index immediately following the `class` or `def` header.
+///
+/// # Returns
+///
+/// Tuple of `(optional_docstring, next_line_index)`.
 fn consume_python_docstring(lines: &[&str], start_idx: usize) -> (Option<String>, usize) {
     let mut idx = start_idx;
     while idx < lines.len() && lines[idx].trim().is_empty() {
@@ -1916,6 +2128,11 @@ fn consume_python_docstring(lines: &[&str], start_idx: usize) -> (Option<String>
 }
 
 /// Parses Ruby source code (`.rb`) for `class`, `attr_accessor` / `attr_reader`, `def`, args, and YARD `#` comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Ruby source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
@@ -2036,6 +2253,11 @@ fn finish_shell_fn(current_fn: &mut Option<ParsedFunction>, bundle: &mut ParsedS
 }
 
 /// Parses POSIX Shell source code (`.sh`) for `# @struct` / `# @field`, functions, positional args, and `# @param` docs.
+///
+/// # Arguments
+///
+/// * `source` - Raw POSIX shell source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_shell_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -2150,6 +2372,11 @@ fn parse_shell_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Swift source code (`.swift`) for `struct`/`class`, `let`/`var` fields, `func`, args, and `///` `SwiftDoc` comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Swift source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut in_block_comment = false;
@@ -2242,6 +2469,11 @@ fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses TypeScript source code (`.ts`, `.tsx`) for `interface`/`class`/`type`, fields, functions/methods, args, and JSDoc/TSDoc.
+///
+/// # Arguments
+///
+/// * `source` - Raw TypeScript source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 #[allow(clippy::too_many_lines)]
 fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
@@ -2360,6 +2592,11 @@ fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Zig source code (`.zig`) for `pub const X = struct`, fields, `pub fn`, args, and `///` doc comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Zig source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
@@ -2441,6 +2678,11 @@ fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses COBOL source code (`.cob`, `.cbl`) for `01` record groups, `05` `PIC` fields, `PROGRAM-ID` / `SECTION` + `USING` args, and `*>` doc comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw COBOL source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_cobol_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
@@ -2545,6 +2787,11 @@ fn parse_cobol_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses Fortran source code (`.f90`, `.f08`) for `type :: <Name>`, fields, `subroutine`/`function`, dummy args, and `!>` / `!!` doc comments.
+///
+/// # Arguments
+///
+/// * `source` - Raw Fortran source code string.
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_fortran_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
@@ -2713,6 +2960,15 @@ fn parse_custom_profile_source(
 }
 
 /// Finds a type declaration keyword (`struct`, `class`, `record`, `interface`) and extracts the identifier.
+///
+/// # Arguments
+///
+/// * `code` - Trimmed source line without comments.
+/// * `keywords` - Candidate type declaration keywords.
+///
+/// # Returns
+///
+/// `Some((matched_keyword, identifier))` if found, or `None`.
 fn find_type_keyword(code: &str, keywords: &[&str]) -> Option<(String, String)> {
     let tokens: Vec<&str> = code.split_whitespace().collect();
     for (idx, &tok) in tokens.iter().enumerate() {
@@ -2731,11 +2987,29 @@ fn find_type_keyword(code: &str, keywords: &[&str]) -> Option<(String, String)> 
 }
 
 /// Matches `<modifiers> <keyword> <Name>` and returns `Some(Name)`.
+///
+/// # Arguments
+///
+/// * `code` - Trimmed source line without comments.
+/// * `keyword` - Keyword to match (e.g. `"struct"`).
+///
+/// # Returns
+///
+/// `Some(String)` containing the declared type identifier, or `None`.
 fn match_keyword_decl(code: &str, keyword: &str) -> Option<String> {
     find_type_keyword(code, &[keyword]).map(|(_, name)| name)
 }
 
 /// Matches a function declaration `<modifiers> <kw> <name>(<params>) [->|: <ret>]` and returns `(name, params, ret)`.
+///
+/// # Arguments
+///
+/// * `code` - Trimmed source line without comments.
+/// * `kw` - Function declaration keyword (e.g. `"fn"`, `"fun"`, `"def"`, `"func"`, `"function"`).
+///
+/// # Returns
+///
+/// `Some((fn_name, params_str, optional_return_type))` if matched, or `None`.
 fn match_fn_decl(code: &str, kw: &str) -> Option<(String, String, Option<String>)> {
     let padded = format!(" {code}");
     let pat = format!(" {kw} ");
@@ -2760,6 +3034,14 @@ fn match_fn_decl(code: &str, kw: &str) -> Option<(String, String, Option<String>
 }
 
 /// Parses a C/C++/Java/C# style function header `<Modifiers/RetType> <Name>(<Params>)`.
+///
+/// # Arguments
+///
+/// * `code` - Trimmed source line without comments.
+///
+/// # Returns
+///
+/// `Some((fn_name, params_str, optional_return_type))` if matched, or `None`.
 fn parse_c_like_function_header(code: &str) -> Option<(String, String, Option<String>)> {
     let open_idx = code.find('(')?;
     let before_paren = code[..open_idx].trim();
@@ -3804,5 +4086,104 @@ export class Second {
                 .unwrap_or_default();
         assert_eq!(with_tests.functions.len(), 2);
         let _ = std::fs::remove_dir_all(&test_filter_dir);
+
+        // Test verify_against_arazzo and verify_against_spec_doc
+        let arazzo_doc = serde_json::json!({
+            "arazzo": "1.1.0",
+            "components": {
+                "inputs": {
+                    "PurchaseInput": {
+                        "type": "object",
+                        "properties": {
+                            "petId": { "type": "integer" }
+                        }
+                    }
+                }
+            },
+            "workflows": [
+                { "summary": "missing workflowId skipped" },
+                {
+                    "workflowId": "purchasePetWorkflow",
+                    "inputs": {
+                        "type": "object",
+                        "properties": {
+                            "couponCode": { "type": "string" }
+                        }
+                    },
+                    "steps": []
+                }
+            ]
+        });
+
+        let arazzo_rs_fn = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Run workflow.\n/// * `coupon_code` - Coupon.\npub fn purchase_pet_workflow(coupon_code: String) {}\n";
+        let bundle_arazzo_fn =
+            parse_source_str(arazzo_rs_fn, Path::new("wf.rs"), &LanguageId::Rust, None);
+        assert!(bundle_arazzo_fn
+            .verify_against_spec_doc(&arazzo_doc, &LanguageId::Rust)
+            .is_ok());
+        assert!(bundle_arazzo_fn
+            .verify_against_spec_doc(&swagger_doc, &LanguageId::Rust)
+            .is_err());
+        assert!(bundle_arazzo_fn
+            .verify_against_spec_doc(&serde_json::json!({"unknown": true}), &LanguageId::Rust)
+            .is_err());
+
+        // Workflow represented as a struct instead of a function
+        let arazzo_rs_struct = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Workflow struct.\npub struct PurchasePetWorkflow {\n    /// Coupon.\n    pub coupon_code: String,\n}\n";
+        let bundle_arazzo_st = parse_source_str(
+            arazzo_rs_struct,
+            Path::new("wf_st.rs"),
+            &LanguageId::Rust,
+            None,
+        );
+        assert!(bundle_arazzo_st
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_ok());
+
+        // Missing components.inputs struct
+        let empty_bundle = ParsedSourceBundle::default();
+        assert!(empty_bundle
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
+
+        // Missing components.inputs property field
+        let missing_input_field =
+            "/// Input.\npub struct PurchaseInput {\n    /// Wrong.\n    pub other: i64,\n}\n";
+        let b_mif = parse_source_str(
+            missing_input_field,
+            Path::new("wf.rs"),
+            &LanguageId::Rust,
+            None,
+        );
+        assert!(b_mif
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
+
+        // Missing workflow function/struct
+        let missing_wf =
+            "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n";
+        let b_mwf = parse_source_str(missing_wf, Path::new("wf.rs"), &LanguageId::Rust, None);
+        assert!(b_mwf
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
+
+        // Missing workflow function arg
+        let missing_wf_arg = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Wf.\npub fn purchase_pet_workflow() {}\n";
+        let b_mwa = parse_source_str(missing_wf_arg, Path::new("wf.rs"), &LanguageId::Rust, None);
+        assert!(b_mwa
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
+
+        // Missing workflow struct field
+        let missing_wf_st_field = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Wf.\npub struct PurchasePetWorkflow {\n    /// Wrong.\n    pub other: String,\n}\n";
+        let b_mwsf = parse_source_str(
+            missing_wf_st_field,
+            Path::new("wf.rs"),
+            &LanguageId::Rust,
+            None,
+        );
+        assert!(b_mwsf
+            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
     }
 }

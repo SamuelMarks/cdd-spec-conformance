@@ -229,6 +229,15 @@ mod tests {
                 assert!(table.is_some_and(|t| !t.rows.is_empty()));
             }
         }
+
+        for profile in [
+            ProfileKind::ClientSdk,
+            ProfileKind::ClientCli,
+            ProfileKind::Servers,
+        ] {
+            let table = registry.get_table(SpecId::Arazzo110, profile).ok();
+            assert_eq!(table.map(|t| t.rows.len()), Some(110));
+        }
     }
 
     #[test]
