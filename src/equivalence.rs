@@ -545,8 +545,138 @@ pub fn validate_arazzo_110_document(
             let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
             validate_arazzo_step(step, &step_ptr, &mut seen_steps, language)?;
         }
+        validate_arazzo_workflow_references(steps, &wf_ptr, &seen_steps, doc, language)?;
     }
 
+    Ok(())
+}
+
+/// Validates step-level `dependsOn` DAG acyclicity, `$components.*` reusable references, and
+/// `onSuccess` / `onFailure` `goto` step target references within a workflow.
+///
+/// # Arguments
+///
+/// * `steps` - Slice of step JSON values in the workflow.
+/// * `wf_ptr` - JSON Pointer prefix for the workflow.
+/// * `seen_steps` - Set of all `stepId` strings defined in the workflow.
+/// * `doc` - Root Arazzo 1.1.0 document JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if any dependency cycle, missing target step,
+/// or unresolved `$components.*` reference is found.
+fn validate_arazzo_workflow_references(
+    steps: &[serde_json::Value],
+    wf_ptr: &str,
+    seen_steps: &BTreeSet<String>,
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let mut deps_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (s_idx, step) in steps.iter().enumerate() {
+        let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
+        let step_id = step
+            .get("stepId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let mut step_deps = Vec::new();
+        for dep_val in step
+            .get("dependsOn")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let dep_id = dep_val.as_str().unwrap_or("");
+            if !seen_steps.contains(dep_id) || dep_id == step_id {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/dependsOn"),
+                    reason: format!("invalid or self-referential step dependency '{dep_id}'"),
+                });
+            }
+            if deps_map
+                .get(dep_id)
+                .is_some_and(|transitive| transitive.iter().any(|d| d == step_id))
+            {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/dependsOn"),
+                    reason: format!("cyclic step dependency between '{step_id}' and '{dep_id}'"),
+                });
+            }
+            step_deps.push(dep_id.to_string());
+        }
+        deps_map.insert(step_id.to_string(), step_deps);
+
+        for action_val in step
+            .get("onSuccess")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .chain(
+                step.get("onFailure")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+        {
+            if let Some(ref_str) = action_val
+                .get("reference")
+                .and_then(serde_json::Value::as_str)
+            {
+                validate_component_reference(ref_str, &step_ptr, doc, language)?;
+            } else if action_val.get("type").and_then(serde_json::Value::as_str) == Some("goto") {
+                let target_step = action_val
+                    .get("stepId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if !seen_steps.contains(target_step) {
+                    return Err(ConformanceError::ArazzoSchemaViolation {
+                        language: language.clone(),
+                        pointer: step_ptr,
+                        reason: format!("goto action references unknown stepId '{target_step}'"),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates that a `$components.<section>.<name>` reusable reference exists in `doc["components"]`.
+///
+/// # Arguments
+///
+/// * `ref_str` - Reusable reference string (e.g. `"$components.successActions.done"`).
+/// * `pointer` - JSON Pointer context for error reporting.
+/// * `doc` - Root Arazzo 1.1.0 document JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if the reference is malformed or missing.
+fn validate_component_reference(
+    ref_str: &str,
+    pointer: &str,
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let parts: Vec<&str> = ref_str.split('.').collect();
+    let resolved = if parts.len() == 3 && parts[0] == "$components" {
+        doc.get("components")
+            .and_then(|c| c.get(parts[1]))
+            .and_then(|sec| sec.get(parts[2]))
+    } else {
+        None
+    };
+    if resolved.is_none() {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: pointer.to_string(),
+            reason: format!("unresolved reusable component reference '{ref_str}'"),
+        });
+    }
     Ok(())
 }
 
@@ -1368,9 +1498,63 @@ export function deletePet(id: number) {}
             serde_json::json!("bad_type");
         assert!(validate_arazzo_110_document(&bad_crit_type, &LanguageId::Rust).is_err());
 
-        let mut bad_crit_ctx = valid_arazzo;
+        let mut bad_crit_ctx = valid_arazzo.clone();
         bad_crit_ctx["workflows"][0]["steps"][0]["successCriteria"][0]["context"] =
             serde_json::json!("$bad.ctx");
         assert!(validate_arazzo_110_document(&bad_crit_ctx, &LanguageId::Rust).is_err());
+
+        // Test dependsOn unknown step, self-dependency, valid DAG, and 2-step cycle
+        let mut bad_dep_unknown = valid_arazzo.clone();
+        bad_dep_unknown["workflows"][0]["steps"][0]["dependsOn"] =
+            serde_json::json!(["nonexistentStep"]);
+        assert!(validate_arazzo_110_document(&bad_dep_unknown, &LanguageId::Rust).is_err());
+
+        let mut bad_dep_self = valid_arazzo.clone();
+        bad_dep_self["workflows"][0]["steps"][0]["dependsOn"] = serde_json::json!(["findPet"]);
+        assert!(validate_arazzo_110_document(&bad_dep_self, &LanguageId::Rust).is_err());
+
+        let mut actions_arazzo = valid_arazzo;
+        let first_step = actions_arazzo["workflows"][0]["steps"][0].clone();
+        actions_arazzo["workflows"][0]["steps"] = serde_json::json!([
+            first_step,
+            {
+                "stepId": "emitOrder",
+                "operationId": "createOrder",
+                "dependsOn": ["findPet"]
+            }
+        ]);
+        actions_arazzo["components"] = serde_json::json!({
+            "successActions": {
+                "doneAct": { "name": "doneAct", "type": "end" }
+            }
+        });
+        actions_arazzo["workflows"][0]["steps"][0]["onSuccess"] = serde_json::json!([
+            { "reference": "$components.successActions.doneAct" },
+            { "name": "goNext", "type": "goto", "stepId": "emitOrder" },
+            { "name": "stopHere", "type": "end" }
+        ]);
+        assert!(validate_arazzo_110_document(&actions_arazzo, &LanguageId::Rust).is_ok());
+
+        let mut bad_dep_cycle = actions_arazzo.clone();
+        bad_dep_cycle["workflows"][0]["steps"][0]["dependsOn"] = serde_json::json!(["emitOrder"]);
+        assert!(validate_arazzo_110_document(&bad_dep_cycle, &LanguageId::Rust).is_err());
+
+        let mut bad_ref_missing = actions_arazzo.clone();
+        bad_ref_missing["workflows"][0]["steps"][0]["onSuccess"] = serde_json::json!([
+            { "reference": "$components.successActions.missingAct" }
+        ]);
+        assert!(validate_arazzo_110_document(&bad_ref_missing, &LanguageId::Rust).is_err());
+
+        let mut bad_ref_syntax = actions_arazzo.clone();
+        bad_ref_syntax["workflows"][0]["steps"][0]["onFailure"] = serde_json::json!([
+            { "reference": "$invalid.ref" }
+        ]);
+        assert!(validate_arazzo_110_document(&bad_ref_syntax, &LanguageId::Rust).is_err());
+
+        let mut bad_goto = actions_arazzo;
+        bad_goto["workflows"][0]["steps"][0]["onSuccess"] = serde_json::json!([
+            { "name": "badGoto", "type": "goto", "stepId": "missingStep" }
+        ]);
+        assert!(validate_arazzo_110_document(&bad_goto, &LanguageId::Rust).is_err());
     }
 }

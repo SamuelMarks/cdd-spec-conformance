@@ -8,7 +8,7 @@
 
 use crate::ecosystem::SyntaxProfileConfig;
 use crate::error::ConformanceError;
-use crate::model::LanguageId;
+use crate::model::{LanguageId, ProfileKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -386,6 +386,36 @@ impl ParsedSourceBundle {
             }
         }
 
+        Ok(())
+    }
+
+    /// Verifies this parsed source bundle against an Arazzo 1.1.0 document for a specific
+    /// target `ProfileKind` (`ClientSdk`, `ClientCli`, or `Servers`), including SDK reuse
+    /// verification when `profile == ProfileKind::ClientCli`.
+    ///
+    /// # Arguments
+    ///
+    /// * `arazzo_doc` - Parsed `serde_json::Value` representing an Arazzo 1.1.0 document.
+    /// * `profile` - Target conformance profile (`ClientSdk`, `ClientCli`, `Servers`, etc.).
+    /// * `sdk_bundle` - Optional companion `ClientSdk` source bundle when verifying `ClientCli` reuse.
+    /// * `fallback_lang` - Language identifier for error reporting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError` if workflow/input symbols are missing or if `ClientCli` fails SDK reuse verification.
+    pub fn verify_against_arazzo_profile(
+        &self,
+        arazzo_doc: &serde_json::Value,
+        profile: ProfileKind,
+        sdk_bundle: Option<&Self>,
+        fallback_lang: &LanguageId,
+    ) -> Result<(), ConformanceError> {
+        self.verify_against_arazzo(arazzo_doc, fallback_lang)?;
+        if profile == ProfileKind::ClientCli {
+            if let Some(sdk) = sdk_bundle {
+                sdk.verify_against_arazzo(arazzo_doc, fallback_lang)?;
+            }
+        }
         Ok(())
     }
 
@@ -4184,6 +4214,48 @@ export class Second {
         );
         assert!(b_mwsf
             .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+            .is_err());
+
+        // Profile-aware Arazzo source verification
+        assert!(bundle_arazzo_st
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::ClientSdk,
+                None,
+                &LanguageId::Rust
+            )
+            .is_ok());
+        assert!(bundle_arazzo_st
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::ClientCli,
+                None,
+                &LanguageId::Rust
+            )
+            .is_ok());
+        assert!(bundle_arazzo_st
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::ClientCli,
+                Some(&bundle_arazzo_st),
+                &LanguageId::Rust
+            )
+            .is_ok());
+        assert!(bundle_arazzo_st
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::ClientCli,
+                Some(&empty_bundle),
+                &LanguageId::Rust
+            )
+            .is_err());
+        assert!(empty_bundle
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::Servers,
+                None,
+                &LanguageId::Rust
+            )
             .is_err());
     }
 }

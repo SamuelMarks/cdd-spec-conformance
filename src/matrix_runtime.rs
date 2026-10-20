@@ -392,7 +392,7 @@ pub fn evaluate_reference_backend_summary(
     let webhook_path = EndpointPath::new("/_mock/trigger-webhook/petCreated");
     let runtime_features_verified = vec![
         format!("POST {}", webhook_path.as_str()),
-        "serve_json_rpc(from_openapi,to_openapi,to_docs_json,sync,scaffold,schema-gen,test-gen)"
+        "serve_json_rpc(from_openapi,to_openapi,from_arazzo,to_arazzo,to_docs_json,sync,scaffold,schema-gen,test-gen)"
             .to_string(),
     ];
 
@@ -933,38 +933,36 @@ fn canonical_http_corpus() -> Vec<(&'static str, SimpleHttpResponse)> {
 pub fn evaluate_backend_equivalence(
     toolchains: &[LanguageToolchainSpec],
 ) -> BackendEquivalenceSummary {
-    let (_, rust_base_src) = canonical_generated_snippet(&LanguageId::Rust, false);
-    let rust_base_bundle =
-        parse_source_str(&rust_base_src, Path::new("sdk.rs"), &LanguageId::Rust, None);
-    let (_, rust_mut_src) = canonical_generated_snippet(&LanguageId::Rust, true);
-    let rust_mut_bundle =
-        parse_source_str(&rust_mut_src, Path::new("sdk.rs"), &LanguageId::Rust, None);
     let corpus_responses = canonical_http_corpus();
     let mut all_sigs_ok = true;
     let mut all_http_ok = true;
 
+    for (is_arazzo, mutated) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (r_name, r_src) = if is_arazzo {
+            canonical_arazzo_generated_snippet(&LanguageId::Rust, mutated)
+        } else {
+            canonical_generated_snippet(&LanguageId::Rust, mutated)
+        };
+        let r_bundle = parse_source_str(&r_src, Path::new(r_name), &LanguageId::Rust, None);
+        for tc in toolchains {
+            let (vname, src) = if is_arazzo {
+                canonical_arazzo_generated_snippet(&tc.language_id, mutated)
+            } else {
+                canonical_generated_snippet(&tc.language_id, mutated)
+            };
+            let bundle = parse_source_str(&src, Path::new(vname), &tc.language_id, None);
+            all_sigs_ok &= bundle.verify_100_percent_docs(&tc.language_id).is_ok();
+            all_sigs_ok &= verify_source_bundle_equivalence(
+                &LanguageId::Rust,
+                &r_bundle,
+                &tc.language_id,
+                &bundle,
+            )
+            .is_ok();
+        }
+    }
+
     for tc in toolchains {
-        let (vname, src) = canonical_generated_snippet(&tc.language_id, false);
-        let bundle = parse_source_str(&src, Path::new(vname), &tc.language_id, None);
-        all_sigs_ok &= verify_source_bundle_equivalence(
-            &LanguageId::Rust,
-            &rust_base_bundle,
-            &tc.language_id,
-            &bundle,
-        )
-        .is_ok();
-
-        let (vname_mut, src_mut) = canonical_generated_snippet(&tc.language_id, true);
-        let bundle_mut = parse_source_str(&src_mut, Path::new(vname_mut), &tc.language_id, None);
-        all_sigs_ok &= bundle_mut.verify_100_percent_docs(&tc.language_id).is_ok();
-        all_sigs_ok &= verify_source_bundle_equivalence(
-            &LanguageId::Rust,
-            &rust_mut_bundle,
-            &tc.language_id,
-            &bundle_mut,
-        )
-        .is_ok();
-
         for (op_id, resp) in &corpus_responses {
             all_http_ok &= verify_http_response_equivalence(
                 &LanguageId::Rust,
@@ -1023,7 +1021,8 @@ pub fn evaluate_backend_equivalence(
             "database-schema(User,Organization,Repository,Post,Comment)".to_string(),
             "seed-traversal".to_string(),
             "jwt-idp-session".to_string(),
-            "sync-truth(class,database,openapi)".to_string(),
+            "sync-truth(class,database,openapi,arazzo)".to_string(),
+            "arazzo-1.1.0(from_arazzo,to_arazzo)".to_string(),
             "to_docs_json(--no-imports,--no-wrapping)".to_string(),
             "serve_json_rpc(-32700,-32600,-32601,-32602,-32603)".to_string(),
         ],

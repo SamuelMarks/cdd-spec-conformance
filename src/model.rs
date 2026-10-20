@@ -2,6 +2,7 @@
 
 use crate::error::ConformanceError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -2071,6 +2072,267 @@ pub struct ArazzoWorkflowSummary {
     pub output_keys: Vec<String>,
 }
 
+/// Metadata object for an Arazzo 1.1.0 specification (`Info Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoInfoObject {
+    /// Human-readable title of the Arazzo description.
+    pub title: String,
+    /// Optional short summary of the Arazzo description.
+    pub summary: Option<String>,
+    /// Optional `CommonMark` description of the Arazzo workflows.
+    pub description: Option<String>,
+    /// Version string of the Arazzo document metadata.
+    pub version: String,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// External specification reference in Arazzo 1.1.0 (`Source Description Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoSourceDescription {
+    /// Unique source identifier within the Arazzo document.
+    pub name: String,
+    /// Relative or absolute URI/URL pointing to the target specification document.
+    pub url: String,
+    /// Optional specification type (`openapi`, `asyncapi`, or `arazzo`).
+    pub source_type: Option<ArazzoSourceType>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Concrete parameter binding in an Arazzo 1.1.0 workflow or step (`Parameter Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoParameterObject {
+    /// Parameter name.
+    pub name: String,
+    /// Optional parameter location (`path`, `query`, `querystring`, `header`, `cookie`).
+    pub in_loc: Option<ArazzoParameterIn>,
+    /// Constant JSON value or runtime expression string.
+    pub value: serde_json::Value,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Reference to a reusable component in `components` (`Reusable Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoReusableObject {
+    /// Runtime expression reference (e.g. `"$components.parameters.page"`).
+    pub reference: String,
+    /// Optional overridden value when referencing a reusable parameter.
+    pub value: Option<serde_json::Value>,
+}
+
+/// Either an inline `ArazzoParameterObject` or an `ArazzoReusableObject` reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArazzoParameterOrReusable {
+    /// Inline parameter definition.
+    Parameter(ArazzoParameterObject),
+    /// Reusable parameter reference.
+    Reusable(ArazzoReusableObject),
+}
+
+/// Assertion criterion for step or action evaluation (`Criterion Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoCriterionObject {
+    /// Optional runtime expression establishing the evaluation context.
+    pub context: Option<String>,
+    /// Boolean condition or selector expression to evaluate.
+    pub condition: String,
+    /// Optional criterion evaluation dialect (`simple`, `regex`, `jsonpath`, `xpath`, `jsonpointer`).
+    pub criterion_type: Option<ArazzoCriterionType>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Transition rule executed when a step succeeds (`Success Action Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoSuccessActionObject {
+    /// Action name identifier.
+    pub name: String,
+    /// Action transition kind (`end` or `goto`).
+    pub action_type: ArazzoSuccessActionType,
+    /// Target `workflowId` when `action_type == Goto`.
+    pub workflow_id: Option<String>,
+    /// Target `stepId` within the current workflow when `action_type == Goto`.
+    pub step_id: Option<String>,
+    /// Optional parameters passed to the target step or workflow.
+    pub parameters: Vec<ArazzoParameterOrReusable>,
+    /// Additional criteria required to trigger this action.
+    pub criteria: Vec<ArazzoCriterionObject>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Either an inline `ArazzoSuccessActionObject` or an `ArazzoReusableObject` reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArazzoSuccessActionOrReusable {
+    /// Inline success action object.
+    Action(ArazzoSuccessActionObject),
+    /// Reusable success action reference (`$components.successActions.<name>`).
+    Reusable(ArazzoReusableObject),
+}
+
+/// Transition or retry rule executed when a step fails (`Failure Action Object`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArazzoFailureActionObject {
+    /// Action name identifier.
+    pub name: String,
+    /// Failure action transition kind (`end`, `retry`, or `goto`).
+    pub action_type: ArazzoFailureActionType,
+    /// Target `workflowId` when `action_type == Goto` or `Retry`.
+    pub workflow_id: Option<String>,
+    /// Target `stepId` when `action_type == Goto` or `Retry`.
+    pub step_id: Option<String>,
+    /// Optional parameters passed to the target step or workflow.
+    pub parameters: Vec<ArazzoParameterOrReusable>,
+    /// Optional non-negative delay in seconds before retrying (`retryAfter`).
+    pub retry_after: Option<f64>,
+    /// Optional maximum number of retry attempts (`retryLimit`).
+    pub retry_limit: Option<u64>,
+    /// Additional criteria required to trigger this failure action.
+    pub criteria: Vec<ArazzoCriterionObject>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Either an inline `ArazzoFailureActionObject` or an `ArazzoReusableObject` reference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ArazzoFailureActionOrReusable {
+    /// Inline failure action object.
+    Action(ArazzoFailureActionObject),
+    /// Reusable failure action reference (`$components.failureActions.<name>`).
+    Reusable(ArazzoReusableObject),
+}
+
+/// Output extraction value in a step or workflow (`outputs` map entry).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArazzoOutputValue {
+    /// Runtime expression string (e.g. `"$response.body#/id"`).
+    Expression(String),
+    /// Structured Arazzo 1.1.0 `Selector Object` extraction.
+    Selector(ArazzoSelectorObject),
+}
+
+/// In-place payload mutation rule inside an Arazzo 1.1.0 `Request Body Object` (`Payload Replacement Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoPayloadReplacement {
+    /// JSON Pointer, `JSONPath`, or `XPath` expression targeting the location in `payload` to replace.
+    pub target: String,
+    /// Replacement literal or runtime expression value.
+    pub value: serde_json::Value,
+    /// Optional selector dialect for `target` (`targetSelectorType`).
+    pub target_selector_type: Option<ArazzoCriterionType>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Request body definition for an Arazzo 1.1.0 step (`Request Body Object`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArazzoRequestBodyObject {
+    /// Optional MIME media type (e.g. `"application/json"`).
+    pub content_type: Option<String>,
+    /// Optional literal payload template or runtime expression.
+    pub payload: Option<serde_json::Value>,
+    /// Ordered in-place payload replacements.
+    pub replacements: Vec<ArazzoPayloadReplacement>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Full normative Arazzo 1.1.0 `Step Object`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArazzoStepObject {
+    /// Unique step identifier within the workflow (`stepId`).
+    pub step_id: String,
+    /// Optional human-readable step description.
+    pub description: Option<String>,
+    /// Mutually exclusive invocation target (`operationId`, `operationPath`, `channelPath`, or `workflowId`).
+    pub target: ArazzoStepTarget,
+    /// Step-level parameter bindings or reusable references.
+    pub parameters: Vec<ArazzoParameterOrReusable>,
+    /// Optional request body payload and replacements.
+    pub request_body: Option<ArazzoRequestBodyObject>,
+    /// Prerequisite `stepId` values within the same workflow (`dependsOn`, new in Arazzo 1.1.0).
+    pub depends_on: Vec<String>,
+    /// Optional execution timeout in milliseconds (`timeout`, new in Arazzo 1.1.0).
+    pub timeout: Option<u64>,
+    /// Optional message correlation runtime expression (`correlationId`, new in Arazzo 1.1.0).
+    pub correlation_id: Option<String>,
+    /// Optional `AsyncAPI` channel message action (`send` or `receive`, new in Arazzo 1.1.0).
+    pub action: Option<ArazzoMessageAction>,
+    /// Assertions that must hold for the step to succeed (`successCriteria`).
+    pub success_criteria: Vec<ArazzoCriterionObject>,
+    /// Ordered success transition actions (`onSuccess`).
+    pub on_success: Vec<ArazzoSuccessActionOrReusable>,
+    /// Ordered failure transition or retry actions (`onFailure`).
+    pub on_failure: Vec<ArazzoFailureActionOrReusable>,
+    /// Step outputs extracted from responses or messages (`outputs`).
+    pub outputs: BTreeMap<String, ArazzoOutputValue>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Full normative Arazzo 1.1.0 `Workflow Object`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArazzoWorkflowObject {
+    /// Unique workflow identifier within the document (`workflowId`).
+    pub workflow_id: String,
+    /// Optional short summary of the workflow.
+    pub summary: Option<String>,
+    /// Optional detailed description of the workflow.
+    pub description: Option<String>,
+    /// Optional JSON Schema 2020-12 object describing workflow inputs (`inputs`).
+    pub inputs: Option<serde_json::Value>,
+    /// Prerequisite `workflowId` values (`dependsOn`).
+    pub depends_on: Vec<String>,
+    /// Ordered sequence of workflow steps (`steps`).
+    pub steps: Vec<ArazzoStepObject>,
+    /// Workflow-level default success actions (`successActions`).
+    pub success_actions: Vec<ArazzoSuccessActionOrReusable>,
+    /// Workflow-level default failure actions (`failureActions`).
+    pub failure_actions: Vec<ArazzoFailureActionOrReusable>,
+    /// Final outputs exposed by the workflow (`outputs`).
+    pub outputs: BTreeMap<String, ArazzoOutputValue>,
+    /// Workflow-level default parameters (`parameters`).
+    pub parameters: Vec<ArazzoParameterOrReusable>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Reusable component registry in an Arazzo 1.1.0 document (`Components Object`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArazzoComponentsObject {
+    /// Reusable JSON Schema 2020-12 input definitions (`components.inputs`).
+    pub inputs: BTreeMap<String, serde_json::Value>,
+    /// Reusable parameter objects (`components.parameters`).
+    pub parameters: BTreeMap<String, ArazzoParameterObject>,
+    /// Reusable success action objects (`components.successActions`).
+    pub success_actions: BTreeMap<String, ArazzoSuccessActionObject>,
+    /// Reusable failure action objects (`components.failureActions`).
+    pub failure_actions: BTreeMap<String, ArazzoFailureActionObject>,
+    /// Specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Root strongly typed Arazzo 1.1.0 specification AST (`Arazzo Specification Object`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArazzoDocument {
+    /// Semantic Arazzo specification version (`"1.1.0"`).
+    pub arazzo: ArazzoVersion,
+    /// Optional self-identifying document URI (`$self`, new in Arazzo 1.1.0).
+    pub self_uri: Option<String>,
+    /// Document metadata (`info`).
+    pub info: ArazzoInfoObject,
+    /// Referenced `OpenAPI`, `AsyncAPI`, or `Arazzo` source descriptions (`sourceDescriptions`).
+    pub source_descriptions: Vec<ArazzoSourceDescription>,
+    /// Executable workflow definitions (`workflows`).
+    pub workflows: Vec<ArazzoWorkflowObject>,
+    /// Optional reusable components registry (`components`).
+    pub components: Option<ArazzoComponentsObject>,
+    /// Root specification extensions (`^x-`).
+    pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2650,5 +2912,120 @@ mod tests {
             output_keys: vec!["resultId".to_string()],
         };
         assert_eq!(wf_sum.workflow_id, "wf1");
+
+        let param_obj = ArazzoParameterObject {
+            name: "limit".to_string(),
+            in_loc: Some(ArazzoParameterIn::Query),
+            value: serde_json::json!(10),
+            extensions: BTreeMap::new(),
+        };
+        let reusable_obj = ArazzoReusableObject {
+            reference: "$components.parameters.limit".to_string(),
+            value: None,
+        };
+        let crit_obj = ArazzoCriterionObject {
+            context: Some("$statusCode".to_string()),
+            condition: "$statusCode == 200".to_string(),
+            criterion_type: Some(ArazzoCriterionType::Simple),
+            extensions: BTreeMap::new(),
+        };
+        let succ_act = ArazzoSuccessActionObject {
+            name: "done".to_string(),
+            action_type: ArazzoSuccessActionType::End,
+            workflow_id: None,
+            step_id: None,
+            parameters: vec![ArazzoParameterOrReusable::Parameter(param_obj.clone())],
+            criteria: vec![crit_obj.clone()],
+            extensions: BTreeMap::new(),
+        };
+        let fail_act = ArazzoFailureActionObject {
+            name: "retryOnce".to_string(),
+            action_type: ArazzoFailureActionType::Retry,
+            workflow_id: None,
+            step_id: Some("step1".to_string()),
+            parameters: vec![ArazzoParameterOrReusable::Reusable(reusable_obj.clone())],
+            retry_after: Some(1.0),
+            retry_limit: Some(3),
+            criteria: vec![crit_obj.clone()],
+            extensions: BTreeMap::new(),
+        };
+        let mut step_outputs = BTreeMap::new();
+        step_outputs.insert("selectedId".to_string(), ArazzoOutputValue::Selector(sel));
+        step_outputs.insert(
+            "rawStatus".to_string(),
+            ArazzoOutputValue::Expression("$statusCode".to_string()),
+        );
+        let step_ast = ArazzoStepObject {
+            step_id: "step1".to_string(),
+            description: Some("Find pet".to_string()),
+            target: ArazzoStepTarget::OperationId("listPets".to_string()),
+            parameters: vec![ArazzoParameterOrReusable::Parameter(param_obj.clone())],
+            request_body: Some(ArazzoRequestBodyObject {
+                content_type: Some("application/json".to_string()),
+                payload: Some(serde_json::json!({"petId": 1})),
+                replacements: vec![ArazzoPayloadReplacement {
+                    target: "/petId".to_string(),
+                    value: serde_json::json!("$inputs.petId"),
+                    target_selector_type: Some(ArazzoCriterionType::JsonPointerRfc6901),
+                    extensions: BTreeMap::new(),
+                }],
+                extensions: BTreeMap::new(),
+            }),
+            depends_on: Vec::new(),
+            timeout: Some(5000),
+            correlation_id: None,
+            action: None,
+            success_criteria: vec![crit_obj],
+            on_success: vec![
+                ArazzoSuccessActionOrReusable::Action(succ_act.clone()),
+                ArazzoSuccessActionOrReusable::Reusable(reusable_obj.clone()),
+            ],
+            on_failure: vec![
+                ArazzoFailureActionOrReusable::Action(fail_act.clone()),
+                ArazzoFailureActionOrReusable::Reusable(reusable_obj),
+            ],
+            outputs: step_outputs.clone(),
+            extensions: BTreeMap::new(),
+        };
+        let wf_ast = ArazzoWorkflowObject {
+            workflow_id: "wf1".to_string(),
+            summary: Some("Summary".to_string()),
+            description: Some("Desc".to_string()),
+            inputs: Some(serde_json::json!({"type": "object"})),
+            depends_on: Vec::new(),
+            steps: vec![step_ast],
+            success_actions: Vec::new(),
+            failure_actions: Vec::new(),
+            outputs: step_outputs,
+            parameters: Vec::new(),
+            extensions: BTreeMap::new(),
+        };
+        let doc_ast = ArazzoDocument {
+            arazzo: ArazzoVersion("1.1.0".to_string()),
+            self_uri: Some("https://example.com/wf.arazzo.yaml".to_string()),
+            info: ArazzoInfoObject {
+                title: "Pet Workflow".to_string(),
+                summary: None,
+                description: None,
+                version: "1.0.0".to_string(),
+                extensions: BTreeMap::new(),
+            },
+            source_descriptions: vec![ArazzoSourceDescription {
+                name: "petApi".to_string(),
+                url: "https://example.com/openapi.yaml".to_string(),
+                source_type: Some(ArazzoSourceType::OpenApi),
+                extensions: BTreeMap::new(),
+            }],
+            workflows: vec![wf_ast],
+            components: Some(ArazzoComponentsObject {
+                inputs: BTreeMap::new(),
+                parameters: BTreeMap::from([("limit".to_string(), param_obj)]),
+                success_actions: BTreeMap::from([("done".to_string(), succ_act)]),
+                failure_actions: BTreeMap::from([("retryOnce".to_string(), fail_act)]),
+                extensions: BTreeMap::new(),
+            }),
+            extensions: BTreeMap::new(),
+        };
+        assert_eq!(doc_ast.arazzo.as_str(), "1.1.0");
     }
 }
