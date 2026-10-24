@@ -48,7 +48,7 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
     assert!(out_report.status.success());
 
     let out_inspect = Command::new(bin_path)
-        .args(["inspect-source", "--path", "src/lib.rs", "--lang", "rust"])
+        .args(["inspect-source", "--path", "src", "--require-docs"])
         .output()
         .map_err(map_io)?;
     assert!(out_inspect.status.success());

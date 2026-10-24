@@ -2978,6 +2978,12 @@ fn parse_fortran_source(source: &str, bundle: &mut ParsedSourceBundle) {
 }
 
 /// Parses an arbitrary extension language using a custom `SyntaxProfileConfig` or generic fallback rules.
+///
+/// # Arguments
+///
+/// * `source` - Raw source code string in the custom extension language.
+/// * `custom_syntax` - Optional custom syntax profile overrides (`line_comment_prefix`, `struct_pattern`, `function_pattern`).
+/// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 fn parse_custom_profile_source(
     source: &str,
     custom_syntax: Option<&SyntaxProfileConfig>,
@@ -3179,6 +3185,14 @@ fn parse_c_like_function_header(code: &str) -> Option<(String, String, Option<St
 }
 
 /// Extracts the first `(...)` segment from a string.
+///
+/// # Arguments
+///
+/// * `s` - Input string slice potentially containing a parenthesized segment.
+///
+/// # Returns
+///
+/// `Some((prefix_before_open_paren, inside_parens))` if balanced parentheses exist, or `None`.
 fn extract_paren_segment(s: &str) -> Option<(String, String)> {
     let open_idx = s.find('(')?;
     let before = s[..open_idx].to_string();
@@ -3187,6 +3201,14 @@ fn extract_paren_segment(s: &str) -> Option<(String, String)> {
 }
 
 /// Given a string containing `(...)`, returns `(inside_parens, after_closing_paren)`.
+///
+/// # Arguments
+///
+/// * `s` - Input string slice starting at or before an opening `(`.
+///
+/// # Returns
+///
+/// `Some((inside_parens, after_closing_paren))` if balanced parentheses are found, or `None`.
 fn split_first_paren(s: &str) -> Option<(String, String)> {
     let mut depth: i32 = 0;
     let mut start_byte: usize = 0;
