@@ -97,10 +97,40 @@ fn normalize_alphanumeric_words(s: &str) -> String {
         .join(" ")
 }
 
+/// Normalizes a lowercase word into its singular stem by stripping standard plural suffixes.
+///
+/// # Arguments
+///
+/// * `word` - Lowercase alphanumeric token.
+///
+/// # Returns
+///
+/// Singular stem string.
+fn normalize_word_stem(word: &str) -> String {
+    if word.len() > 4 && word.ends_with("ies") {
+        let mut stem = word[..word.len() - 3].to_string();
+        stem.push('y');
+        stem
+    } else if word.len() > 4
+        && (word.ends_with("ches")
+            || word.ends_with("shes")
+            || word.ends_with("xes")
+            || word.ends_with("zes")
+            || word.ends_with("ses"))
+    {
+        word[..word.len() - 2].to_string()
+    } else if word.len() > 3 && word.ends_with('s') && !word.ends_with("ss") {
+        word[..word.len() - 1].to_string()
+    } else {
+        word.to_string()
+    }
+}
+
 /// Checks whether a normalized claimed feature key matches a normalized checklist feature key.
 ///
-/// Matches when every token in `claimed_key` matches a word in `candidate_key` either exactly
-/// or as a stem prefix of at least 3 characters (e.g. `"webhook"` matching `"webhooks"`).
+/// Matches when every token in `claimed_key` matches a word in `candidate_key` either exactly,
+/// by normalized singular/plural stem (`"webhook"` == `"webhooks"`), or when the shorter token is
+/// a prefix of the longer token and is not a distinct full word with a different root.
 ///
 /// # Arguments
 ///
@@ -113,10 +143,13 @@ fn normalize_alphanumeric_words(s: &str) -> String {
 fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
     let candidate_words: Vec<&str> = candidate_key.split_whitespace().collect();
     claimed_key.split_whitespace().all(|claimed_tok| {
+        let claimed_stem = normalize_word_stem(claimed_tok);
         candidate_words.iter().any(|cand_tok| {
+            let cand_stem = normalize_word_stem(cand_tok);
             *cand_tok == claimed_tok
-                || (claimed_tok.len() >= 3 && cand_tok.starts_with(claimed_tok))
-                || (cand_tok.len() >= 3 && claimed_tok.starts_with(cand_tok))
+                || cand_stem == claimed_stem
+                || (claimed_stem.len() >= 4 && cand_stem.starts_with(&claimed_stem))
+                || (cand_stem.len() >= 4 && claimed_stem.starts_with(&cand_stem))
         })
     })
 }
@@ -803,6 +836,13 @@ mod tests {
         // Verify token matching edge cases
         assert!(matches_feature_tokens("webhook", "webhooks object"));
         assert!(matches_feature_tokens("webhooks", "webhook object"));
+        assert!(matches_feature_tokens("security", "securities"));
+        assert!(matches_feature_tokens("matches", "match"));
+        assert!(matches_feature_tokens("param", "params"));
+        assert!(matches_feature_tokens("params", "param"));
+        assert!(!matches_feature_tokens("par", "parameter"));
+        assert!(!matches_feature_tokens("parent", "parameter"));
+        assert!(!matches_feature_tokens("service", "server"));
         assert!(!matches_feature_tokens("a", "apple"));
         assert!(!matches_feature_tokens("apple", "a"));
         let _ = std::fs::remove_dir_all(&dir);

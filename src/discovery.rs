@@ -2,7 +2,7 @@
 
 use crate::config::ProjectConfig;
 use crate::error::ConformanceError;
-use crate::model::{ChecklistTable, ProfileKind, SpecId};
+use crate::model::{ChecklistTable, LanguageId, ProfileKind, SpecId};
 use crate::parser::markdown::parse_checklist;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -58,6 +58,8 @@ pub struct DiscoveredProject {
     pub root: PathBuf,
     /// Inferred language or project name (e.g. `rust`, `c`, `typescript`).
     pub language_name: String,
+    /// Strongly typed language identifier resolved from `.cdd-conformance.yaml` or `language_name`.
+    pub language_id: Option<LanguageId>,
     /// Optional project configuration parsed from `.cdd-conformance.yaml`.
     pub config: Option<ProjectConfig>,
     /// Discovered specification checklist files.
@@ -226,9 +228,15 @@ pub fn scan_repository(repo_path: &Path) -> Result<DiscoveredProject, Conformanc
     });
     checklists.dedup_by(|a, b| a.spec_id == b.spec_id && a.profile == b.profile);
 
+    let language_id = config
+        .as_ref()
+        .and_then(|c| c.language.clone())
+        .or_else(|| LanguageId::from_str(&language_name).ok());
+
     Ok(DiscoveredProject {
         root: canonical_repo,
         language_name,
+        language_id,
         config,
         checklists,
         compliance_file,
@@ -466,11 +474,18 @@ mod tests {
         let fake_proj = DiscoveredProject {
             root: PathBuf::from("."),
             language_name: "test".to_string(),
+            language_id: LanguageId::from_str("test").ok(),
             config: None,
             checklists: vec![fake_checklist],
             compliance_file: None,
         };
         assert!(fake_proj.parse_all_checklists().is_err());
+
+        let core_repos: Vec<String> = LanguageId::core_13()
+            .iter()
+            .map(LanguageId::repo_name)
+            .collect();
+        assert_eq!(core_repos, TARGET_ECOSYSTEM_REPOS);
     }
 
     #[test]

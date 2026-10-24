@@ -2,7 +2,7 @@
 
 use crate::config::ProjectConfig;
 use crate::error::ConformanceError;
-use crate::model::{CustomLanguageSlug, LanguageId, SpecId};
+use crate::model::{CompilerCapability, CustomLanguageSlug, LanguageId, SpecId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -65,6 +65,66 @@ impl LanguageCapabilities {
             wasm: false,
         }
     }
+
+    /// Returns `true` if the specified `CompilerCapability` is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - Strongly typed `CompilerCapability` to query.
+    ///
+    /// # Returns
+    ///
+    /// `true` if enabled on this toolchain.
+    #[must_use]
+    pub const fn supports(&self, cap: CompilerCapability) -> bool {
+        match cap {
+            CompilerCapability::Sdk => self.sdk,
+            CompilerCapability::SdkCli => self.sdk_cli,
+            CompilerCapability::Server => self.server,
+            CompilerCapability::ToOpenApi => self.to_openapi,
+            CompilerCapability::ToDocsJson => self.to_docs_json,
+            CompilerCapability::Sync => self.sync,
+            CompilerCapability::JsonRpc => self.json_rpc,
+            CompilerCapability::Mcp => self.mcp,
+            CompilerCapability::Arazzo => self.arazzo,
+            CompilerCapability::Wasm => self.wasm,
+        }
+    }
+
+    /// Sets the specified `CompilerCapability` flag on this capability set.
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - Strongly typed `CompilerCapability` to update.
+    /// * `enabled` - New boolean value for the capability.
+    pub fn set(&mut self, cap: CompilerCapability, enabled: bool) {
+        match cap {
+            CompilerCapability::Sdk => self.sdk = enabled,
+            CompilerCapability::SdkCli => self.sdk_cli = enabled,
+            CompilerCapability::Server => self.server = enabled,
+            CompilerCapability::ToOpenApi => self.to_openapi = enabled,
+            CompilerCapability::ToDocsJson => self.to_docs_json = enabled,
+            CompilerCapability::Sync => self.sync = enabled,
+            CompilerCapability::JsonRpc => self.json_rpc = enabled,
+            CompilerCapability::Mcp => self.mcp = enabled,
+            CompilerCapability::Arazzo => self.arazzo = enabled,
+            CompilerCapability::Wasm => self.wasm = enabled,
+        }
+    }
+
+    /// Returns a `BTreeSet` containing all enabled `CompilerCapability` variants.
+    ///
+    /// # Returns
+    ///
+    /// Ordered set of enabled capabilities.
+    #[must_use]
+    pub fn enabled_capabilities(&self) -> BTreeSet<CompilerCapability> {
+        CompilerCapability::all()
+            .iter()
+            .copied()
+            .filter(|&cap| self.supports(cap))
+            .collect()
+    }
 }
 
 /// Declarative shallow syntax profile for extracting structs/classes, fields, functions, args, and comments.
@@ -91,6 +151,81 @@ pub struct SyntaxProfileConfig {
     /// Regular expression pattern or prefix matching parameter doc-comment tags.
     #[serde(default)]
     pub param_doc_pattern: Option<String>,
+}
+
+impl SyntaxProfileConfig {
+    /// Validates that all configured pattern strings are non-empty and have balanced brackets/parentheses.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Configuration file path for error attribution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::InvalidRegexPattern` if any pattern is empty or has unbalanced delimiters.
+    pub fn validate(&self, path: &Path) -> Result<(), ConformanceError> {
+        for (field, pat_opt) in [
+            ("struct_pattern", &self.struct_pattern),
+            ("field_pattern", &self.field_pattern),
+            ("function_pattern", &self.function_pattern),
+            ("arg_pattern", &self.arg_pattern),
+            ("param_doc_pattern", &self.param_doc_pattern),
+        ] {
+            if let Some(pat) = pat_opt {
+                if let Err(reason) = validate_pattern_syntax(pat) {
+                    return Err(ConformanceError::InvalidRegexPattern {
+                        path: path.to_path_buf(),
+                        field: field.to_string(),
+                        pattern: pat.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a pattern string is non-empty and has balanced `[...]` and `(...)` groups.
+///
+/// # Arguments
+///
+/// * `pattern` - Candidate pattern string.
+///
+/// # Errors
+///
+/// Returns `Err(String)` describing why the pattern syntax is invalid.
+fn validate_pattern_syntax(pattern: &str) -> Result<(), String> {
+    if pattern.trim().is_empty() {
+        return Err("pattern cannot be empty".to_string());
+    }
+    let mut bracket_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
+    let mut escaped = false;
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match ch {
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth -= 1,
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            _ => {}
+        }
+        if bracket_depth < 0 || paren_depth < 0 {
+            return Err("unbalanced closing delimiter".to_string());
+        }
+    }
+    if bracket_depth != 0 || paren_depth != 0 {
+        return Err("unclosed bracket or parenthesis group".to_string());
+    }
+    Ok(())
 }
 
 /// Declarative toolchain commands and capabilities for a `cdd-<lang>` compiler repository.
@@ -858,9 +993,10 @@ mod tests {
             assert_eq!(&spec.language_id, lang);
             assert_eq!(spec.repo_name, lang.repo_name());
             assert!(!spec.cli_binary_cmd.is_empty());
-            assert!(spec.supported_targets.sdk);
-            assert!(spec.supported_targets.server);
-            assert!(spec.supported_targets.arazzo);
+            assert!(spec.supported_targets.supports(CompilerCapability::Sdk));
+            assert!(spec.supported_targets.supports(CompilerCapability::Server));
+            assert!(spec.supported_targets.supports(CompilerCapability::Arazzo));
+            assert!(!spec.supported_targets.enabled_capabilities().is_empty());
             let from_cmd = spec.build_from_arazzo_cmd("wf.arazzo.yaml", "out_dir");
             assert!(from_cmd.contains(&"from_arazzo".to_string()));
             assert!(from_cmd.contains(&"wf.arazzo.yaml".to_string()));

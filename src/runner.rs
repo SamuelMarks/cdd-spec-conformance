@@ -69,8 +69,7 @@ impl PortAllocator {
                 port: 0,
                 reason: e.to_string(),
             })?;
-        let addr = listener.local_addr().ok();
-        Ok(addr.map_or(0, |a| a.port()))
+        Ok(listener.local_addr().map_or(1, |a| a.port()))
     }
 }
 

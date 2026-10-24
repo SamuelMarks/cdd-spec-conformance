@@ -5,6 +5,29 @@ import os
 import subprocess
 import sys
 
+TARGET_ECOSYSTEM_REPOS = (
+    "cdd-c",
+    "cdd-cpp",
+    "cdd-csharp",
+    "cdd-go",
+    "cdd-java",
+    "cdd-kotlin",
+    "cdd-php",
+    "cdd-python-all",
+    "cdd-ruby",
+    "cdd-rust",
+    "cdd-sh",
+    "cdd-swift",
+    "cdd-ts",
+)
+
+
+def has_all_ecosystem_repos(parent_dir: str) -> bool:
+    """Returns True if all 13 core CDD language repositories exist in `parent_dir`."""
+    return all(
+        os.path.isdir(os.path.join(parent_dir, repo)) for repo in TARGET_ECOSYSTEM_REPOS
+    )
+
 
 def main() -> None:
     """Runs `cdd-conformance matrix` to update README.md with ecosystem scores."""
@@ -17,17 +40,14 @@ def main() -> None:
         os.path.join(root_dir, "target", "debug", "cdd-conformance"),
     ]
 
+    matrix_args = ["matrix", "--repos-dir", parent_dir]
+    if has_all_ecosystem_repos(parent_dir):
+        matrix_args.extend(["--readme", readme_path])
+
     cmd = None
     for candidate in bin_candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            cmd = [
-                candidate,
-                "matrix",
-                "--repos-dir",
-                parent_dir,
-                "--readme",
-                readme_path,
-            ]
+            cmd = [candidate, *matrix_args]
             break
 
     if cmd is None:
@@ -36,11 +56,7 @@ def main() -> None:
             "run",
             "--quiet",
             "--",
-            "matrix",
-            "--repos-dir",
-            parent_dir,
-            "--readme",
-            readme_path,
+            *matrix_args,
         ]
 
     try:

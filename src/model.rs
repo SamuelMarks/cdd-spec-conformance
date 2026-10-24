@@ -2,7 +2,7 @@
 
 use crate::error::ConformanceError;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -1377,6 +1377,43 @@ impl EndpointPath {
         }
     }
 
+    /// Validates and constructs an `EndpointPath` that must start with `/` and contain no whitespace.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - Candidate endpoint path string.
+    ///
+    /// # Returns
+    ///
+    /// Validated `EndpointPath`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::InvalidEndpointPath` if `raw` is empty, does not start with `/`,
+    /// or contains whitespace/control characters.
+    pub fn try_new(raw: &str) -> Result<Self, ConformanceError> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(ConformanceError::InvalidEndpointPath {
+                raw: raw.to_string(),
+                reason: "endpoint path cannot be empty".to_string(),
+            });
+        }
+        if !trimmed.starts_with('/') {
+            return Err(ConformanceError::InvalidEndpointPath {
+                raw: raw.to_string(),
+                reason: "endpoint path must start with '/'".to_string(),
+            });
+        }
+        if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(ConformanceError::InvalidEndpointPath {
+                raw: raw.to_string(),
+                reason: "endpoint path cannot contain whitespace or control characters".to_string(),
+            });
+        }
+        Ok(Self(trimmed.to_string()))
+    }
+
     /// Returns the endpoint path as a string slice.
     ///
     /// # Returns
@@ -1396,6 +1433,386 @@ impl fmt::Display for EndpointPath {
     /// * `f` - Formatter instance.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// Strongly typed server framework or runtime engine identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServerFramework {
+    /// Actix-Web HTTP REST framework (`"actix-web"`).
+    ActixWeb,
+    /// Axum HTTP REST framework (`"axum"`).
+    Axum,
+    /// Model Context Protocol stdio server (`"mcp-stdio"`).
+    McpStdio,
+    /// Model Context Protocol HTTP/SSE server (`"mcp-http"`).
+    McpHttp,
+    /// Arazzo 1.1.0 workflow execution engine (`"arazzo-engine"`).
+    ArazzoEngine,
+}
+
+impl ServerFramework {
+    /// Returns the canonical kebab-case identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical framework string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ActixWeb => "actix-web",
+            Self::Axum => "axum",
+            Self::McpStdio => "mcp-stdio",
+            Self::McpHttp => "mcp-http",
+            Self::ArazzoEngine => "arazzo-engine",
+        }
+    }
+}
+
+impl fmt::Display for ServerFramework {
+    /// Formats the server framework as its kebab-case string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ServerFramework {
+    type Err = ConformanceError;
+
+    /// Parses a `ServerFramework` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw server framework string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "actix-web" | "actix" => Ok(Self::ActixWeb),
+            "axum" => Ok(Self::Axum),
+            "mcp-stdio" => Ok(Self::McpStdio),
+            "mcp-http" => Ok(Self::McpHttp),
+            "arazzo-engine" | "arazzo" => Ok(Self::ArazzoEngine),
+            other => Err(ConformanceError::InvalidEnumToken {
+                type_name: "ServerFramework",
+                raw: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Strongly typed verification status for a language client against the reference backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClientVerificationStatus {
+    /// Client repository was found and passed all signature and contract checks (`"verified"`).
+    Verified,
+    /// Client toolchain is configured and ready to generate/verify (`"ready-to-generate"`).
+    ReadyToGenerate,
+    /// Target client repository directory is absent on disk (`"missing-repo"`).
+    MissingRepo,
+    /// Client repository failed signature or wire verification (`"failed-verification"`).
+    FailedVerification,
+}
+
+impl ClientVerificationStatus {
+    /// Returns the canonical kebab-case status string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical status string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::ReadyToGenerate => "ready-to-generate",
+            Self::MissingRepo => "missing-repo",
+            Self::FailedVerification => "failed-verification",
+        }
+    }
+}
+
+impl fmt::Display for ClientVerificationStatus {
+    /// Formats the client verification status as its kebab-case string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ClientVerificationStatus {
+    type Err = ConformanceError;
+
+    /// Parses a `ClientVerificationStatus` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw status string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "verified" => Ok(Self::Verified),
+            "ready-to-generate" => Ok(Self::ReadyToGenerate),
+            "missing-repo" => Ok(Self::MissingRepo),
+            "failed-verification" => Ok(Self::FailedVerification),
+            other => Err(ConformanceError::InvalidEnumToken {
+                type_name: "ClientVerificationStatus",
+                raw: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Strongly typed interoperability status for a cell in the `N x N` language compatibility matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompatibilityStatus {
+    /// Both client and server repositories are present and verified compatible (`"compatible"`).
+    Compatible,
+    /// Client and server toolchains support the required capabilities (`"configured"`).
+    Configured,
+    /// Either the client lacks SDK support or the server lacks server support (`"unsupported"`).
+    Unsupported,
+    /// Client and server failed interoperability verification (`"incompatible"`).
+    Incompatible,
+}
+
+impl CompatibilityStatus {
+    /// Returns the canonical lowercase status string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical compatibility status string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compatible => "compatible",
+            Self::Configured => "configured",
+            Self::Unsupported => "unsupported",
+            Self::Incompatible => "incompatible",
+        }
+    }
+
+    /// Returns the Markdown badge icon for this compatibility status.
+    ///
+    /// # Returns
+    ///
+    /// Status badge emoji string slice (`"✅"`, `"☑️"`, `"⚠️"`, or `"❌"`).
+    #[must_use]
+    pub const fn badge(self) -> &'static str {
+        match self {
+            Self::Compatible => "✅",
+            Self::Configured => "☑️",
+            Self::Unsupported => "⚠️",
+            Self::Incompatible => "❌",
+        }
+    }
+}
+
+impl fmt::Display for CompatibilityStatus {
+    /// Formats the compatibility status as its canonical string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for CompatibilityStatus {
+    type Err = ConformanceError;
+
+    /// Parses a `CompatibilityStatus` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw status string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "compatible" => Ok(Self::Compatible),
+            "configured" => Ok(Self::Configured),
+            "unsupported" => Ok(Self::Unsupported),
+            "incompatible" => Ok(Self::Incompatible),
+            other => Err(ConformanceError::InvalidEnumToken {
+                type_name: "CompatibilityStatus",
+                raw: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Execution fidelity mode used during runtime and contract verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerificationExecutionMode {
+    /// Live subprocess and ephemeral TCP port execution against compiled binaries.
+    LiveSubprocess,
+    /// Static inspection of on-disk repository checklists, configs, and source files.
+    RepositoryStaticInspection,
+    /// Evaluation against embedded canonical contract baselines when repositories are absent.
+    CanonicalContractBaseline,
+}
+
+impl VerificationExecutionMode {
+    /// Returns the canonical kebab-case identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical execution mode string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LiveSubprocess => "live-subprocess",
+            Self::RepositoryStaticInspection => "repository-static-inspection",
+            Self::CanonicalContractBaseline => "canonical-contract-baseline",
+        }
+    }
+}
+
+impl fmt::Display for VerificationExecutionMode {
+    /// Formats the execution mode as its kebab-case string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for VerificationExecutionMode {
+    type Err = ConformanceError;
+
+    /// Parses a `VerificationExecutionMode` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw execution mode string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "live-subprocess" => Ok(Self::LiveSubprocess),
+            "repository-static-inspection" => Ok(Self::RepositoryStaticInspection),
+            "canonical-contract-baseline" => Ok(Self::CanonicalContractBaseline),
+            other => Err(ConformanceError::InvalidEnumToken {
+                type_name: "VerificationExecutionMode",
+                raw: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Strongly typed compiler feature capability for a CDD language toolchain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilerCapability {
+    /// Supports `from_openapi to_sdk` (`client-sdk`).
+    Sdk,
+    /// Supports `from_openapi to_sdk_cli` (`client-sdk-cli`).
+    SdkCli,
+    /// Supports `from_openapi to_server` (`servers`).
+    Server,
+    /// Supports `to_openapi` reverse extraction from source code.
+    ToOpenApi,
+    /// Supports `to_docs_json` snippet generation.
+    ToDocsJson,
+    /// Supports `sync` bidirectional in-place AST patching.
+    Sync,
+    /// Supports `serve_json_rpc` JSON-RPC 2.0 daemon mode.
+    JsonRpc,
+    /// Supports `serve_stdio` / MCP server and client generation.
+    Mcp,
+    /// Supports Arazzo 1.1.0 workflow parsing and generation.
+    Arazzo,
+    /// Supports WebAssembly (`wasm32-unknown-unknown` / `wasm32-wasip1`) compilation.
+    Wasm,
+}
+
+impl CompilerCapability {
+    /// Returns all 10 standard CDD compiler capabilities in deterministic order.
+    ///
+    /// # Returns
+    ///
+    /// Static slice of all `CompilerCapability` variants.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Sdk,
+            Self::SdkCli,
+            Self::Server,
+            Self::ToOpenApi,
+            Self::ToDocsJson,
+            Self::Sync,
+            Self::JsonRpc,
+            Self::Mcp,
+            Self::Arazzo,
+            Self::Wasm,
+        ]
+    }
+
+    /// Returns the canonical `snake_case` capability identifier.
+    ///
+    /// # Returns
+    ///
+    /// Canonical capability string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sdk => "sdk",
+            Self::SdkCli => "sdk_cli",
+            Self::Server => "server",
+            Self::ToOpenApi => "to_openapi",
+            Self::ToDocsJson => "to_docs_json",
+            Self::Sync => "sync",
+            Self::JsonRpc => "json_rpc",
+            Self::Mcp => "mcp",
+            Self::Arazzo => "arazzo",
+            Self::Wasm => "wasm",
+        }
+    }
+}
+
+impl fmt::Display for CompilerCapability {
+    /// Formats the compiler capability as its `snake_case` string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for CompilerCapability {
+    type Err = ConformanceError;
+
+    /// Parses a `CompilerCapability` from a string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw capability string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().replace('-', "_").as_str() {
+            "sdk" => Ok(Self::Sdk),
+            "sdk_cli" => Ok(Self::SdkCli),
+            "server" => Ok(Self::Server),
+            "to_openapi" => Ok(Self::ToOpenApi),
+            "to_docs_json" => Ok(Self::ToDocsJson),
+            "sync" => Ok(Self::Sync),
+            "json_rpc" => Ok(Self::JsonRpc),
+            "mcp" => Ok(Self::Mcp),
+            "arazzo" => Ok(Self::Arazzo),
+            "wasm" => Ok(Self::Wasm),
+            other => Err(ConformanceError::InvalidEnumToken {
+                type_name: "CompilerCapability",
+                raw: other.to_string(),
+            }),
+        }
     }
 }
 
@@ -2333,6 +2750,922 @@ pub struct ArazzoDocument {
     pub extensions: BTreeMap<String, serde_json::Value>,
 }
 
+/// Normalized operation signature extracted from an `OpenAPI` 3.x or Swagger 2.0 document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedOperation {
+    /// HTTP verb (e.g. `GET`, `POST`, `QUERY`).
+    pub method: HttpMethod,
+    /// Validated endpoint path starting with `/`.
+    pub path: EndpointPath,
+    /// Optional `operationId` string.
+    pub operation_id: Option<String>,
+    /// Ordered parameter names declared on the path or operation.
+    pub parameter_names: Vec<String>,
+    /// Declared HTTP response status codes (e.g. `"200"`, `"404"`).
+    pub status_codes: BTreeSet<String>,
+}
+
+/// Normalized schema model extracted from `components.schemas` (`OpenAPI` 3.x) or `definitions` (Swagger 2.0).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedSchemaModel {
+    /// Schema model identifier (e.g. `"Pet"`, `"Order"`).
+    pub name: String,
+    /// Map of property names to their JSON Schema type strings.
+    pub properties: BTreeMap<String, String>,
+    /// Set of required property names.
+    pub required: BTreeSet<String>,
+}
+
+/// Normalized `OpenAPI` 3.x or Swagger 2.0 specification AST for structural and source-signature verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedOpenApiSpec {
+    /// Specification version string (e.g. `"3.2.0"` or `"2.0"`).
+    pub spec_version: String,
+    /// Operations keyed by `operationId` (or `"{METHOD} {path}"` when `operationId` is absent).
+    pub operations: BTreeMap<String, NormalizedOperation>,
+    /// Schema models keyed by schema name.
+    pub schemas: BTreeMap<String, NormalizedSchemaModel>,
+}
+
+impl NormalizedOpenApiSpec {
+    /// Extracts a `NormalizedOpenApiSpec` from a parsed `OpenAPI` 3.x or Swagger 2.0 JSON value.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - Parsed `OpenAPI` or Swagger JSON value.
+    /// * `lang` - Language identifier for error attribution.
+    ///
+    /// # Returns
+    ///
+    /// Normalized `NormalizedOpenApiSpec` containing operations and schema models.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoSchemaViolation` if neither `openapi` nor `swagger` root version key is present.
+    #[allow(clippy::too_many_lines)]
+    pub fn from_json_value(
+        doc: &serde_json::Value,
+        lang: &LanguageId,
+    ) -> Result<Self, ConformanceError> {
+        let spec_version = doc
+            .get("openapi")
+            .or_else(|| doc.get("swagger"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: lang.clone(),
+                pointer: "/openapi".to_string(),
+                reason: "expected non-empty 'openapi' or 'swagger' version string".to_string(),
+            })?
+            .to_string();
+
+        let mut schemas = BTreeMap::new();
+        let schemas_map = doc
+            .get("components")
+            .and_then(|c| c.get("schemas"))
+            .and_then(serde_json::Value::as_object)
+            .or_else(|| {
+                doc.get("definitions")
+                    .and_then(serde_json::Value::as_object)
+            });
+        for (schema_name, schema_val) in schemas_map.into_iter().flatten() {
+            let mut properties = BTreeMap::new();
+            for (prop_name, prop_val) in schema_val
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                let prop_type = prop_val
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("any")
+                    .to_string();
+                properties.insert(prop_name.clone(), prop_type);
+            }
+            let required: BTreeSet<String> = schema_val
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect();
+            schemas.insert(
+                schema_name.clone(),
+                NormalizedSchemaModel {
+                    name: schema_name.clone(),
+                    properties,
+                    required,
+                },
+            );
+        }
+
+        let mut operations = BTreeMap::new();
+        for (raw_path, path_item) in doc
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            let endpoint = EndpointPath::new(raw_path);
+            let path_params: Vec<String> = path_item
+                .get("parameters")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect();
+            let Some(ops_map) = path_item.as_object() else {
+                continue;
+            };
+            for (verb_str, op_val) in ops_map {
+                let method = match verb_str.to_lowercase().as_str() {
+                    "get" => HttpMethod::Get,
+                    "post" => HttpMethod::Post,
+                    "put" => HttpMethod::Put,
+                    "delete" => HttpMethod::Delete,
+                    "patch" => HttpMethod::Patch,
+                    "head" => HttpMethod::Head,
+                    "options" => HttpMethod::Options,
+                    "trace" => HttpMethod::Trace,
+                    "query" => HttpMethod::Query,
+                    _ => continue,
+                };
+                let op_id = op_val
+                    .get("operationId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                let mut parameter_names = path_params.clone();
+                for p_name in op_val
+                    .get("parameters")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.get("name").and_then(serde_json::Value::as_str))
+                {
+                    if !parameter_names.iter().any(|existing| existing == p_name) {
+                        parameter_names.push(p_name.to_string());
+                    }
+                }
+                let status_codes: BTreeSet<String> = op_val
+                    .get("responses")
+                    .and_then(serde_json::Value::as_object)
+                    .into_iter()
+                    .flat_map(serde_json::Map::keys)
+                    .cloned()
+                    .collect();
+                let key = op_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{} {}", method.as_str(), endpoint.as_str()));
+                operations.insert(
+                    key,
+                    NormalizedOperation {
+                        method,
+                        path: endpoint.clone(),
+                        operation_id: op_id,
+                        parameter_names,
+                        status_codes,
+                    },
+                );
+            }
+        }
+
+        Ok(Self {
+            spec_version,
+            operations,
+            schemas,
+        })
+    }
+}
+
+/// Extracts specification extension entries (`^x-`) from a JSON object map.
+///
+/// # Arguments
+///
+/// * `map` - Optional JSON object map.
+///
+/// # Returns
+///
+/// `BTreeMap` containing all keys beginning with `"x-"`.
+#[must_use]
+fn extract_extensions_map(
+    map: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> BTreeMap<String, serde_json::Value> {
+    map.into_iter()
+        .flatten()
+        .filter(|(k, _)| k.starts_with("x-"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Parses a single `Parameter Object` or `Reusable Object` from an Arazzo JSON value.
+///
+/// # Arguments
+///
+/// * `param` - Parameter or reusable JSON value.
+/// * `p_ptr` - JSON Pointer to this parameter entry.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Tuple `(ArazzoParameterOrReusable, Option<ArazzoParameterIn>)`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if the parameter location or runtime expression is invalid.
+fn parse_arazzo_param_or_reusable(
+    param: &serde_json::Value,
+    p_ptr: &str,
+    language: &LanguageId,
+) -> Result<(ArazzoParameterOrReusable, Option<ArazzoParameterIn>), ConformanceError> {
+    if let Some(ref_str) = param.get("reference").and_then(serde_json::Value::as_str) {
+        return Ok((
+            ArazzoParameterOrReusable::Reusable(ArazzoReusableObject {
+                reference: ref_str.to_string(),
+                value: param.get("value").cloned(),
+            }),
+            None,
+        ));
+    }
+    let in_loc = if let Some(in_val) = param.get("in") {
+        let in_str = in_val.as_str().unwrap_or("");
+        let Ok(loc) = ArazzoParameterIn::from_str(in_str) else {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{p_ptr}/in"),
+                reason: format!("invalid parameter location '{in_str}'"),
+            });
+        };
+        Some(loc)
+    } else {
+        None
+    };
+    let val = param
+        .get("value")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(v_str) = val.as_str() {
+        if v_str.starts_with('$') {
+            let _ = ArazzoRuntimeExpressionKind::parse_root(v_str, &format!("{p_ptr}/value"))?;
+        }
+    }
+    let name = param
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok((
+        ArazzoParameterOrReusable::Parameter(ArazzoParameterObject {
+            name,
+            in_loc,
+            value: val,
+            extensions: extract_extensions_map(param.as_object()),
+        }),
+        in_loc,
+    ))
+}
+
+/// Parses an Arazzo `Criterion Object` from a JSON value.
+///
+/// # Arguments
+///
+/// * `crit` - Criterion JSON value.
+/// * `c_ptr` - JSON Pointer to the criterion object.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Validated `ArazzoCriterionObject`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if `type` or `context` is invalid.
+fn parse_arazzo_criterion(
+    crit: &serde_json::Value,
+    c_ptr: &str,
+    language: &LanguageId,
+) -> Result<ArazzoCriterionObject, ConformanceError> {
+    let criterion_type = match crit.get("type") {
+        Some(t_val) => Some(ArazzoCriterionType::from_json_value(
+            t_val,
+            language,
+            &format!("{c_ptr}/type"),
+        )?),
+        None => None,
+    };
+    let context = crit
+        .get("context")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if let Some(ctx) = context.as_deref().filter(|s| s.starts_with('$')) {
+        let _ = ArazzoRuntimeExpressionKind::parse_root(ctx, &format!("{c_ptr}/context"))?;
+    }
+    let condition = crit
+        .get("condition")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok(ArazzoCriterionObject {
+        context,
+        condition,
+        criterion_type,
+        extensions: extract_extensions_map(crit.as_object()),
+    })
+}
+
+/// Parses a single `Step Object` from an Arazzo 1.1.0 workflow JSON value.
+///
+/// # Arguments
+///
+/// * `step` - Step JSON value.
+/// * `step_ptr` - JSON Pointer to this step.
+/// * `seen_steps` - Set of `stepId` values already seen in this workflow.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Validated `ArazzoStepObject`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if any normative step constraint is violated.
+#[allow(clippy::too_many_lines)]
+fn parse_arazzo_step_ast(
+    step: &serde_json::Value,
+    step_ptr: &str,
+    seen_steps: &mut BTreeSet<String>,
+    language: &LanguageId,
+) -> Result<ArazzoStepObject, ConformanceError> {
+    let step_id = step
+        .get("stepId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if step_id.trim().is_empty() || !seen_steps.insert(step_id.to_string()) {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/stepId"),
+            reason: "each step must have a unique, non-empty 'stepId' within its workflow"
+                .to_string(),
+        });
+    }
+
+    let op_id = step.get("operationId").and_then(serde_json::Value::as_str);
+    let op_path = step
+        .get("operationPath")
+        .and_then(serde_json::Value::as_str);
+    let ch_path = step.get("channelPath").and_then(serde_json::Value::as_str);
+    let wf_id = step.get("workflowId").and_then(serde_json::Value::as_str);
+    let target = match (op_id, op_path, ch_path, wf_id) {
+        (Some(id), None, None, None) => ArazzoStepTarget::OperationId(id.to_string()),
+        (None, Some(p), None, None) => ArazzoStepTarget::OperationPath(p.to_string()),
+        (None, None, Some(c), None) => ArazzoStepTarget::ChannelPath(c.to_string()),
+        (None, None, None, Some(w)) => ArazzoStepTarget::WorkflowId(w.to_string()),
+        _ => {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: step_ptr.to_string(),
+                reason: "step must specify exactly one of 'operationId', 'operationPath', 'channelPath', or 'workflowId'".to_string(),
+            });
+        }
+    };
+
+    let action = if let Some(act_val) = step.get("action") {
+        let act_str = act_val.as_str().unwrap_or("");
+        let Ok(act) = ArazzoMessageAction::from_str(act_str) else {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{step_ptr}/action"),
+                reason: format!("invalid step action '{act_str}'"),
+            });
+        };
+        Some(act)
+    } else {
+        None
+    };
+
+    let correlation_id = step
+        .get("correlationId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if let Some(corr) = correlation_id.as_deref().filter(|s| s.starts_with('$')) {
+        let _ =
+            ArazzoRuntimeExpressionKind::parse_root(corr, &format!("{step_ptr}/correlationId"))?;
+    }
+
+    let mut parameters = Vec::new();
+    let mut has_query = false;
+    let mut has_querystring = false;
+    for (p_idx, param) in step
+        .get("parameters")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let p_ptr = format!("{step_ptr}/parameters/{p_idx}");
+        let (parsed_param, loc) = parse_arazzo_param_or_reusable(param, &p_ptr, language)?;
+        if loc == Some(ArazzoParameterIn::Query) {
+            has_query = true;
+        }
+        if loc == Some(ArazzoParameterIn::QueryString) {
+            has_querystring = true;
+        }
+        parameters.push(parsed_param);
+    }
+    if has_query && has_querystring {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/parameters"),
+            reason: "'querystring' and 'query' parameters are mutually exclusive in a single step"
+                .to_string(),
+        });
+    }
+
+    let mut success_criteria = Vec::new();
+    for (c_idx, crit) in step
+        .get("successCriteria")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let c_ptr = format!("{step_ptr}/successCriteria/{c_idx}");
+        success_criteria.push(parse_arazzo_criterion(crit, &c_ptr, language)?);
+    }
+
+    let mut on_success = Vec::new();
+    for act_val in step
+        .get("onSuccess")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(ref_str) = act_val.get("reference").and_then(serde_json::Value::as_str) {
+            on_success.push(ArazzoSuccessActionOrReusable::Reusable(
+                ArazzoReusableObject {
+                    reference: ref_str.to_string(),
+                    value: act_val.get("value").cloned(),
+                },
+            ));
+        } else {
+            let t_str = act_val
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("end");
+            let action_type =
+                ArazzoSuccessActionType::from_str(t_str).unwrap_or(ArazzoSuccessActionType::End);
+            on_success.push(ArazzoSuccessActionOrReusable::Action(
+                ArazzoSuccessActionObject {
+                    name: act_val
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    action_type,
+                    workflow_id: act_val
+                        .get("workflowId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    step_id: act_val
+                        .get("stepId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    parameters: Vec::new(),
+                    criteria: Vec::new(),
+                    extensions: extract_extensions_map(act_val.as_object()),
+                },
+            ));
+        }
+    }
+
+    let mut on_failure = Vec::new();
+    for act_val in step
+        .get("onFailure")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(ref_str) = act_val.get("reference").and_then(serde_json::Value::as_str) {
+            on_failure.push(ArazzoFailureActionOrReusable::Reusable(
+                ArazzoReusableObject {
+                    reference: ref_str.to_string(),
+                    value: act_val.get("value").cloned(),
+                },
+            ));
+        } else {
+            let t_str = act_val
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("end");
+            let action_type =
+                ArazzoFailureActionType::from_str(t_str).unwrap_or(ArazzoFailureActionType::End);
+            on_failure.push(ArazzoFailureActionOrReusable::Action(
+                ArazzoFailureActionObject {
+                    name: act_val
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    action_type,
+                    workflow_id: act_val
+                        .get("workflowId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    step_id: act_val
+                        .get("stepId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    parameters: Vec::new(),
+                    retry_after: act_val
+                        .get("retryAfter")
+                        .and_then(serde_json::Value::as_f64),
+                    retry_limit: act_val
+                        .get("retryLimit")
+                        .and_then(serde_json::Value::as_u64),
+                    criteria: Vec::new(),
+                    extensions: extract_extensions_map(act_val.as_object()),
+                },
+            ));
+        }
+    }
+
+    let depends_on: Vec<String> = step
+        .get("dependsOn")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect();
+
+    Ok(ArazzoStepObject {
+        step_id: step_id.to_string(),
+        description: step
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        target,
+        parameters,
+        request_body: None,
+        depends_on,
+        timeout: step.get("timeout").and_then(serde_json::Value::as_u64),
+        correlation_id,
+        action,
+        success_criteria,
+        on_success,
+        on_failure,
+        outputs: BTreeMap::new(),
+        extensions: extract_extensions_map(step.as_object()),
+    })
+}
+
+/// Validates step-level `dependsOn` DAG acyclicity, `$components.*` reusable references, and
+/// `onSuccess` / `onFailure` `goto` step target references within a parsed workflow.
+///
+/// # Arguments
+///
+/// * `steps` - Parsed `ArazzoStepObject` slice.
+/// * `wf_ptr` - JSON Pointer prefix for the workflow.
+/// * `seen_steps` - Set of all `stepId` strings defined in the workflow.
+/// * `doc` - Root Arazzo 1.1.0 document JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if any dependency cycle, missing target step,
+/// or unresolved `$components.*` reference is found.
+fn validate_arazzo_ast_workflow_refs(
+    steps: &[ArazzoStepObject],
+    wf_ptr: &str,
+    seen_steps: &BTreeSet<String>,
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let mut deps_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (s_idx, step) in steps.iter().enumerate() {
+        let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
+        let mut step_deps = Vec::new();
+        for dep_id in &step.depends_on {
+            if !seen_steps.contains(dep_id) || dep_id == &step.step_id {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/dependsOn"),
+                    reason: format!("invalid or self-referential step dependency '{dep_id}'"),
+                });
+            }
+            if deps_map
+                .get(dep_id)
+                .is_some_and(|transitive| transitive.iter().any(|d| d == &step.step_id))
+            {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/dependsOn"),
+                    reason: format!(
+                        "cyclic step dependency between '{}' and '{dep_id}'",
+                        step.step_id
+                    ),
+                });
+            }
+            step_deps.push(dep_id.clone());
+        }
+        deps_map.insert(step.step_id.clone(), step_deps);
+
+        for succ in &step.on_success {
+            match succ {
+                ArazzoSuccessActionOrReusable::Reusable(r) => {
+                    validate_arazzo_component_ref(&r.reference, &step_ptr, doc, language)?;
+                }
+                ArazzoSuccessActionOrReusable::Action(act) => {
+                    if act.action_type == ArazzoSuccessActionType::Goto {
+                        let target_step = act.step_id.as_deref().unwrap_or("");
+                        if !seen_steps.contains(target_step) {
+                            return Err(ConformanceError::ArazzoSchemaViolation {
+                                language: language.clone(),
+                                pointer: step_ptr,
+                                reason: format!(
+                                    "goto action references unknown stepId '{target_step}'"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for fail in &step.on_failure {
+            if let ArazzoFailureActionOrReusable::Reusable(r) = fail {
+                validate_arazzo_component_ref(&r.reference, &step_ptr, doc, language)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates that a `$components.<section>.<name>` reusable reference exists in `doc["components"]`.
+///
+/// # Arguments
+///
+/// * `ref_str` - Reusable reference string (e.g. `"$components.successActions.done"`).
+/// * `pointer` - JSON Pointer context for error reporting.
+/// * `doc` - Root Arazzo 1.1.0 document JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if the reference is malformed or missing.
+fn validate_arazzo_component_ref(
+    ref_str: &str,
+    pointer: &str,
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<(), ConformanceError> {
+    let parts: Vec<&str> = ref_str.split('.').collect();
+    let resolved = if parts.len() == 3 && parts[0] == "$components" {
+        doc.get("components")
+            .and_then(|c| c.get(parts[1]))
+            .and_then(|sec| sec.get(parts[2]))
+    } else {
+        None
+    };
+    if resolved.is_none() {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: pointer.to_string(),
+            reason: format!("unresolved reusable component reference '{ref_str}'"),
+        });
+    }
+    Ok(())
+}
+
+impl ArazzoDocument {
+    /// Parses and validates an `ArazzoDocument` AST from a raw JSON/YAML `serde_json::Value`.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - Raw Arazzo 1.1.0 JSON value.
+    /// * `language` - Language identifier for error attribution.
+    ///
+    /// # Returns
+    ///
+    /// Strongly typed `ArazzoDocument` AST.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoSchemaViolation` or `ConformanceError::ArazzoRuntimeExpressionError`
+    /// if any normative Arazzo 1.1.0 structural or expression rule is violated.
+    #[allow(clippy::too_many_lines)]
+    pub fn from_json_value(
+        doc: &serde_json::Value,
+        language: &LanguageId,
+    ) -> Result<Self, ConformanceError> {
+        let raw_ver = doc
+            .get("arazzo")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let arazzo = ArazzoVersion::parse_for_language(raw_ver, language)?;
+
+        let self_uri = if let Some(self_str) = doc.get("$self").and_then(serde_json::Value::as_str)
+        {
+            if self_str.is_empty() || self_str.contains('#') {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: "/$self".to_string(),
+                    reason:
+                        "the '$self' URI must be a non-empty string without a fragment identifier"
+                            .to_string(),
+                });
+            }
+            Some(self_str.to_string())
+        } else {
+            None
+        };
+
+        let info_obj = doc.get("info");
+        let info_title = info_obj
+            .and_then(|i| i.get("title"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let info_ver = info_obj
+            .and_then(|i| i.get("version"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if info_title.trim().is_empty() || info_ver.trim().is_empty() {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/info".to_string(),
+                reason: "'info' object must contain non-empty 'title' and 'version' strings"
+                    .to_string(),
+            });
+        }
+        let info = ArazzoInfoObject {
+            title: info_title.to_string(),
+            summary: info_obj
+                .and_then(|i| i.get("summary"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            description: info_obj
+                .and_then(|i| i.get("description"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            version: info_ver.to_string(),
+            extensions: extract_extensions_map(info_obj.and_then(serde_json::Value::as_object)),
+        };
+
+        let sources = doc
+            .get("sourceDescriptions")
+            .and_then(serde_json::Value::as_array)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/sourceDescriptions".to_string(),
+                reason: "'sourceDescriptions' must be a non-empty array".to_string(),
+            })?;
+
+        let mut source_descriptions = Vec::with_capacity(sources.len());
+        let mut seen_sources = BTreeSet::new();
+        for (idx, src) in sources.iter().enumerate() {
+            let ptr = format!("/sourceDescriptions/{idx}");
+            let name = src
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let url = src
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if name.trim().is_empty()
+                || url.trim().is_empty()
+                || !seen_sources.insert(name.to_string())
+            {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: ptr,
+                    reason: "each sourceDescription must have a unique 'name' and non-empty 'url'"
+                        .to_string(),
+                });
+            }
+            let source_type = if let Some(t_val) = src.get("type") {
+                let t_str = t_val.as_str().unwrap_or("");
+                let Ok(st) = ArazzoSourceType::from_str(t_str) else {
+                    return Err(ConformanceError::ArazzoSchemaViolation {
+                        language: language.clone(),
+                        pointer: format!("{ptr}/type"),
+                        reason: format!("invalid sourceDescription type '{t_str}'"),
+                    });
+                };
+                Some(st)
+            } else {
+                None
+            };
+            source_descriptions.push(ArazzoSourceDescription {
+                name: name.to_string(),
+                url: url.to_string(),
+                source_type,
+                extensions: extract_extensions_map(src.as_object()),
+            });
+        }
+
+        let raw_workflows = doc
+            .get("workflows")
+            .and_then(serde_json::Value::as_array)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: "/workflows".to_string(),
+                reason: "'workflows' must be a non-empty array".to_string(),
+            })?;
+
+        let mut workflows = Vec::with_capacity(raw_workflows.len());
+        let mut seen_workflows = BTreeSet::new();
+        for (w_idx, wf) in raw_workflows.iter().enumerate() {
+            let wf_ptr = format!("/workflows/{w_idx}");
+            let wf_id = wf
+                .get("workflowId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if wf_id.trim().is_empty() || !seen_workflows.insert(wf_id.to_string()) {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{wf_ptr}/workflowId"),
+                    reason: "each workflow must have a unique, non-empty 'workflowId'".to_string(),
+                });
+            }
+
+            let raw_steps = wf
+                .get("steps")
+                .and_then(serde_json::Value::as_array)
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{wf_ptr}/steps"),
+                    reason: "each workflow must contain a non-empty 'steps' array".to_string(),
+                })?;
+
+            let mut steps = Vec::with_capacity(raw_steps.len());
+            let mut seen_steps = BTreeSet::new();
+            for (s_idx, step_val) in raw_steps.iter().enumerate() {
+                let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
+                steps.push(parse_arazzo_step_ast(
+                    step_val,
+                    &step_ptr,
+                    &mut seen_steps,
+                    language,
+                )?);
+            }
+            validate_arazzo_ast_workflow_refs(&steps, &wf_ptr, &seen_steps, doc, language)?;
+
+            workflows.push(ArazzoWorkflowObject {
+                workflow_id: wf_id.to_string(),
+                summary: wf
+                    .get("summary")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                description: wf
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                inputs: wf.get("inputs").cloned(),
+                depends_on: Vec::new(),
+                steps,
+                success_actions: Vec::new(),
+                failure_actions: Vec::new(),
+                outputs: BTreeMap::new(),
+                parameters: Vec::new(),
+                extensions: extract_extensions_map(wf.as_object()),
+            });
+        }
+
+        let components = doc
+            .get("components")
+            .and_then(serde_json::Value::as_object)
+            .map(|c_map| {
+                let inputs = c_map
+                    .get("inputs")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default();
+                ArazzoComponentsObject {
+                    inputs,
+                    parameters: BTreeMap::new(),
+                    success_actions: BTreeMap::new(),
+                    failure_actions: BTreeMap::new(),
+                    extensions: extract_extensions_map(Some(c_map)),
+                }
+            });
+
+        Ok(Self {
+            arazzo,
+            self_uri,
+            info,
+            source_descriptions,
+            workflows,
+            components,
+            extensions: extract_extensions_map(doc.as_object()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3027,5 +4360,164 @@ mod tests {
             extensions: BTreeMap::new(),
         };
         assert_eq!(doc_ast.arazzo.as_str(), "1.1.0");
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    fn test_strong_enums_and_normalized_openapi_spec() {
+        assert_eq!(
+            EndpointPath::try_new("/pets/1")
+                .ok()
+                .as_ref()
+                .map(EndpointPath::as_str),
+            Some("/pets/1")
+        );
+        assert!(EndpointPath::try_new("").is_err());
+        assert!(EndpointPath::try_new("pets").is_err());
+        assert!(EndpointPath::try_new("/pets with space").is_err());
+
+        for (raw, expected) in [
+            ("actix-web", ServerFramework::ActixWeb),
+            ("actix", ServerFramework::ActixWeb),
+            ("axum", ServerFramework::Axum),
+            ("mcp-stdio", ServerFramework::McpStdio),
+            ("mcp-http", ServerFramework::McpHttp),
+            ("arazzo-engine", ServerFramework::ArazzoEngine),
+            ("arazzo", ServerFramework::ArazzoEngine),
+        ] {
+            assert_eq!(ServerFramework::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.to_string(), expected.as_str());
+        }
+        assert!(ServerFramework::from_str("flask").is_err());
+
+        for (raw, expected) in [
+            ("verified", ClientVerificationStatus::Verified),
+            (
+                "ready-to-generate",
+                ClientVerificationStatus::ReadyToGenerate,
+            ),
+            ("missing-repo", ClientVerificationStatus::MissingRepo),
+            (
+                "failed-verification",
+                ClientVerificationStatus::FailedVerification,
+            ),
+        ] {
+            assert_eq!(ClientVerificationStatus::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(ClientVerificationStatus::from_str("unknown").is_err());
+
+        for (raw, expected, badge) in [
+            ("compatible", CompatibilityStatus::Compatible, "✅"),
+            ("configured", CompatibilityStatus::Configured, "☑️"),
+            ("unsupported", CompatibilityStatus::Unsupported, "⚠️"),
+            ("incompatible", CompatibilityStatus::Incompatible, "❌"),
+        ] {
+            assert_eq!(CompatibilityStatus::from_str(raw).ok(), Some(expected));
+            assert_eq!(expected.to_string(), raw);
+            assert_eq!(expected.badge(), badge);
+        }
+        assert!(CompatibilityStatus::from_str("unknown").is_err());
+
+        for (raw, expected) in [
+            ("live-subprocess", VerificationExecutionMode::LiveSubprocess),
+            (
+                "repository-static-inspection",
+                VerificationExecutionMode::RepositoryStaticInspection,
+            ),
+            (
+                "canonical-contract-baseline",
+                VerificationExecutionMode::CanonicalContractBaseline,
+            ),
+        ] {
+            assert_eq!(
+                VerificationExecutionMode::from_str(raw).ok(),
+                Some(expected)
+            );
+            assert_eq!(expected.to_string(), raw);
+        }
+        assert!(VerificationExecutionMode::from_str("unknown").is_err());
+
+        assert_eq!(CompilerCapability::all().len(), 10);
+        for cap in CompilerCapability::all() {
+            let s = cap.as_str();
+            assert_eq!(CompilerCapability::from_str(s).ok(), Some(*cap));
+            assert_eq!(cap.to_string(), s);
+        }
+        assert!(CompilerCapability::from_str("unknown_cap").is_err());
+
+        let oas_val = serde_json::json!({
+            "openapi": "3.2.0",
+            "components": {
+                "schemas": {
+                    "Pet": {
+                        "required": ["id"],
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "meta": {}
+                        }
+                    }
+                }
+            },
+            "paths": {
+                "/pets": {
+                    "parameters": [{ "name": "limit" }],
+                    "get": {
+                        "operationId": "listPets",
+                        "parameters": [{ "name": "limit" }, { "name": "offset" }],
+                        "responses": { "200": {} }
+                    },
+                    "post": {},
+                    "put": {},
+                    "delete": {},
+                    "patch": {},
+                    "head": {},
+                    "options": {},
+                    "trace": {},
+                    "query": {},
+                    "x-ext": true
+                },
+                "/bad": "not-an-object"
+            }
+        });
+        let parsed_oas = NormalizedOpenApiSpec::from_json_value(&oas_val, &LanguageId::Rust).ok();
+        assert_eq!(
+            parsed_oas.as_ref().map(|s| s.spec_version.as_str()),
+            Some("3.2.0")
+        );
+        assert!(parsed_oas.as_ref().is_some_and(
+            |s| s.schemas.contains_key("Pet") && s.operations.contains_key("listPets")
+        ));
+
+        let swagger_val = serde_json::json!({
+            "swagger": "2.0",
+            "definitions": {
+                "User": { "properties": { "name": { "type": "string" } } }
+            }
+        });
+        assert!(NormalizedOpenApiSpec::from_json_value(&swagger_val, &LanguageId::Rust).is_ok());
+        assert!(
+            NormalizedOpenApiSpec::from_json_value(&serde_json::json!({}), &LanguageId::Rust)
+                .is_err()
+        );
+
+        let arazzo_targets = serde_json::json!({
+            "arazzo": "1.1.0",
+            "x-root": 1,
+            "info": { "title": "T", "version": "1.0", "summary": "S", "description": "D" },
+            "sourceDescriptions": [{ "name": "s1", "url": "https://example.com/a.yaml" }],
+            "components": { "inputs": { "In1": { "type": "object" } } },
+            "workflows": [{
+                "workflowId": "wf1",
+                "summary": "S",
+                "description": "D",
+                "steps": [
+                    { "stepId": "s1", "operationPath": "/paths/~1pets", "parameters": [{ "name": "p1", "value": 1 }] },
+                    { "stepId": "s2", "channelPath": "/channels/c1", "onFailure": [{ "name": "f1", "type": "end", "retryAfter": 1.0, "retryLimit": 2 }] },
+                    { "stepId": "s3", "workflowId": "subWf" }
+                ]
+            }]
+        });
+        assert!(ArazzoDocument::from_json_value(&arazzo_targets, &LanguageId::Rust).is_ok());
     }
 }

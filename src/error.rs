@@ -539,6 +539,52 @@ pub enum ConformanceError {
         /// Explanation of why the expression is invalid.
         reason: String,
     },
+
+    /// A JSON serialization error occurred while formatting an output payload.
+    #[display("JSON serialization error ({}): {}", context, source)]
+    Serialization {
+        /// Context describing the payload being serialized.
+        context: String,
+        /// Underlying Serde JSON error.
+        source: serde_json::Error,
+    },
+
+    /// An HTTP endpoint path violated structural invariants.
+    #[display("Invalid endpoint path '{}': {}", raw, reason)]
+    InvalidEndpointPath {
+        /// Raw endpoint path string.
+        raw: String,
+        /// Explanation of why the endpoint path is invalid.
+        reason: String,
+    },
+
+    /// A regular expression pattern in `.cdd-conformance.yaml` failed to compile.
+    #[display(
+        "Invalid regex pattern in {} (field '{}', pattern '{}'): {}",
+        path.display(),
+        field,
+        pattern,
+        reason
+    )]
+    InvalidRegexPattern {
+        /// Path to the configuration file.
+        path: PathBuf,
+        /// Configuration field name containing the regex.
+        field: String,
+        /// Raw regular expression pattern string.
+        pattern: String,
+        /// Compilation failure description.
+        reason: String,
+    },
+
+    /// An unrecognized domain enum token was encountered during string parsing.
+    #[display("Unrecognized {} token: '{}'", type_name, raw)]
+    InvalidEnumToken {
+        /// Name of the target domain enum type.
+        type_name: &'static str,
+        /// Raw input string that failed to parse.
+        raw: String,
+    },
 }
 
 impl ConformanceError {
@@ -566,9 +612,10 @@ impl ConformanceError {
             | Self::InvalidLanguageSlug { .. }
             | Self::McpRootBoundaryViolation { .. }
             | Self::ArazzoSchemaViolation { .. }
-            | Self::ArazzoRuntimeExpressionError { .. } => {
-                (error_codes::INVALID_PARAMS, self.to_string())
-            }
+            | Self::ArazzoRuntimeExpressionError { .. }
+            | Self::InvalidEndpointPath { .. }
+            | Self::InvalidRegexPattern { .. }
+            | Self::InvalidEnumToken { .. } => (error_codes::INVALID_PARAMS, self.to_string()),
             Self::McpProtocolViolation { .. } => (error_codes::INVALID_REQUEST, self.to_string()),
             Self::JsonRpcInternal { message } => (error_codes::INTERNAL_ERROR, message.clone()),
             _ => (error_codes::INTERNAL_ERROR, self.to_string()),
@@ -1005,5 +1052,53 @@ mod tests {
             arazzo_expr_err.to_json_rpc_error().0,
             error_codes::INVALID_PARAMS
         );
+    }
+
+    #[test]
+    fn test_serialization_endpoint_regex_and_enum_errors() {
+        let ser_err = ConformanceError::Serialization {
+            context: "matrix report".to_string(),
+            source: <serde_json::Error as serde::ser::Error>::custom("serialize failure"),
+        };
+        assert_eq!(
+            ser_err.to_string(),
+            "JSON serialization error (matrix report): serialize failure"
+        );
+        assert_eq!(ser_err.to_json_rpc_error().0, error_codes::INTERNAL_ERROR);
+
+        let endpoint_err = ConformanceError::InvalidEndpointPath {
+            raw: "bad path".to_string(),
+            reason: "contains whitespace".to_string(),
+        };
+        assert_eq!(
+            endpoint_err.to_string(),
+            "Invalid endpoint path 'bad path': contains whitespace"
+        );
+        assert_eq!(
+            endpoint_err.to_json_rpc_error().0,
+            error_codes::INVALID_PARAMS
+        );
+
+        let regex_err = ConformanceError::InvalidRegexPattern {
+            path: PathBuf::from(".cdd-conformance.yaml"),
+            field: "struct_pattern".to_string(),
+            pattern: "[unclosed".to_string(),
+            reason: "unclosed character class".to_string(),
+        };
+        assert_eq!(
+            regex_err.to_string(),
+            "Invalid regex pattern in .cdd-conformance.yaml (field 'struct_pattern', pattern '[unclosed'): unclosed character class"
+        );
+        assert_eq!(regex_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
+
+        let enum_err = ConformanceError::InvalidEnumToken {
+            type_name: "ServerFramework",
+            raw: "flask".to_string(),
+        };
+        assert_eq!(
+            enum_err.to_string(),
+            "Unrecognized ServerFramework token: 'flask'"
+        );
+        assert_eq!(enum_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
     }
 }

@@ -5,9 +5,11 @@ use crate::mcp::lifecycle::{
     CancelledNotificationParams, InitializeParams, InitializeResult, PaginatedRequestParams,
     ProgressNotificationParams,
 };
-use crate::mcp::logging::{LoggingLevel, SetLevelParams};
+use crate::mcp::logging::{LogMessageParams, LoggingLevel, SetLevelParams};
 use crate::mcp::prompts::{get_prompt_typed, list_prompts, GetPromptParams};
-use crate::mcp::protocol::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, RequestId};
+use crate::mcp::protocol::{
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, RequestId,
+};
 use crate::mcp::resources::{
     list_resource_templates, list_resources, read_resource, ReadResourceParams,
 };
@@ -323,6 +325,40 @@ impl McpServer {
             }
             _ => {}
         }
+    }
+
+    /// Formats a `notifications/message` JSON-RPC notification if `level` meets or exceeds `self.log_level`.
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - Severity level of the log message.
+    /// * `logger` - Optional subsystem logger name.
+    /// * `data` - Structured JSON payload to log.
+    ///
+    /// # Returns
+    ///
+    /// `Some(serialized_json)` if `level.should_log(self.log_level)` is `true`, otherwise `None`.
+    #[must_use]
+    pub fn format_log_notification(
+        &self,
+        level: LoggingLevel,
+        logger: Option<&str>,
+        data: serde_json::Value,
+    ) -> Option<String> {
+        if !level.should_log(self.log_level) {
+            return None;
+        }
+        let params = LogMessageParams {
+            level,
+            logger: logger.map(str::to_string),
+            data,
+        };
+        let notif = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: "notifications/message".to_string(),
+            params: serde_json::to_value(params).ok(),
+        };
+        serde_json::to_string(&notif).ok()
     }
 
     /// Runs the server over generic asynchronous reader and writer streams.
@@ -827,6 +863,20 @@ mod tests {
     #[test]
     fn test_mcp_server_logging_and_unknown_method() {
         let mut server = McpServer::new();
+        assert!(server
+            .format_log_notification(
+                LoggingLevel::Debug,
+                Some("audit"),
+                serde_json::json!({"msg": "ignored"})
+            )
+            .is_none());
+        assert!(server
+            .format_log_notification(
+                LoggingLevel::Error,
+                Some("audit"),
+                serde_json::json!({"msg": "emitted"})
+            )
+            .is_some());
 
         let log_no_params = r#"{"jsonrpc":"2.0","id":71,"method":"logging/setLevel"}"#;
         assert_eq!(

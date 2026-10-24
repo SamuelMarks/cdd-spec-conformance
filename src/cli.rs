@@ -460,6 +460,24 @@ fn default_repos_dir(repos_dir: Option<PathBuf>) -> PathBuf {
     repos_dir.unwrap_or_else(|| PathBuf::from(".."))
 }
 
+/// Strongly typed execution options for the `check` subcommand.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct CheckOptions {
+    /// Require complete canonical schema parity and zero unreviewed features (`--strict`).
+    pub strict: bool,
+    /// Require complete canonical schema parity (`--strict-schema`).
+    pub strict_schema: bool,
+    /// Optional minimum overall percentage threshold override (`--min-coverage`).
+    pub min_coverage: Option<f64>,
+    /// Optional single specification standard filter (`--spec`).
+    pub filter_spec: Option<SpecId>,
+    /// Display detailed row-by-row missing/extra/unreviewed feature diffs (`--diff`).
+    pub show_diff: bool,
+    /// Validate `COMPLIANCE.md` claims only (`--claims-only`).
+    pub claims_only: bool,
+}
+
 /// Executes a synchronous CLI command and returns its formatted output string.
 ///
 /// # Arguments
@@ -490,18 +508,17 @@ fn render_sync_command(
             diff,
             claims_only,
         } => {
+            let opts = CheckOptions {
+                strict,
+                strict_schema,
+                min_coverage,
+                filter_spec: spec,
+                show_diff: diff,
+                claims_only,
+            };
             let mut combined = String::new();
             for p in resolve_repo_paths(path, paths) {
-                let out = run_check_with_schema(
-                    &p,
-                    strict,
-                    strict_schema,
-                    min_coverage,
-                    spec,
-                    diff,
-                    claims_only,
-                    registry,
-                )?;
+                let out = run_check_with_options(&p, &opts, registry)?;
                 combined.push_str(&out);
             }
             Ok(combined)
@@ -772,16 +789,12 @@ fn evaluate_compliance_file(
     }
 }
 
-/// Executes the `check` subcommand and returns the formatted diagnostic log.
+/// Executes the `check` subcommand using `CheckOptions`.
 ///
 /// # Arguments
 ///
 /// * `repo_path` - Path to the target repository.
-/// * `cli_strict` - Whether `--strict` was passed on the command line.
-/// * `cli_min_coverage` - Optional `--min-coverage` override.
-/// * `filter_spec` - Optional `--spec` filter.
-/// * `show_diff` - Whether `--diff` was passed on the command line.
-/// * `claims_only` - Whether `--claims-only` was passed on the command line.
+/// * `opts` - Strongly typed `CheckOptions`.
 /// * `registry` - Reference to the canonical specification registry.
 ///
 /// # Returns
@@ -791,57 +804,9 @@ fn evaluate_compliance_file(
 /// # Errors
 ///
 /// Returns `ConformanceError` if discovery, parsing, threshold checks, or schema validation fails.
-#[cfg(test)]
-fn run_check(
+pub fn run_check_with_options(
     repo_path: &Path,
-    cli_strict: bool,
-    cli_min_coverage: Option<f64>,
-    filter_spec: Option<SpecId>,
-    show_diff: bool,
-    claims_only: bool,
-    registry: &CanonicalRegistry,
-) -> Result<String, ConformanceError> {
-    run_check_with_schema(
-        repo_path,
-        cli_strict,
-        false,
-        cli_min_coverage,
-        filter_spec,
-        show_diff,
-        claims_only,
-        registry,
-    )
-}
-
-/// Executes the `check` subcommand with explicit `cli_strict_schema` control.
-///
-/// # Arguments
-///
-/// * `repo_path` - Path to the target repository.
-/// * `cli_strict` - Whether `--strict` was passed on the command line.
-/// * `cli_strict_schema` - Whether `--strict-schema` was passed on the command line.
-/// * `cli_min_coverage` - Optional `--min-coverage` override.
-/// * `filter_spec` - Optional `--spec` filter.
-/// * `show_diff` - Whether `--diff` was passed on the command line.
-/// * `claims_only` - Whether `--claims-only` was passed on the command line.
-/// * `registry` - Reference to the canonical specification registry.
-///
-/// # Returns
-///
-/// Formatted diagnostic output string.
-///
-/// # Errors
-///
-/// Returns `ConformanceError` if discovery, parsing, threshold checks, or schema validation fails.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-fn run_check_with_schema(
-    repo_path: &Path,
-    cli_strict: bool,
-    cli_strict_schema: bool,
-    cli_min_coverage: Option<f64>,
-    filter_spec: Option<SpecId>,
-    show_diff: bool,
-    claims_only: bool,
+    opts: &CheckOptions,
     registry: &CanonicalRegistry,
 ) -> Result<String, ConformanceError> {
     let mut out = String::new();
@@ -856,7 +821,7 @@ fn run_check_with_schema(
 
     let tables = project.parse_all_checklists()?;
     let config = project.config.unwrap_or_default();
-    let strict = cli_strict || config.strict;
+    let strict = opts.strict || config.strict;
 
     if tables.is_empty() && config.standards.is_empty() {
         let _ = writeln!(
@@ -868,19 +833,19 @@ fn run_check_with_schema(
     }
 
     if let Some(ref comp_path) = project.compliance_file {
-        evaluate_compliance_file(comp_path, &tables, strict, claims_only, &mut out)?;
+        evaluate_compliance_file(comp_path, &tables, strict, opts.claims_only, &mut out)?;
     }
 
-    if claims_only {
+    if opts.claims_only {
         return Ok(out);
     }
 
-    validate_configured_standards(&config, &tables, filter_spec)?;
+    validate_configured_standards(&config, &tables, opts.filter_spec)?;
 
     let mut first_error: Option<ConformanceError> = None;
 
     for (target, checklist) in tables.iter().zip(project.checklists.iter()) {
-        if let Some(filter) = filter_spec {
+        if let Some(filter) = opts.filter_spec {
             if target.spec_id != filter {
                 continue;
             }
@@ -905,17 +870,17 @@ fn run_check_with_schema(
             score.from_percentage()
         );
 
-        if show_diff && !diff_report.is_valid {
+        if opts.show_diff && !diff_report.is_valid {
             format_diff_warnings(&mut out, &diff_report);
         }
 
-        let cov_req = config.effective_coverage_for(target.spec_id, cli_min_coverage);
+        let cov_req = config.effective_coverage_for(target.spec_id, opts.min_coverage);
         if let Err(cov_err) = cov_req.check_score(target.spec_id, target.profile, score) {
             let _ = writeln!(out, "   {} {cov_err}", "FAIL:".bold().red());
             first_error.get_or_insert(cov_err);
         }
 
-        if let Err(diff_err) = diff_report.into_result_with_schema(strict, cli_strict_schema) {
+        if let Err(diff_err) = diff_report.into_result_with_schema(strict, opts.strict_schema) {
             first_error.get_or_insert(diff_err);
         }
     }
@@ -977,32 +942,6 @@ fn canonical_score(
 ) -> Result<crate::model::ProfileScore, ConformanceError> {
     let canonical = registry.get_table(target.spec_id, target.profile)?;
     Ok(compare_checklists_with_path(target, &canonical, path).score)
-}
-
-/// Executes the `report` subcommand and returns the formatted report string.
-///
-/// # Arguments
-///
-/// * `repo_path` - Path to the target repository.
-/// * `json` - Whether to output JSON.
-/// * `markdown` - Whether to output Markdown.
-/// * `registry` - Reference to the canonical specification registry.
-///
-/// # Returns
-///
-/// Formatted report string.
-///
-/// # Errors
-///
-/// Returns `ConformanceError` if repository scanning or checklist parsing fails.
-#[cfg(test)]
-fn run_report(
-    repo_path: &Path,
-    json: bool,
-    markdown: bool,
-    registry: &CanonicalRegistry,
-) -> Result<String, ConformanceError> {
-    run_report_filtered(repo_path, None, json, markdown, registry)
 }
 
 /// Executes the `report` subcommand with an optional specification filter.
@@ -2448,30 +2387,28 @@ mod tests {
         let base_dir = std::env::temp_dir().join(format!("cdd_cli_t3_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&base_dir);
 
-        let empty_out = run_check(&base_dir, false, None, None, false, false, &registry).ok();
+        let empty_out = run_check_with_options(&base_dir, &CheckOptions::default(), &registry).ok();
         assert!(empty_out.is_some_and(|s| s.contains("Warning: No conformance checklists found")));
 
         let std_cfg = "standards:\n  - spec: mock-server\n  - spec: openapi-3.2.0\n  - spec: swagger-2.0\n    profiles: [client-sdk]\n";
         let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), std_cfg);
         for spec_id in [SpecId::MockServer, SpecId::OpenApi320, SpecId::Swagger20] {
-            let res = run_check(
+            let res = run_check_with_options(
                 &base_dir,
-                false,
-                None,
-                Some(spec_id),
-                false,
-                false,
+                &CheckOptions {
+                    filter_spec: Some(spec_id),
+                    ..CheckOptions::default()
+                },
                 &registry,
             );
             assert!(res.is_err());
         }
-        let arazzo_res = run_check(
+        let arazzo_res = run_check_with_options(
             &base_dir,
-            false,
-            None,
-            Some(SpecId::Arazzo110),
-            false,
-            false,
+            &CheckOptions {
+                filter_spec: Some(SpecId::Arazzo110),
+                ..CheckOptions::default()
+            },
             &registry,
         );
         assert!(arazzo_res.is_ok());
@@ -2512,42 +2449,83 @@ mod tests {
         let bad_comp = "# Compliance\n| Feature | Status |\n| --- | --- |\n| Info Object | ✅ |\n";
         let _ = std::fs::write(&comp_file, bad_comp);
 
-        assert!(run_check(&base_dir, false, None, None, false, true, &registry).is_err());
-        assert!(run_check(&base_dir, true, None, None, false, false, &registry).is_err());
-        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        assert!(run_check_with_options(
+            &base_dir,
+            &CheckOptions {
+                claims_only: true,
+                ..CheckOptions::default()
+            },
+            &registry
+        )
+        .is_err());
+        assert!(run_check_with_options(
+            &base_dir,
+            &CheckOptions {
+                strict: true,
+                ..CheckOptions::default()
+            },
+            &registry
+        )
+        .is_err());
+        assert!(run_check_with_options(&base_dir, &CheckOptions::default(), &registry).is_err());
 
         let good_comp =
             "# Compliance\n| Feature | Status |\n| --- | --- |\n| Extra Unknown Object | ✅ |\n";
         let _ = std::fs::write(&comp_file, good_comp);
-        let claims_ok = run_check(&base_dir, false, None, None, false, true, &registry).ok();
+        let claims_ok = run_check_with_options(
+            &base_dir,
+            &CheckOptions {
+                claims_only: true,
+                ..CheckOptions::default()
+            },
+            &registry,
+        )
+        .ok();
         assert!(claims_ok.is_some_and(|s| s.contains("PASS:")));
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&comp_file, std::fs::Permissions::from_mode(0o000));
-            assert!(run_check(&base_dir, false, None, None, false, true, &registry).is_err());
+            assert!(run_check_with_options(
+                &base_dir,
+                &CheckOptions {
+                    claims_only: true,
+                    ..CheckOptions::default()
+                },
+                &registry
+            )
+            .is_err());
             let _ = std::fs::set_permissions(&comp_file, std::fs::Permissions::from_mode(0o644));
         }
 
         let _ = std::fs::write(oas_dir.join("mock-server-plan.md"), "# Mock\n- [x] Item\n");
-        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        assert!(run_check_with_options(&base_dir, &CheckOptions::default(), &registry).is_err());
         let _ = std::fs::remove_file(oas_dir.join("mock-server-plan.md"));
 
         let oas_cfg = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk, servers]\n";
         let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), oas_cfg);
-        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        assert!(run_check_with_options(&base_dir, &CheckOptions::default(), &registry).is_err());
         let oas_cfg_found = "standards:\n  - spec: openapi-3.2.0\n    profiles: [client-sdk]\n";
         let _ = std::fs::write(base_dir.join(".cdd-conformance.yaml"), oas_cfg_found);
-        assert!(run_check(&base_dir, false, None, None, false, false, &registry).is_err());
+        assert!(run_check_with_options(&base_dir, &CheckOptions::default(), &registry).is_err());
         let _ = std::fs::remove_file(base_dir.join(".cdd-conformance.yaml"));
 
-        let strict_res = run_check(&base_dir, true, None, None, true, false, &registry);
+        let strict_res = run_check_with_options(
+            &base_dir,
+            &CheckOptions {
+                strict: true,
+                show_diff: true,
+                ..CheckOptions::default()
+            },
+            &registry,
+        );
         assert!(strict_res.is_err());
         let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_cli_sync_and_matrix_errors() {
         let registry = CanonicalRegistry::new();
         let base_dir = std::env::temp_dir().join(format!("cdd_cli_t5_{}", std::process::id()));
@@ -2563,8 +2541,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&corrupt_oas);
         let bad_md = "# Bad\n| BadCol |\n| --- |\n| 1 |\n";
         let _ = std::fs::write(corrupt_oas.join("client-sdk.md"), bad_md);
-        assert!(run_check(&corrupt_dir, false, None, None, false, false, &registry).is_err());
-        assert!(run_report(&corrupt_dir, false, false, &registry).is_err());
+        assert!(run_check_with_options(&corrupt_dir, &CheckOptions::default(), &registry).is_err());
+        assert!(run_report_filtered(&corrupt_dir, None, false, false, &registry).is_err());
         let parent_corrupt = base_dir.join("parent_corrupt");
         let child_oas = parent_corrupt.join("cdd-rust").join("openapi-3.2.0");
         let _ = std::fs::create_dir_all(&child_oas);
@@ -2573,21 +2551,27 @@ mod tests {
         assert!(run_matrix(Path::new("nonexistent_parent_12345"), None, None, &registry).is_err());
 
         let bad_repo = Path::new("nonexistent_repo_12345");
-        assert!(run_check(bad_repo, false, None, None, false, false, &registry).is_err());
-        assert!(run_report(bad_repo, false, false, &registry).is_err());
+        assert!(run_check_with_options(bad_repo, &CheckOptions::default(), &registry).is_err());
+        assert!(run_report_filtered(bad_repo, None, false, false, &registry).is_err());
 
-        let sw_res = run_check(
+        let sw_res = run_check_with_options(
             &base_dir,
-            false,
-            None,
-            Some(SpecId::Swagger20),
-            false,
-            false,
+            &CheckOptions {
+                filter_spec: Some(SpecId::Swagger20),
+                ..CheckOptions::default()
+            },
             &registry,
         );
         assert!(sw_res.is_ok());
 
-        let min_cov_res = run_check(&base_dir, false, Some(100.0), None, false, false, &registry);
+        let min_cov_res = run_check_with_options(
+            &base_dir,
+            &CheckOptions {
+                min_coverage: Some(100.0),
+                ..CheckOptions::default()
+            },
+            &registry,
+        );
         assert!(min_cov_res.err().is_some_and(|e| e
             .to_string()
             .contains("Threshold not met for openapi-3.2.0")));
@@ -2706,18 +2690,21 @@ mod tests {
         let _ = std::fs::write(bad_reg_oas.join("client-sdk.md"), "# Bad\n| A | B |\n");
         let bad_reg = CanonicalRegistry::with_root(bad_reg_dir);
 
-        assert!(run_report(&repo_root, true, false, &bad_reg).is_err());
-        assert!(run_report(&repo_root, false, true, &bad_reg).is_err());
-        assert!(run_report(&repo_root, false, false, &bad_reg).is_err());
+        assert!(run_report_filtered(&repo_root, None, true, false, &bad_reg).is_err());
+        assert!(run_report_filtered(&repo_root, None, false, true, &bad_reg).is_err());
+        assert!(run_report_filtered(&repo_root, None, false, false, &bad_reg).is_err());
 
-        let json_rep = run_report(&repo_root, true, false, &custom_reg).unwrap_or_default();
+        let json_rep =
+            run_report_filtered(&repo_root, None, true, false, &custom_reg).unwrap_or_default();
         assert!(json_rep.contains("client-sdk"));
 
-        let table_rep = run_report(&repo_root, false, false, &custom_reg).unwrap_or_default();
+        let table_rep =
+            run_report_filtered(&repo_root, None, false, false, &custom_reg).unwrap_or_default();
         assert!(table_rep.contains("100.0%"));
         assert!(table_rep.contains("0.0%"));
 
-        let md_rep = run_report(&repo_root, false, true, &custom_reg).unwrap_or_default();
+        let md_rep =
+            run_report_filtered(&repo_root, None, false, true, &custom_reg).unwrap_or_default();
         assert!(md_rep.contains("✅"));
         assert!(md_rep.contains("⚠️"));
 

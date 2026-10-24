@@ -293,11 +293,110 @@ pub fn validate_path_within_roots(
     }
 }
 
+/// Strongly typed enumeration of all 11 MCP tools exposed by `cdd-conformance`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolName {
+    /// `check_conformance` tool.
+    CheckConformance,
+    /// `get_compliance_matrix` tool.
+    GetComplianceMatrix,
+    /// `diff_checklists` tool.
+    DiffChecklists,
+    /// `validate_claims` tool.
+    ValidateClaims,
+    /// `sync_checklists` tool.
+    SyncChecklists,
+    /// `generate_report` tool.
+    GenerateReport,
+    /// `inspect_language_source_signatures` tool.
+    InspectLanguageSourceSignatures,
+    /// `verify_language_clients_against_rust_backend` tool.
+    VerifyLanguageClientsAgainstRustBackend,
+    /// `verify_language_backend_compatibility_matrix` tool.
+    VerifyLanguageBackendCompatibilityMatrix,
+    /// `verify_cross_language_roundtrip` tool.
+    VerifyCrossLanguageRoundtrip,
+    /// `validate_arazzo_spec` tool.
+    ValidateArazzoSpec,
+}
+
+impl ToolName {
+    /// Returns the canonical `snake_case` MCP tool name string.
+    ///
+    /// # Returns
+    ///
+    /// Static string slice for the tool name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CheckConformance => "check_conformance",
+            Self::GetComplianceMatrix => "get_compliance_matrix",
+            Self::DiffChecklists => "diff_checklists",
+            Self::ValidateClaims => "validate_claims",
+            Self::SyncChecklists => "sync_checklists",
+            Self::GenerateReport => "generate_report",
+            Self::InspectLanguageSourceSignatures => "inspect_language_source_signatures",
+            Self::VerifyLanguageClientsAgainstRustBackend => {
+                "verify_language_clients_against_rust_backend"
+            }
+            Self::VerifyLanguageBackendCompatibilityMatrix => {
+                "verify_language_backend_compatibility_matrix"
+            }
+            Self::VerifyCrossLanguageRoundtrip => "verify_cross_language_roundtrip",
+            Self::ValidateArazzoSpec => "validate_arazzo_spec",
+        }
+    }
+}
+
+impl std::fmt::Display for ToolName {
+    /// Formats the tool name as its canonical `snake_case` string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ToolName {
+    type Err = ConformanceError;
+
+    /// Parses a `ToolName` from a raw string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw tool name string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "check_conformance" => Ok(Self::CheckConformance),
+            "get_compliance_matrix" => Ok(Self::GetComplianceMatrix),
+            "diff_checklists" => Ok(Self::DiffChecklists),
+            "validate_claims" => Ok(Self::ValidateClaims),
+            "sync_checklists" => Ok(Self::SyncChecklists),
+            "generate_report" => Ok(Self::GenerateReport),
+            "inspect_language_source_signatures" => Ok(Self::InspectLanguageSourceSignatures),
+            "verify_language_clients_against_rust_backend" => {
+                Ok(Self::VerifyLanguageClientsAgainstRustBackend)
+            }
+            "verify_language_backend_compatibility_matrix" => {
+                Ok(Self::VerifyLanguageBackendCompatibilityMatrix)
+            }
+            "verify_cross_language_roundtrip" => Ok(Self::VerifyCrossLanguageRoundtrip),
+            "validate_arazzo_spec" => Ok(Self::ValidateArazzoSpec),
+            other => Err(ConformanceError::JsonRpcMethodNotFound {
+                method: other.to_string(),
+            }),
+        }
+    }
+}
+
 /// Returns the catalog of all tools exposed by `cdd-conformance`.
 ///
 /// # Returns
 ///
-/// A `ListToolsResult` containing all 8 conformance tools.
+/// A `ListToolsResult` containing all 11 conformance tools.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn list_tools() -> ListToolsResult {
@@ -484,6 +583,34 @@ fn parse_tool_args<T: for<'de> Deserialize<'de>>(
     serde_json::from_value(val.clone()).map_err(|e| ConformanceError::JsonRpcInvalidParams {
         message: format!("Invalid arguments for {tool_name}: {e}"),
     })
+}
+
+/// Parses optional strongly typed tool arguments, defaulting to `T::default()` when `arguments` is `None`.
+///
+/// # Arguments
+///
+/// * `tool_name` - Name of the tool being invoked.
+/// * `arguments` - Optional raw JSON value containing tool arguments.
+///
+/// # Returns
+///
+/// Deserialized or default argument structure `T`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::JsonRpcInvalidParams` if `arguments` is `Some` and fails deserialization.
+fn parse_optional_tool_args<T: for<'de> Deserialize<'de> + Default>(
+    tool_name: &str,
+    arguments: Option<&serde_json::Value>,
+) -> Result<T, ConformanceError> {
+    arguments.map_or_else(
+        || Ok(T::default()),
+        |v| {
+            serde_json::from_value(v.clone()).map_err(|e| ConformanceError::JsonRpcInvalidParams {
+                message: format!("Invalid arguments for {tool_name}: {e}"),
+            })
+        },
+    )
 }
 
 /// Handles `check_conformance` tool execution.
@@ -749,37 +876,31 @@ pub fn execute_tool_with_roots(
     registry: &CanonicalRegistry,
     allowed_roots: &[PathBuf],
 ) -> Result<CallToolResult, ConformanceError> {
-    match name {
-        "check_conformance" => {
+    let tool = ToolName::from_str(name)?;
+    match tool {
+        ToolName::CheckConformance => {
             let args: CheckConformanceArgs = parse_tool_args(name, arguments)?;
             handle_check_conformance(&args, registry, allowed_roots)
         }
-        "get_compliance_matrix" => {
-            let args: GetComplianceMatrixArgs = match arguments {
-                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
-                    ConformanceError::JsonRpcInvalidParams {
-                        message: format!("Invalid arguments for get_compliance_matrix: {e}"),
-                    }
-                })?,
-                None => GetComplianceMatrixArgs::default(),
-            };
+        ToolName::GetComplianceMatrix => {
+            let args: GetComplianceMatrixArgs = parse_optional_tool_args(name, arguments)?;
             handle_get_compliance_matrix(&args, allowed_roots)
         }
-        "diff_checklists" => {
+        ToolName::DiffChecklists => {
             let args: DiffChecklistsArgs = parse_tool_args(name, arguments)?;
             handle_diff_checklists(&args, registry, allowed_roots)
         }
-        "validate_claims" => {
+        ToolName::ValidateClaims => {
             let args: ValidateClaimsArgs = parse_tool_args(name, arguments)?;
             handle_validate_claims(&args, allowed_roots)
         }
-        "sync_checklists" => {
+        ToolName::SyncChecklists => {
             let args: SyncChecklistsArgs = parse_tool_args(name, arguments)?;
             let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
             let out = crate::cli::run_sync(&valid_repo, args.spec_id, args.dry_run, registry)?;
             Ok(CallToolResult::text(out))
         }
-        "generate_report" => {
+        ToolName::GenerateReport => {
             let args: GenerateReportArgs = parse_tool_args(name, arguments)?;
             let valid_repo = validate_path_within_roots(&args.repo_path, allowed_roots)?;
             let out = crate::cli::run_report_filtered(
@@ -791,7 +912,7 @@ pub fn execute_tool_with_roots(
             )?;
             Ok(CallToolResult::text(out))
         }
-        "inspect_language_source_signatures" => {
+        ToolName::InspectLanguageSourceSignatures => {
             let args: InspectSourceArgs = parse_tool_args(name, arguments)?;
             let valid_path = validate_path_within_roots(&args.path, allowed_roots)?;
             let spec_path = args.arazzo_spec.as_deref().or(args.openapi_spec.as_deref());
@@ -804,15 +925,8 @@ pub fn execute_tool_with_roots(
             let json_str = serde_json::to_string_pretty(&bundle).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
-        "verify_language_clients_against_rust_backend" => {
-            let args: VerifyClientsArgs = match arguments {
-                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
-                    ConformanceError::JsonRpcInvalidParams {
-                        message: format!("Invalid arguments for {name}: {e}"),
-                    }
-                })?,
-                None => VerifyClientsArgs::default(),
-            };
+        ToolName::VerifyLanguageClientsAgainstRustBackend => {
+            let args: VerifyClientsArgs = parse_optional_tool_args(name, arguments)?;
             let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let ref_backend = args
@@ -829,30 +943,16 @@ pub fn execute_tool_with_roots(
             let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
-        "verify_language_backend_compatibility_matrix" => {
-            let args: VerifyBackendsArgs = match arguments {
-                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
-                    ConformanceError::JsonRpcInvalidParams {
-                        message: format!("Invalid arguments for {name}: {e}"),
-                    }
-                })?,
-                None => VerifyBackendsArgs::default(),
-            };
+        ToolName::VerifyLanguageBackendCompatibilityMatrix => {
+            let args: VerifyBackendsArgs = parse_optional_tool_args(name, arguments)?;
             let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let report = verify_backends_matrix(&valid_parent, &args.extra_langs)?;
             let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
-        "verify_cross_language_roundtrip" => {
-            let args: VerifyRoundtripArgs = match arguments {
-                Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
-                    ConformanceError::JsonRpcInvalidParams {
-                        message: format!("Invalid arguments for {name}: {e}"),
-                    }
-                })?,
-                None => VerifyRoundtripArgs::default(),
-            };
+        ToolName::VerifyCrossLanguageRoundtrip => {
+            let args: VerifyRoundtripArgs = parse_optional_tool_args(name, arguments)?;
             let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let report =
@@ -860,13 +960,10 @@ pub fn execute_tool_with_roots(
             let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
-        "validate_arazzo_spec" => {
+        ToolName::ValidateArazzoSpec => {
             let args: ValidateArazzoSpecArgs = parse_tool_args(name, arguments)?;
             handle_validate_arazzo_spec(&args, allowed_roots)
         }
-        _ => Err(ConformanceError::JsonRpcMethodNotFound {
-            method: name.to_string(),
-        }),
     }
 }
 
@@ -898,6 +995,10 @@ mod tests {
         let tools = list_tools();
         assert_eq!(tools.tools.len(), 11);
         assert!(tools.next_cursor.is_none());
+        for t in &tools.tools {
+            let parsed = ToolName::from_str(&t.name).ok();
+            assert!(parsed.is_some_and(|tn| tn.as_str() == t.name && tn.to_string() == t.name));
+        }
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
             .tools

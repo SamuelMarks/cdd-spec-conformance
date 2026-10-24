@@ -24,6 +24,22 @@ pub enum LoggingLevel {
     Emergency,
 }
 
+impl LoggingLevel {
+    /// Returns `true` if `self` is at or above the configured `threshold` severity level.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Minimum active logging threshold.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `self >= threshold`.
+    #[must_use]
+    pub const fn should_log(self, threshold: Self) -> bool {
+        (self as u8) >= (threshold as u8)
+    }
+}
+
 /// Parameter payload for `logging/setLevel`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetLevelParams {

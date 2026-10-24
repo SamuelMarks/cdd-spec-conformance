@@ -15,7 +15,8 @@ use crate::equivalence::{
 };
 use crate::error::ConformanceError;
 use crate::model::{
-    EndpointPath, HttpMethod, LanguageId, ServerOperatingMode, SpecId, WireProtocol,
+    ClientVerificationStatus, CompatibilityStatus, EndpointPath, HttpMethod, LanguageId,
+    ServerFramework, ServerOperatingMode, SpecId, WireProtocol,
 };
 use crate::parser::source::{
     infer_language_from_path, parse_source_path, parse_source_str, ParsedSourceBundle,
@@ -32,8 +33,8 @@ use std::str::FromStr;
 pub struct CanonicalSpecProvisioning {
     /// Canonical specification identifier.
     pub spec: SpecId,
-    /// Server framework or transport (`"actix-web"`, `"axum"`, `"mcp-stdio"`, `"mcp-http"`, `"arazzo-engine"`).
-    pub framework: String,
+    /// Strongly typed server framework or transport (`ActixWeb`, `Axum`, `McpStdio`, `McpHttp`, `ArazzoEngine`).
+    pub framework: ServerFramework,
     /// Wire protocol used by this provisioned server.
     pub wire_protocol: WireProtocol,
     /// Whether the reference server template and schema passed verification.
@@ -114,8 +115,8 @@ pub struct ClientVerificationRow {
     pub wire_edge_cases: WireEdgeCaseReport,
     /// Client CLI (`from_openapi to_sdk_cli`) verification detail.
     pub cli_verification: CliVerificationDetail,
-    /// Overall client conformance status (`"verified"`, `"ready-to-generate"`, or `"missing-repo"`).
-    pub status: String,
+    /// Overall client conformance status (`Verified`, `ReadyToGenerate`, `MissingRepo`, or `FailedVerification`).
+    pub status: ClientVerificationStatus,
 }
 
 /// Summary report for `verify-clients` across all discovered languages.
@@ -138,8 +139,8 @@ pub struct CompatibilityCell {
     pub client_lang: LanguageId,
     /// Server backend language (`j in 1..N`).
     pub server_lang: LanguageId,
-    /// Compatibility status (`"compatible"`, `"configured"`, or `"missing-repo"`).
-    pub status: String,
+    /// Strongly typed compatibility status (`Compatible`, `Configured`, `Unsupported`, or `Incompatible`).
+    pub status: CompatibilityStatus,
 }
 
 /// Phase 4.3, 4.5, 4.6, 4.7 cross-backend differential, database, `sync --truth`, `to_docs_json`, `serve_json_rpc`, and MCP equivalence summary.
@@ -335,55 +336,55 @@ pub fn evaluate_reference_backend_summary(
     let provisioned_specs = vec![
         CanonicalSpecProvisioning {
             spec: SpecId::OpenApi320,
-            framework: "actix-web".to_string(),
+            framework: ServerFramework::ActixWeb,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::OpenApi320,
-            framework: "axum".to_string(),
+            framework: ServerFramework::Axum,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::OpenApi311,
-            framework: "actix-web".to_string(),
+            framework: ServerFramework::ActixWeb,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::OpenApi310,
-            framework: "actix-web".to_string(),
+            framework: ServerFramework::ActixWeb,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::OpenApi300,
-            framework: "actix-web".to_string(),
+            framework: ServerFramework::ActixWeb,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::Swagger20,
-            framework: "actix-web".to_string(),
+            framework: ServerFramework::ActixWeb,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::Arazzo110,
-            framework: "arazzo-engine".to_string(),
+            framework: ServerFramework::ArazzoEngine,
             wire_protocol: WireProtocol::HttpRest,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::Mcp100,
-            framework: "mcp-stdio".to_string(),
+            framework: ServerFramework::McpStdio,
             wire_protocol: WireProtocol::McpStdio,
             provisioned: true,
         },
         CanonicalSpecProvisioning {
             spec: SpecId::Mcp20260728,
-            framework: "mcp-http".to_string(),
+            framework: ServerFramework::McpHttp,
             wire_protocol: WireProtocol::McpHttp,
             provisioned: true,
         },
@@ -799,11 +800,11 @@ pub fn verify_clients_against_rust_backend(
         let cli_verification = evaluate_cli_verification(&tc.language_id);
 
         let status = if repo_present && tc.supported_targets.sdk && checklists_ok {
-            "verified".to_string()
+            ClientVerificationStatus::Verified
         } else if tc.supported_targets.sdk {
-            "ready-to-generate".to_string()
+            ClientVerificationStatus::ReadyToGenerate
         } else {
-            "missing-repo".to_string()
+            ClientVerificationStatus::MissingRepo
         };
         results.push(ClientVerificationRow {
             client_language: tc.language_id,
@@ -1060,12 +1061,8 @@ pub fn render_nxn_markdown_matrix(languages: &[LanguageId], cells: &[Compatibili
             let status = cells
                 .iter()
                 .find(|c| &c.client_lang == cli && &c.server_lang == srv)
-                .map_or("unsupported", |c| c.status.as_str());
-            let badge = match status {
-                "compatible" => "✅",
-                "configured" => "☑️",
-                _ => "⚠️",
-            };
+                .map_or(CompatibilityStatus::Unsupported, |c| c.status);
+            let badge = status.badge();
             let _ = write!(out, " {badge} |");
         }
         let _ = writeln!(out);
@@ -1116,11 +1113,11 @@ pub fn verify_backends_matrix(
                 && client_tc.supported_targets.sdk
                 && server_tc.supported_targets.server
             {
-                "compatible".to_string()
+                CompatibilityStatus::Compatible
             } else if client_tc.supported_targets.sdk && server_tc.supported_targets.server {
-                "configured".to_string()
+                CompatibilityStatus::Configured
             } else {
-                "unsupported".to_string()
+                CompatibilityStatus::Unsupported
             };
             cells.push(CompatibilityCell {
                 client_lang: client_tc.language_id.clone(),

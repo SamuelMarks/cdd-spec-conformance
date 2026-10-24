@@ -2,7 +2,7 @@
 
 use crate::ecosystem::{LanguageCapabilities, LanguageToolchainSpec, SyntaxProfileConfig};
 use crate::error::ConformanceError;
-use crate::model::{Direction, LanguageId, ProfileKind, ProfileScore, SpecId};
+use crate::model::{CompilerCapability, Direction, LanguageId, ProfileKind, ProfileScore, SpecId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -141,35 +141,21 @@ impl CapabilitiesOverride {
     ///
     /// * `target` - The `LanguageCapabilities` struct to mutate in-place.
     pub fn apply_to(&self, target: &mut LanguageCapabilities) {
-        if let Some(v) = self.sdk {
-            target.sdk = v;
-        }
-        if let Some(v) = self.sdk_cli {
-            target.sdk_cli = v;
-        }
-        if let Some(v) = self.server {
-            target.server = v;
-        }
-        if let Some(v) = self.to_openapi {
-            target.to_openapi = v;
-        }
-        if let Some(v) = self.to_docs_json {
-            target.to_docs_json = v;
-        }
-        if let Some(v) = self.sync {
-            target.sync = v;
-        }
-        if let Some(v) = self.json_rpc {
-            target.json_rpc = v;
-        }
-        if let Some(v) = self.mcp {
-            target.mcp = v;
-        }
-        if let Some(v) = self.arazzo {
-            target.arazzo = v;
-        }
-        if let Some(v) = self.wasm {
-            target.wasm = v;
+        for (cap, opt_val) in [
+            (CompilerCapability::Sdk, self.sdk),
+            (CompilerCapability::SdkCli, self.sdk_cli),
+            (CompilerCapability::Server, self.server),
+            (CompilerCapability::ToOpenApi, self.to_openapi),
+            (CompilerCapability::ToDocsJson, self.to_docs_json),
+            (CompilerCapability::Sync, self.sync),
+            (CompilerCapability::JsonRpc, self.json_rpc),
+            (CompilerCapability::Mcp, self.mcp),
+            (CompilerCapability::Arazzo, self.arazzo),
+            (CompilerCapability::Wasm, self.wasm),
+        ] {
+            if let Some(enabled) = opt_val {
+                target.set(cap, enabled);
+            }
         }
     }
 }
@@ -284,6 +270,9 @@ impl ProjectConfig {
     pub fn validate(&self, path: &Path) -> Result<(), ConformanceError> {
         if let Some(ref cov) = self.min_coverage {
             cov.validate(path)?;
+        }
+        if let Some(ref syntax) = self.syntax {
+            syntax.validate(path)?;
         }
         let mut seen_specs = HashSet::with_capacity(self.standards.len());
         for target in &self.standards {
@@ -717,6 +706,39 @@ syntax:
         let empty_tc = ToolchainConfig::default();
         empty_tc.apply_to(&mut spec);
         assert_eq!(spec.cli_binary_cmd, vec!["zig", "build", "run", "--"]);
+
+        let bad_regex_cfg = ProjectConfig {
+            syntax: Some(SyntaxProfileConfig {
+                struct_pattern: Some("[unclosed".to_string()),
+                ..SyntaxProfileConfig::default()
+            }),
+            ..ProjectConfig::default()
+        };
+        assert!(bad_regex_cfg.validate(&cfg_path).is_err());
+        let empty_regex_cfg = ProjectConfig {
+            syntax: Some(SyntaxProfileConfig {
+                struct_pattern: Some("   ".to_string()),
+                ..SyntaxProfileConfig::default()
+            }),
+            ..ProjectConfig::default()
+        };
+        assert!(empty_regex_cfg.validate(&cfg_path).is_err());
+        let unbalanced_regex_cfg = ProjectConfig {
+            syntax: Some(SyntaxProfileConfig {
+                struct_pattern: Some(r"\[ok\] (group)]".to_string()),
+                ..SyntaxProfileConfig::default()
+            }),
+            ..ProjectConfig::default()
+        };
+        assert!(unbalanced_regex_cfg.validate(&cfg_path).is_err());
+        let valid_regex_cfg = ProjectConfig {
+            syntax: Some(SyntaxProfileConfig {
+                struct_pattern: Some(r"\[ok\] (group)".to_string()),
+                ..SyntaxProfileConfig::default()
+            }),
+            ..ProjectConfig::default()
+        };
+        assert!(valid_regex_cfg.validate(&cfg_path).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

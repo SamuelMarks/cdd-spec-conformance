@@ -789,6 +789,8 @@ pub fn parse_source_str(
         functions: Vec::new(),
     };
 
+    let collapsed = collapse_multiline_fn_headers(source);
+    let source = collapsed.as_str();
     match language {
         LanguageId::Python => parse_python_source(source, &mut bundle),
         LanguageId::Ruby => parse_ruby_source(source, &mut bundle),
@@ -810,6 +812,96 @@ pub fn parse_source_str(
     }
 
     bundle
+}
+
+/// Joins multi-line function or method signature headers whose parameter list `(...)` spans
+/// multiple lines onto the opening declaration line while inserting empty placeholder lines to
+/// preserve 1-based line numbers for subsequent statements.
+///
+/// # Arguments
+///
+/// * `source` - Raw source code string.
+///
+/// # Returns
+///
+/// Preprocessed source code string with balanced single-line function headers.
+fn collapse_multiline_fn_headers(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_comment = trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('#')
+            || trimmed.starts_with('!');
+        let has_unclosed_paren = !is_comment
+            && trimmed.contains('(')
+            && !trimmed.contains(')')
+            && (trimmed.contains("fn ")
+                || trimmed.contains("func ")
+                || trimmed.contains("fun ")
+                || trimmed.contains("function ")
+                || trimmed.starts_with("def ")
+                || trimmed.starts_with("async def "));
+        if has_unclosed_paren {
+            let mut joined = lines[i].trim_end().to_string();
+            let mut consumed = 0usize;
+            while !joined.contains(')') && i + 1 < lines.len() {
+                i += 1;
+                consumed += 1;
+                joined.push(' ');
+                joined.push_str(lines[i].trim());
+            }
+            out.push(joined);
+            for _ in 0..consumed {
+                out.push(String::new());
+            }
+        } else {
+            out.push(lines[i].to_string());
+        }
+        i += 1;
+    }
+    out.join("\n")
+}
+
+/// Counts net `{` and `}` brace changes on a code line while ignoring braces inside double-quoted
+/// or single-quoted string/character literals.
+///
+/// # Arguments
+///
+/// * `code` - Code slice with trailing inline comments already stripped.
+/// * `brace_depth` - Mutable brace nesting counter to update.
+fn update_brace_depth_ignoring_strings(code: &str, brace_depth: &mut i32) {
+    let mut in_double = false;
+    let mut in_single = false;
+    let mut escaped = false;
+    for ch in code.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && (in_double || in_single) {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            continue;
+        }
+        if !in_double && !in_single {
+            if ch == '{' {
+                *brace_depth += 1;
+            } else if ch == '}' {
+                *brace_depth = (*brace_depth - 1).max(0);
+            }
+        }
+    }
 }
 
 /// Cleans a single comment line by stripping comment delimiters (`///`, `//!`, `/**`, `*/`, `*`, `//`, `#`, `*>`, `!>`).
@@ -1305,13 +1397,7 @@ fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
             doc_buf.clear();
         }
 
-        for ch in code.chars() {
-            if ch == '{' {
-                brace_depth += 1;
-            } else if ch == '}' {
-                brace_depth = (brace_depth - 1).max(0);
-            }
-        }
+        update_brace_depth_ignoring_strings(code, &mut brace_depth);
 
         if current_struct.is_some() && brace_depth <= struct_brace_depth {
             finish_struct(&mut current_struct, bundle);
@@ -1441,13 +1527,7 @@ fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) {
             }
         }
 
-        for ch in code.chars() {
-            if ch == '{' {
-                brace_depth += 1;
-            } else if ch == '}' {
-                brace_depth = (brace_depth - 1).max(0);
-            }
-        }
+        update_brace_depth_ignoring_strings(code, &mut brace_depth);
     }
 }
 
@@ -2024,24 +2104,10 @@ fn parse_python_source(source: &str, bundle: &mut ParsedSourceBundle) {
             continue;
         }
 
-        let (candidate_header, header_end) =
-            if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
-                let mut full_header = trimmed.to_string();
-                let mut end_idx = i;
-                while !full_header.contains(')') && end_idx + 1 < lines.len() {
-                    end_idx += 1;
-                    full_header.push(' ');
-                    full_header.push_str(lines[end_idx].trim());
-                }
-                (full_header, end_idx)
-            } else {
-                (trimmed.to_string(), i)
-            };
-
         if let Some((fn_name, params_inside, ret)) =
-            match_fn_decl(candidate_header.trim_end_matches(':'), "def")
+            match_fn_decl(trimmed.trim_end_matches(':'), "def")
         {
-            let (docstring, next_i) = consume_python_docstring(&lines, header_end + 1);
+            let (docstring, next_i) = consume_python_docstring(&lines, i + 1);
             let doc = docstring.or_else(|| join_doc_lines(&leading_comments));
             leading_comments.clear();
             let mut args = parse_colon_style_args(&params_inside, line_num);
@@ -4257,5 +4323,12 @@ export class Second {
                 &LanguageId::Rust
             )
             .is_err());
+
+        let multiline_rust = "/// Multi-line fn.\n/// * `limit` - Max items.\n/// * `offset` - Offset.\npub fn list_pets(\n    limit: i32,\n    offset: i32,\n) -> String {\n    let s = \"{\\\"brace\\\": \'}\'}\";\n    s.to_string()\n}\n";
+        let ml_bundle =
+            parse_source_str(multiline_rust, Path::new("ml.rs"), &LanguageId::Rust, None);
+        assert_eq!(ml_bundle.functions.len(), 1);
+        assert_eq!(ml_bundle.functions[0].args.len(), 2);
+        assert!(ml_bundle.verify_100_percent_docs(&LanguageId::Rust).is_ok());
     }
 }

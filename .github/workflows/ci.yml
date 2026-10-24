@@ -1,0 +1,412 @@
+name: Pre-commit & CI Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Hook 1: pre-commit-hooks (trailing-whitespace, end-of-file-fixer,
+  #         check-yaml, check-json, mixed-line-ending)
+  # ---------------------------------------------------------------------------
+  hook-pre-commit-file-checks:
+    name: "Hook [1/8]: pre-commit-hooks (File Hygiene & Schemas)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: python3 -m pip install --upgrade pip pre-commit
+
+      - name: Run trailing-whitespace hook
+        run: pre-commit run trailing-whitespace --all-files --verbose --show-diff-on-failure
+
+      - name: Run end-of-file-fixer hook
+        run: pre-commit run end-of-file-fixer --all-files --verbose --show-diff-on-failure
+
+      - name: Run check-yaml hook
+        run: pre-commit run check-yaml --all-files --verbose --show-diff-on-failure
+
+      - name: Run check-json hook
+        run: pre-commit run check-json --all-files --verbose --show-diff-on-failure
+
+      - name: Run mixed-line-ending hook
+        run: pre-commit run mixed-line-ending --all-files --verbose --show-diff-on-failure
+
+      - name: Verify clean working tree after file hygiene hooks
+        run: git diff --exit-code
+
+  # ---------------------------------------------------------------------------
+  # Hook 2: cargo-fmt-fix & cargo-fmt-check
+  # ---------------------------------------------------------------------------
+  hook-cargo-fmt:
+    name: "Hook [2/8]: cargo-fmt-fix & cargo-fmt-check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain with rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Run cargo-fmt-fix pre-commit hook
+        run: cargo fmt
+
+      - name: Run cargo-fmt-check pre-commit hook
+        run: cargo fmt -- --check
+
+      - name: Verify clean working tree after formatting check
+        run: git diff --exit-code
+
+  # ---------------------------------------------------------------------------
+  # Hook 3: cargo-build across Linux, macOS, and Windows
+  # ---------------------------------------------------------------------------
+  hook-cargo-build:
+    name: "Hook [3/8]: cargo-build (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo-build pre-commit hook
+        run: cargo build --workspace --all-targets
+
+      - name: Verify release binary compilation (--workspace --bins --release)
+        run: cargo build --workspace --bins --release --locked
+
+  # ---------------------------------------------------------------------------
+  # Hook 4: cargo-clippy & rustdoc across Linux, macOS, and Windows
+  # ---------------------------------------------------------------------------
+  hook-cargo-clippy:
+    name: "Hook [4/8]: cargo-clippy & rustdoc (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain with clippy and rust-docs
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rust-docs
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo-clippy pre-commit hook
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Verify rustdoc builds with zero warnings (including private items)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --document-private-items
+
+  # ---------------------------------------------------------------------------
+  # Hook 5: cargo-test across Linux, macOS, and Windows
+  # ---------------------------------------------------------------------------
+  hook-cargo-test:
+    name: "Hook [5/8]: cargo-test (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo-test pre-commit hook
+        run: cargo test --workspace --all-targets
+
+      - name: Run workspace documentation tests
+        run: cargo test --workspace --doc
+
+  # ---------------------------------------------------------------------------
+  # Hook 6: update-coverage (100% doc coverage & 100% test coverage badges)
+  # ---------------------------------------------------------------------------
+  hook-update-coverage:
+    name: "Hook [6/8]: update-coverage (100% Doc & Test Coverage)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust nightly toolchain with llvm-tools-preview and rust-docs
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rust-docs
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run update-coverage pre-commit hook
+        run: python3 scripts/update_coverage.py
+
+      - name: Assert 100.00% doc and test coverage badges in README.md
+        run: |
+          grep -q "doc_coverage-100.00%25-brightgreen.svg" README.md
+          grep -q "test_coverage-100.00%25-brightgreen.svg" README.md
+
+      - name: Verify README.md badges are clean and unmodified
+        run: git diff --exit-code README.md
+
+  # ---------------------------------------------------------------------------
+  # Hook 7: cdd-conformance-check across Linux, macOS, and Windows
+  # ---------------------------------------------------------------------------
+  hook-cdd-conformance-check:
+    name: "Hook [7/8]: cdd-conformance-check (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify self-conformance script idempotency
+        run: |
+          python3 scripts/update_self_conformance.py
+          git diff --exit-code
+
+      - name: Run cdd-conformance-check pre-commit hook
+        run: cargo run -- check --path .
+
+      - name: Run strict-schema conformance audit and reports
+        run: |
+          cargo run -- check --path . --strict-schema --diff
+          cargo run -- report --path .
+          cargo run -- report --path . --json
+          cargo run -- report --path . --markdown
+          cargo run -- inspect-source --path src --require-docs
+
+  # ---------------------------------------------------------------------------
+  # Hook 8: update-readme-matrix (Standalone + 13-Repo Ecosystem Matrix)
+  # ---------------------------------------------------------------------------
+  hook-update-readme-matrix:
+    name: "Hook [8/8]: update-readme-matrix"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run update-readme-matrix hook in standalone checkout mode
+        run: |
+          python3 scripts/update_readme_matrix.py
+          git diff --exit-code README.md
+
+      - name: Clone sibling CDD ecosystem repositories (best-effort) and run matrix
+        run: |
+          PARENT_DIR="$(dirname "$PWD")"
+          for repo in cdd-c cdd-cpp cdd-csharp cdd-go cdd-java cdd-kotlin cdd-php cdd-python-all cdd-ruby cdd-rust cdd-sh cdd-swift cdd-ts; do
+            if [ ! -d "${PARENT_DIR}/${repo}" ]; then
+              git clone --depth 1 "https://github.com/SamuelMarks/${repo}.git" "${PARENT_DIR}/${repo}" 2>/dev/null || true
+            fi
+          done
+          ./target/release/cdd-conformance matrix --repos-dir "${PARENT_DIR}"
+
+  # ---------------------------------------------------------------------------
+  # Exported .pre-commit-hooks.yaml Verification (pre-commit try-repo)
+  # ---------------------------------------------------------------------------
+  exported-pre-commit-hooks:
+    name: "Exported .pre-commit-hooks.yaml Suite"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3 and pre-commit
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit framework
+        run: python3 -m pip install --upgrade pip pre-commit
+
+      - name: Test exported hook cdd-conformance-check
+        run: pre-commit try-repo . cdd-conformance-check --all-files --verbose
+
+      - name: Test exported hook cdd-conformance-claims
+        run: pre-commit try-repo . cdd-conformance-claims --all-files --verbose
+
+      - name: Test exported hook cdd-conformance-matrix
+        run: pre-commit try-repo . cdd-conformance-matrix --all-files --verbose
+
+      - name: Verify clean working tree after exported hooks
+        run: git diff --exit-code
+
+  # ---------------------------------------------------------------------------
+  # Full .pre-commit-config.yaml Pipeline Execution
+  # ---------------------------------------------------------------------------
+  pre-commit-all:
+    name: "Full .pre-commit-config.yaml Suite"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, rust-docs
+
+      - name: Install Rust nightly toolchain with llvm-tools-preview and rust-docs
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rust-docs
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3 and pre-commit
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit framework
+        run: python3 -m pip install --upgrade pip pre-commit
+
+      - name: Execute all hooks in .pre-commit-config.yaml
+        run: pre-commit run --all-files --verbose --show-diff-on-failure
+
+      - name: Verify working tree is completely clean
+        run: git diff --exit-code
+
+  # ---------------------------------------------------------------------------
+  # Cross-Architecture & Multi-OS Target Compilation Matrix
+  # ---------------------------------------------------------------------------
+  cross-target-matrix:
+    name: "Cross-Target Check (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+          - riscv64gc-unknown-linux-gnu
+          - x86_64-unknown-freebsd
+          - x86_64-unknown-illumos
+          - x86_64-pc-windows-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain with target ${{ matrix.target }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: check-${{ matrix.target }}
+
+      - name: Verify workspace check for ${{ matrix.target }}
+        run: cargo check --workspace --bins --lib --target ${{ matrix.target }} --locked
