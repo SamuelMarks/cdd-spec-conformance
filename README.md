@@ -2,6 +2,7 @@ CDD Spec Conformance Tables
 ===========================
 
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100.00%25-brightgreen.svg)](README.md) [![Test Coverage](https://img.shields.io/badge/test_coverage-100.00%25-brightgreen.svg)](README.md)
+[![Pre-commit & CI Quality Gates](https://github.com/SamuelMarks/cdd-spec-conformance/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/cdd-spec-conformance/actions/workflows/ci.yml)
 
 A comprehensive collection of canonical specification conformance tables and the **`cdd-conformance`** Rust verification engine, pre-commit hook suite, and Model Context Protocol (MCP) server designed to ensure Compiler Driven Development (CDD) integrations (Client SDKs, Server Generators, CLIs, etc.) are 100% compliant with their respective specifications.
 

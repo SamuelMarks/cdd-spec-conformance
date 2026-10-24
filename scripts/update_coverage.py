@@ -104,7 +104,8 @@ def calculate_doc_coverage() -> str:
             check=False,
         )
         out = res.stdout + chr(10) + res.stderr
-        txt_path = os.path.join("target", "doc", "cdd_conformance.txt")
+        target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
+        txt_path = os.path.join(target_dir, "doc", "cdd_conformance.txt")
         if os.path.exists(txt_path):
             with open(txt_path, "r", encoding="utf-8") as tf:
                 out += chr(10) + tf.read()
@@ -151,6 +152,8 @@ def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
             has_doc = False
             for line in lines:
                 stripped = line.strip()
+                if stripped == "#[cfg(test)]":
+                    break
                 if stripped.startswith("///"):
                     has_doc = True
                 elif stripped.startswith("#["):

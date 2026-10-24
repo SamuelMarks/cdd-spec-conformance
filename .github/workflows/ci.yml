@@ -32,10 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain with rustfmt
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -128,7 +128,7 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain with clippy and rust-docs
         uses: dtolnay/rust-toolchain@stable
@@ -161,7 +161,7 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -183,13 +183,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Install Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Rust nightly toolchain with llvm-tools-preview and rust-docs
+      - name: Install Rust nightly toolchain for rustdoc coverage
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rust-docs
+
+      - name: Install Rust stable toolchain with llvm-tools-preview
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview, rust-docs
 
@@ -200,7 +202,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python 3
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -230,7 +232,7 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -239,7 +241,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python 3
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -267,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -276,7 +278,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python 3
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -306,7 +308,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -315,7 +317,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python 3 and pre-commit
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -342,17 +344,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Install Rust nightly toolchain for rustdoc coverage
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rust-docs
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy, rust-docs
-
-      - name: Install Rust nightly toolchain with llvm-tools-preview and rust-docs
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview, rust-docs
+          components: rustfmt, clippy, llvm-tools-preview, rust-docs
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -361,7 +363,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python 3 and pre-commit
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -396,7 +398,7 @@ jobs:
           - aarch64-apple-darwin
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain with target ${{ matrix.target }}
         uses: dtolnay/rust-toolchain@stable

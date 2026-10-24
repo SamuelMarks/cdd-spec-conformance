@@ -933,7 +933,8 @@ mod tests {
         .ok();
         assert!(target.zip(canonical).is_some_and(|(t, c)| {
             let diff = crate::diff::compare_checklists(&t, &c);
-            assert!(diff.missing_features.is_empty());
+            assert_eq!(diff.missing_features, Vec::<String>::new());
+            assert_eq!(diff.contradictions, Vec::<String>::new());
             diff.score.implemented_to > 0
         }));
     }

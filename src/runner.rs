@@ -329,7 +329,10 @@ pub async fn send_local_http_request(
         body_str.len()
     );
     for (k, v) in headers {
-        req.push_str(&format!("{k}: {v}\r\n"));
+        req.push_str(k);
+        req.push_str(": ");
+        req.push_str(v);
+        req.push_str("\r\n");
     }
     req.push_str("\r\n");
     req.push_str(body_str);

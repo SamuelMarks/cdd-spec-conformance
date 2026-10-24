@@ -200,7 +200,7 @@ mod tests {
     fn test_list_and_read_resources() {
         let registry = CanonicalRegistry::new();
         let list = list_resources(&registry);
-        assert!(!list.resources.is_empty());
+        assert_ne!(list.resources, Vec::<Resource>::new());
         assert!(list.next_cursor.is_none());
 
         let templates = list_resource_templates();

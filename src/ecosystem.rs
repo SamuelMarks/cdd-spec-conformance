@@ -97,7 +97,7 @@ impl LanguageCapabilities {
     ///
     /// * `cap` - Strongly typed `CompilerCapability` to update.
     /// * `enabled` - New boolean value for the capability.
-    pub fn set(&mut self, cap: CompilerCapability, enabled: bool) {
+    pub const fn set(&mut self, cap: CompilerCapability, enabled: bool) {
         match cap {
             CompilerCapability::Sdk => self.sdk = enabled,
             CompilerCapability::SdkCli => self.sdk_cli = enabled,
@@ -992,7 +992,7 @@ mod tests {
             let spec = LanguageToolchainSpec::default_for(lang);
             assert_eq!(&spec.language_id, lang);
             assert_eq!(spec.repo_name, lang.repo_name());
-            assert!(!spec.cli_binary_cmd.is_empty());
+            assert_ne!(spec.cli_binary_cmd, Vec::<String>::new());
             assert!(spec.supported_targets.supports(CompilerCapability::Sdk));
             assert!(spec.supported_targets.supports(CompilerCapability::Server));
             assert!(spec.supported_targets.supports(CompilerCapability::Arazzo));
@@ -1010,7 +1010,7 @@ mod tests {
             let spec = LanguageToolchainSpec::default_for(&lang);
             assert_eq!(spec.language_id, lang);
             assert_eq!(spec.repo_name, format!("cdd-{ext}"));
-            assert!(!spec.cli_binary_cmd.is_empty());
+            assert_ne!(spec.cli_binary_cmd, Vec::<String>::new());
         }
     }
 

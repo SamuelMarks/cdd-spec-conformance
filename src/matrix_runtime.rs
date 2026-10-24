@@ -1666,9 +1666,15 @@ paths:
         let _ = std::fs::create_dir_all(go_repo.join("openapi-3.2.0"));
         let _ = std::fs::write(
             go_repo.join("openapi-3.2.0").join("client-sdk.md"),
-            "# Bad\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| F | [x] , [x] | [x] , [x] |\n",
+            "# Bad\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| OkRow | [x] , [x] | [ ] , [ ] |\n| F | [x] , [x] | [x] , [x] |\n",
+        );
+        let _ = std::fs::create_dir_all(c_repo.join("openapi-3.2.0"));
+        let _ = std::fs::write(
+            c_repo.join("openapi-3.2.0").join("client-sdk.md"),
+            "# Good\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| OkRow | [x] , [x] | [ ] , [ ] |\n",
         );
         let _ = verify_clients_against_rust_backend(&base, &rust_repo, Some("go"), &[], None, None);
+        let _ = verify_clients_against_rust_backend(&base, &rust_repo, Some("c"), &[], None, None);
 
         let mat = verify_backends_matrix(&base, &["zig".to_string()]).ok();
         assert_eq!(mat.map(|m| m.total_pairs), Some(196));

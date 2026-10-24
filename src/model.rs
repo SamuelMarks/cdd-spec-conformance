@@ -2043,7 +2043,7 @@ impl ArazzoStepTarget {
     ///
     /// Underlying target identifier or path string slice.
     #[must_use]
-    pub fn value(&self) -> &str {
+    pub const fn value(&self) -> &str {
         match self {
             Self::OperationId(v)
             | Self::OperationPath(v)
@@ -3700,7 +3700,7 @@ mod tests {
             let s = profile.as_str();
             assert_eq!(ProfileKind::from_str(s).ok(), Some(*profile));
             assert_eq!(profile.to_string(), s);
-            assert!(!profile.filename().is_empty());
+            assert_ne!(profile.filename(), "");
         }
         assert_eq!(
             ProfileKind::from_str("mock-server-plan").ok(),
@@ -4050,7 +4050,7 @@ mod tests {
             ),
             ArazzoStepTarget::WorkflowId("subWf".to_string()),
         ] {
-            assert!(!target.value().is_empty());
+            assert_ne!(target.value(), "");
         }
 
         for (raw, expected) in [

@@ -315,11 +315,11 @@ mod tests {
         assert!(diff.is_valid);
         assert_eq!(diff.target_path, PathBuf::from("client-sdk.md"));
         assert_eq!(diff.first_violation_line, 0);
-        assert!(diff.missing_features.is_empty());
-        assert!(diff.extra_features.is_empty());
-        assert!(diff.contradictions.is_empty());
-        assert!(diff.invalid_skips.is_empty());
-        assert!(diff.unreviewed_features.is_empty());
+        assert_eq!(diff.missing_features, Vec::<String>::new());
+        assert_eq!(diff.extra_features, Vec::<String>::new());
+        assert_eq!(diff.contradictions, Vec::<String>::new());
+        assert_eq!(diff.invalid_skips, Vec::<String>::new());
+        assert_eq!(diff.unreviewed_features, Vec::<String>::new());
 
         // Regression check against lower or equal baseline succeeds
         assert!(diff.check_regression(diff.score).is_ok());
@@ -532,7 +532,7 @@ mod tests {
         };
         let diff_skip = compare_checklists(&target_only_skip, &canonical);
         assert!(!diff_skip.is_valid);
-        assert!(diff_skip.contradictions.is_empty());
+        assert_eq!(diff_skip.contradictions, Vec::<String>::new());
         assert_eq!(diff_skip.invalid_skips.len(), 1);
         assert_eq!(diff_skip.first_violation_line, 7);
         assert!(diff_skip.into_result(true).is_err());

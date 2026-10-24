@@ -173,16 +173,20 @@ def populate_self_conformance(paths: List[str], features: List[str]) -> None:
 
         new_lines = []
         for line in lines:
-            if line.startswith("|") and "`[ ]` , `[ ]`" in line:
-                parts = [x.strip() for x in line.split("|")]
-                if len(parts) >= 5:
-                    feat = parts[1]
-                    for target in features:
-                        if feat == target or feat.replace("*", "") == target.replace(
-                            "*", ""
-                        ):
-                            line = line.replace("`[ ]` , `[ ]`", "`[x]` , `[x]`", 1)
-                            break
+            if line.startswith("|"):
+                raw_parts = line.split("|")
+                if len(raw_parts) >= 6:
+                    feat = raw_parts[1].strip()
+                    is_implemented = raw_parts[2].strip() == "`[x]` , `[x]`" or any(
+                        feat == target
+                        or feat.replace("*", "") == target.replace("*", "")
+                        for target in features
+                    )
+                    if is_implemented:
+                        raw_parts[2] = " `[x]` , `[x]` "
+                        raw_parts[3] = " `[ ]` , `[ ]` "
+                        raw_parts[4] = " `[ ]` , `[ ]` "
+                        line = "|".join(raw_parts)
             new_lines.append(line)
 
         with open(path, "w", encoding="utf-8") as f:

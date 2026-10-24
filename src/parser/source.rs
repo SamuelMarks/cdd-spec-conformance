@@ -3885,7 +3885,7 @@ int untyped_c(x);
             None
         ));
 
-        // Rust unit struct & impl for unknown struct & nested generic params & free fn
+        // Rust unit struct & impl for unknown struct & nested generic params & free fn & #[cfg(test)]
         let rs_edge = r#"
 #[derive(Debug)]
 /// Unit struct.
@@ -3896,20 +3896,26 @@ impl UnknownStruct {
 }
 /// Top-level Rust fn.
 pub fn free_rust_fn() {}
+#[cfg(test)]
+mod tests {
+    pub fn ignored_in_test_cfg() {}
+}
 "#;
         let b_rse = parse_source_str(rs_edge, Path::new("e.rs"), &LanguageId::Rust, None);
         assert_eq!(b_rse.structs.len(), 1);
         assert_eq!(b_rse.functions.len(), 2);
 
-        // C# / Java class with constructor, multiple classes, and field
+        // C# / Java class with constructor (both typed and untyped), multiple classes, and field
         let java_edge = r#"
 package com.example;
 import java.util.*;
+public final int topJava = 1;
 /** First class. */
 public class First {
     /** Field a. */
     private int a;
     public First(int a) {}
+    void First(String s) {}
 }
 /** Second class. */
 public class Second {
@@ -3932,17 +3938,20 @@ func (u *Unknown) OrphanMethod() {
         let b_ge = parse_source_str(go_edge, Path::new("e.go"), &LanguageId::Go, None);
         assert_eq!(b_ge.functions.len(), 2);
 
-        // Kotlin multiple classes and top-level function
+        // Kotlin multiple classes (with and without ctor parens, val and var, non-field line) and top-level function
         let kt_edge = r#"
 package com.example
 import kotlin.io.*
+const val TOP_KT = 1
 /** Free fun. */
 fun topFun(a: Int): Int {}
 /** First class. */
 class First(val x: Int) {
 /** Second class inside/after without close brace. */
-class Second(val y: Int) {
-    val z: Int = 1
+class Second {
+    var z: Int = 1
+    init {}
+}
 "#;
         let b_ke = parse_source_str(kt_edge, Path::new("e.kt"), &LanguageId::Kotlin, None);
         assert_eq!(b_ke.structs.len(), 2);
@@ -3953,10 +3962,13 @@ class Second(val y: Int) {
 <?php
 namespace App;
 use StdClass;
+define('TOP_PHP', 1);
 /** Top fn. */
 function topPhp(int $x) {}
 /** First class. */
-class First {}
+class First {
+    const X = 1;
+}
 /** Second class. */
 class Second {}
 "#;
@@ -3964,11 +3976,13 @@ class Second {}
         assert_eq!(b_pe.structs.len(), 2);
         assert_eq!(b_pe.functions.len(), 1);
 
-        // Ruby multiple classes, parameterless def, top-level def
+        // Ruby multiple classes, initialize, parameterless def, top-level def
         let rb_edge = r#"
 def top_rb(x)
 end
 class First
+  def initialize(x)
+  end
 end
 class Second
   def no_parens
@@ -3982,27 +3996,31 @@ end
         // Swift multiple structs and top-level func
         let sw_edge = r#"
 import Foundation
+let topSwiftConst = 1
 func topSwift(x: Int) -> Int {}
-struct First {}
+struct First {
+    let x: Int
+}
 struct Second {}
 "#;
         let b_swe = parse_source_str(sw_edge, Path::new("e.swift"), &LanguageId::Swift, None);
         assert_eq!(b_swe.structs.len(), 2);
         assert_eq!(b_swe.functions.len(), 1);
 
-        let py_edge = "class First:\n    \"\"\"Single line.\"\"\"\n    x: int\nclass Second:\n    '''Single quote.'''\n    y: str\ndef top_py(a: int) -> int:\n    \"\"\"\n    Top\n    \"\"\"\n    return a\nclass Unclosed:\n    \"\"\"Unclosed\n    still\n";
+        let py_edge = "class First:\n    \"\"\"Single line.\"\"\"\n    x: int\nclass Second:\n    '''Single quote.'''\n    y: str\n# Leading def doc\ndef top_py(a: int) -> int:\n    return a\nclass Unclosed:\n    \"\"\"Unclosed\n    still\n";
         let b_pye = parse_source_str(py_edge, Path::new("e.py"), &LanguageId::Python, None);
         assert_eq!(b_pye.structs.len(), 3);
         assert_eq!(b_pye.functions.len(), 1);
 
-        let sh_edge = "# @struct S1 First\n# @struct S2 Second\nfunction f1 {\n    a=$1\nfunction f2 {\n    b=$1\n";
+        let sh_edge = "set -e\n# @struct S1 First\n# @struct S2 Second\nfunction f1 {\n    a=$1\n    echo ok\nfunction f2 {\n    b=$1\n";
         let b_she = parse_source_str(sh_edge, Path::new("e.sh"), &LanguageId::Sh, None);
         assert_eq!(b_she.structs.len(), 2);
         assert_eq!(b_she.functions.len(), 2);
 
-        // TypeScript multiple interfaces, constructor, top-level function, unclosed class
+        // TypeScript type alias without brace, multiple interfaces, constructor, top-level function, unclosed class
         let ts_edge = r#"
 import { Foo } from './foo';
+export type Alias = string;
 export function topTs(x: number): number {}
 export class First {
     constructor() {}
@@ -4019,10 +4037,18 @@ export class Second {
         assert_eq!(b_tse.functions.len(), 1);
 
         assert!(split_first_paren("(unclosed").is_none());
+        assert_eq!(
+            split_first_paren("fn(a(b)) -> i32"),
+            Some(("a(b)".to_string(), " -> i32".to_string()))
+        );
+        assert!(find_type_keyword("struct {", &["struct"]).is_none());
         assert!(extract_paren_segment("no_parens").is_none());
+        assert!(extract_paren_segment("foo(unclosed").is_none());
         assert!(match_fn_decl("fn ()", "fn").is_none());
+        assert!(match_fn_decl("fn no_paren", "fn").is_none());
         assert!(parse_c_like_function_header("()").is_none());
         assert!(parse_c_like_function_header("no_parens").is_none());
+        assert!(parse_c_like_function_header("int foo(unclosed").is_none());
 
         // Test @param {Type} without description and @param Type $var without description
         let tags = extract_doc_tags("@param {string} foo\n@param int $bar");
@@ -4106,8 +4132,30 @@ export class Second {
         let _ = split_top_level_params("a,,b,");
         let _ = extract_doc_tags("<param name=\"unclosed");
 
-        let c_extra = "struct S {\n    unrelated\n};\nint x = 1;\n";
+        let c_extra = "struct S {\n    unrelated\n};\nint x = 1;\nMACRO_CALL();\n";
         let _ = parse_source_str(c_extra, Path::new("x.c"), &LanguageId::C, None);
+
+        let rs_untyped_field = "pub struct Tup {\n    pub i32,\n}\n";
+        let _ = parse_source_str(
+            rs_untyped_field,
+            Path::new("tup.rs"),
+            &LanguageId::Rust,
+            None,
+        );
+
+        let kt_inferred = "class K {\n    val x = 1\n}\n";
+        let _ = parse_source_str(kt_inferred, Path::new("k.kt"), &LanguageId::Kotlin, None);
+
+        let rb_trailing_comma = "class R\n  attr_accessor :a, \nend\n";
+        let _ = parse_source_str(
+            rb_trailing_comma,
+            Path::new("r.rb"),
+            &LanguageId::Ruby,
+            None,
+        );
+
+        let sw_inferred = "struct Sw {\n    let x = 1\n}\n";
+        let _ = parse_source_str(sw_inferred, Path::new("s.swift"), &LanguageId::Swift, None);
 
         let java_extra = "class J {\n    return;\n    int;\n}\n";
         let _ = parse_source_str(java_extra, Path::new("J.java"), &LanguageId::Java, None);
@@ -4324,7 +4372,7 @@ export class Second {
             )
             .is_err());
 
-        let multiline_rust = "/// Multi-line fn.\n/// * `limit` - Max items.\n/// * `offset` - Offset.\npub fn list_pets(\n    limit: i32,\n    offset: i32,\n) -> String {\n    let s = \"{\\\"brace\\\": \'}\'}\";\n    s.to_string()\n}\n";
+        let multiline_rust = "/// Multi-line fn.\n/// * `limit` - Max items.\n/// * `offset` - Offset.\npub fn list_pets(\n    limit: i32,\n    offset: i32,\n) -> String {\n    let ch = '\\'';\n    let s = \"{\\\"brace\\\": \'}\'}\";\n    format!(\"{ch}{s}\")\n}\n";
         let ml_bundle =
             parse_source_str(multiline_rust, Path::new("ml.rs"), &LanguageId::Rust, None);
         assert_eq!(ml_bundle.functions.len(), 1);

@@ -27,8 +27,8 @@ Implementing MCP across the generated output ensures maximum flexibility for the
 | Generated Boundary | Presence `[To, From]` | Absence `[To, From]` | Skipped `[To, From]` | Notes / Implementation Strategy |
 | :--- | :---: | :---: | :---: | :--- |
 | **CLI Integration (Local Desktop)** | | | | |
-| CLI `mcp` Subcommand | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | Generates a command (e.g., `app mcp`) to start the server |
-| `stdio` Transport Bindings | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | Wires stdin/stdout to the generated CLI logic |
+| CLI `mcp` Subcommand | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Generates a command (e.g., `app mcp`) to start the server |
+| `stdio` Transport Bindings | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Wires stdin/stdout to the generated CLI logic |
 | **SDK Integration (Programmatic)** | | | | |
 | Native MCP Tool Adapter | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | E.g., `client.mcp.get_tools()` mapping SDK methods |
 | Native MCP Resource Adapter | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Exposes internal state/docs as MCP resources |
@@ -117,7 +117,7 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | Structured Content (`structuredContent`)| `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Unconstrained JSON values adhering to outputSchema |
 | **Behavioral & Security** | | | | |
 | Pagination Cursor Management | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Handling `nextCursor` fetch loops across list RPCs |
-| Progress Tracking (`notifications/progress`)| `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | Emitting/handling progress events with `progressToken` |
+| Progress Tracking (`notifications/progress`)| `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Emitting/handling progress events with `progressToken` |
 | Request Cancellation (`notifications/cancelled`)| `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Graceful cancellation of in-flight operations |
 | Human-in-the-loop (MRTR Elicitation) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | User prompts/forms via `InputRequiredResult` |
 | Human-in-the-loop (Tools Approval) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Security approvals/denials before tool invocation |
@@ -163,28 +163,28 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | CacheableResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CacheableResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CacheableResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **CallToolRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **CallToolRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| CallToolRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| CallToolRequest (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **CallToolRequestParams** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| CallToolRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| CallToolRequest (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **CallToolRequestParams** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolRequestParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| CallToolRequestParams (`arguments`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| CallToolRequestParams (`arguments`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolRequestParams (`inputResponses`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| CallToolRequestParams (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| CallToolRequestParams (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolRequestParams (`requestState`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **CallToolResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **CallToolResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| CallToolResult (`content`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| CallToolResult (`isError`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| CallToolResult (`content`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| CallToolResult (`isError`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResult (`structuredContent`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **CallToolResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CallToolResultResponse (`result`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **CancelledNotification** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **CancelledNotification** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CancelledNotification (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CancelledNotification (`method`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CancelledNotification (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -192,7 +192,7 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | CancelledNotificationParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CancelledNotificationParams (`reason`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | CancelledNotificationParams (`requestId`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ClientCapabilities** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **ClientCapabilities** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ClientCapabilities (`elicitation`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ClientCapabilities (`elicitation`) (`form`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ClientCapabilities (`elicitation`) (`url`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -295,27 +295,27 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | EmbeddedResource (`annotations`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | EmbeddedResource (`resource`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | EmbeddedResource (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **EmptyResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **EmptyResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **EnumSchema** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Error** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| Error (`code`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| Error (`data`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| Error (`message`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **GetPromptRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **Error** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| Error (`code`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| Error (`data`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| Error (`message`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **GetPromptRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| GetPromptRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| GetPromptRequest (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **GetPromptRequestParams** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| GetPromptRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| GetPromptRequest (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **GetPromptRequestParams** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptRequestParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| GetPromptRequestParams (`arguments`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| GetPromptRequestParams (`arguments`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptRequestParams (`inputResponses`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| GetPromptRequestParams (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| GetPromptRequestParams (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptRequestParams (`requestState`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **GetPromptResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **GetPromptResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| GetPromptResult (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| GetPromptResult (`messages`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| GetPromptResult (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| GetPromptResult (`messages`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **GetPromptResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | GetPromptResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -338,12 +338,12 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | ImageContent (`data`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ImageContent (`mimeType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ImageContent (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Implementation** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **Implementation** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Implementation (`description`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Implementation (`icons`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Implementation (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Implementation (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Implementation (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Implementation (`version`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Implementation (`version`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Implementation (`websiteUrl`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **InputRequest** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **InputRequests** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -372,21 +372,21 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | InvalidRequestError (`message`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **JSONArray** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **JSONObject** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **JSONRPCErrorResponse** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCErrorResponse (`error`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCErrorResponse (`id`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCErrorResponse (`jsonrpc`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **JSONRPCMessage** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **JSONRPCNotification** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCNotification (`jsonrpc`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCNotification (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCNotification (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **JSONRPCRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCRequest (`id`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCRequest (`jsonrpc`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| JSONRPCRequest (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **JSONRPCResponse** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **JSONRPCErrorResponse** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCErrorResponse (`error`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCErrorResponse (`id`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCErrorResponse (`jsonrpc`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **JSONRPCMessage** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **JSONRPCNotification** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCNotification (`jsonrpc`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCNotification (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCNotification (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **JSONRPCRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCRequest (`id`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCRequest (`jsonrpc`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| JSONRPCRequest (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **JSONRPCResponse** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **JSONRPCResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | JSONRPCResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | JSONRPCResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -399,48 +399,48 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | LegacyTitledEnumSchema (`enumNames`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | LegacyTitledEnumSchema (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | LegacyTitledEnumSchema (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListPromptsRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListPromptsRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListPromptsRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListPromptsRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsRequest (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListPromptsResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListPromptsResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResult (`nextCursor`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListPromptsResult (`prompts`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListPromptsResult (`prompts`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ListPromptsResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListPromptsResultResponse (`result`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListResourceTemplatesRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **ListResourceTemplatesRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListResourceTemplatesRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListResourceTemplatesRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesRequest (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListResourceTemplatesResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **ListResourceTemplatesResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResult (`nextCursor`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListResourceTemplatesResult (`resourceTemplates`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListResourceTemplatesResult (`resourceTemplates`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ListResourceTemplatesResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourceTemplatesResultResponse (`result`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListResourcesRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListResourcesRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListResourcesRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListResourcesRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesRequest (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListResourcesResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListResourcesResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesResult (`nextCursor`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListResourcesResult (`resources`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListResourcesResult (`resources`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListResourcesResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ListResourcesResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -453,27 +453,27 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | ListRootsRequest (`params`) (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ListRootsResult** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListRootsResult (`roots`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListToolsRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListToolsRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListToolsRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListToolsRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsRequest (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ListToolsResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ListToolsResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResult (`nextCursor`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ListToolsResult (`tools`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ListToolsResult (`tools`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ListToolsResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ListToolsResultResponse (`result`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **LoggingLevel** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
-| **LoggingMessageNotification** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **LoggingLevel** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **LoggingMessageNotification** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | LoggingMessageNotification (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| LoggingMessageNotification (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| LoggingMessageNotification (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| LoggingMessageNotification (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| LoggingMessageNotification (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **LoggingMessageNotificationParams** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | LoggingMessageNotificationParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | LoggingMessageNotificationParams (`data`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -527,7 +527,7 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | ParseError (`data`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ParseError (`message`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **PrimitiveSchemaDefinition** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ProgressNotification** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **ProgressNotification** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ProgressNotification (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ProgressNotification (`method`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ProgressNotification (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -538,43 +538,43 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | ProgressNotificationParams (`progressToken`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ProgressNotificationParams (`total`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ProgressToken** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Prompt** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **Prompt** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Prompt (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Prompt (`arguments`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| Prompt (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Prompt (`arguments`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| Prompt (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Prompt (`icons`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Prompt (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Prompt (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Prompt (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **PromptArgument** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
-| PromptArgument (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| PromptArgument (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| PromptArgument (`required`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **PromptArgument** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| PromptArgument (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| PromptArgument (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| PromptArgument (`required`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptArgument (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **PromptListChangedNotification** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptListChangedNotification (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptListChangedNotification (`method`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptListChangedNotification (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **PromptMessage** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
-| PromptMessage (`content`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| PromptMessage (`role`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **PromptMessage** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| PromptMessage (`content`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| PromptMessage (`role`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **PromptReference** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptReference (`name`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptReference (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | PromptReference (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ReadResourceRequest** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ReadResourceRequest** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceRequest (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceRequest (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ReadResourceRequest (`method`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| ReadResourceRequest (`params`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **ReadResourceRequestParams** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ReadResourceRequest (`method`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| ReadResourceRequest (`params`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **ReadResourceRequestParams** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceRequestParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceRequestParams (`inputResponses`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceRequestParams (`requestState`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ReadResourceRequestParams (`uri`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **ReadResourceResult** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| ReadResourceRequestParams (`uri`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **ReadResourceResult** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceResult (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceResult (`cacheScope`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ReadResourceResult (`contents`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ReadResourceResult (`contents`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceResult (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ReadResourceResult (`ttlMs`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ReadResourceResultResponse** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -584,7 +584,7 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | **Request** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Request (`method`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Request (`params`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **RequestId** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **RequestId** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **RequestMetaObject** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | RequestMetaObject (`io.modelcontextprotocol/clientCapabilities`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | RequestMetaObject (`io.modelcontextprotocol/clientInfo`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -593,16 +593,16 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | RequestMetaObject (`progressToken`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **RequestParams** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | RequestParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Resource** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **Resource** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Resource (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Resource (`annotations`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Resource (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Resource (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Resource (`icons`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Resource (`mimeType`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| Resource (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Resource (`mimeType`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| Resource (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Resource (`size`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Resource (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Resource (`uri`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Resource (`uri`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ResourceContents** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceContents (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceContents (`mimeType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -625,15 +625,15 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | **ResourceRequestParams** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceRequestParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceRequestParams (`uri`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ResourceTemplate** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **ResourceTemplate** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplate (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplate (`annotations`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ResourceTemplate (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ResourceTemplate (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplate (`icons`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ResourceTemplate (`mimeType`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| ResourceTemplate (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ResourceTemplate (`mimeType`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| ResourceTemplate (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplate (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ResourceTemplate (`uriTemplate`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ResourceTemplate (`uriTemplate`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ResourceTemplateReference** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplateReference (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceTemplateReference (`uri`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -644,13 +644,13 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | **ResourceUpdatedNotificationParams** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceUpdatedNotificationParams (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResourceUpdatedNotificationParams (`uri`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Result** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **Result** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Result (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Result (`resultType`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ResultMetaObject** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ResultMetaObject (`io.modelcontextprotocol/serverInfo`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ResultType** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Role** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **Role** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **Root** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Root (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Root (`name`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -660,17 +660,17 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | SamplingMessage (`content`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | SamplingMessage (`role`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **SamplingMessageContentBlock** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **ServerCapabilities** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| **ServerCapabilities** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`completions`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`experimental`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`extensions`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ServerCapabilities (`logging`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| ServerCapabilities (`prompts`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ServerCapabilities (`logging`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| ServerCapabilities (`prompts`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`prompts`) (`listChanged`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ServerCapabilities (`resources`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ServerCapabilities (`resources`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`resources`) (`listChanged`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`resources`) (`subscribe`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| ServerCapabilities (`tools`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| ServerCapabilities (`tools`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | ServerCapabilities (`tools`) (`listChanged`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ServerNotification** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **ServerResult** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -713,16 +713,16 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | SubscriptionsListenResultResponse (`id`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | SubscriptionsListenResultResponse (`jsonrpc`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | SubscriptionsListenResultResponse (`result`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **TextContent** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **TextContent** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TextContent (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TextContent (`annotations`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| TextContent (`text`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| TextContent (`type`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| **TextResourceContents** | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| TextContent (`text`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| TextContent (`type`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| **TextResourceContents** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TextResourceContents (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| TextResourceContents (`mimeType`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| TextResourceContents (`text`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
-| TextResourceContents (`uri`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| TextResourceContents (`mimeType`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| TextResourceContents (`text`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
+| TextResourceContents (`uri`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | **TitledMultiSelectEnumSchema** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TitledMultiSelectEnumSchema (`default`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TitledMultiSelectEnumSchema (`description`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
@@ -738,15 +738,15 @@ Exposing the `cdd` bidirectional code generator itself to MCP allows AI models t
 | TitledSingleSelectEnumSchema (`oneOf`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TitledSingleSelectEnumSchema (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | TitledSingleSelectEnumSchema (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| **Tool** | `[x]` , `[x]` | `[x]` , `[x]` | `[x]` , `[x]` | |
+| **Tool** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`_meta`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`annotations`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Tool (`description`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Tool (`description`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`icons`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Tool (`inputSchema`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Tool (`inputSchema`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`inputSchema`) (`$schema`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`inputSchema`) (`type`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
-| Tool (`name`) | `[x]` , `[x]` | `[x]` , `[x]` | `[ ]` , `[ ]` | |
+| Tool (`name`) | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`outputSchema`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`outputSchema`) (`$schema`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
 | Tool (`title`) | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | |
