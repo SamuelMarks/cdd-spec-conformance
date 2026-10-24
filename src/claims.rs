@@ -135,23 +135,177 @@ fn lookup_single_claim_key(
     key: &str,
     implemented_features: &HashMap<String, bool>,
 ) -> Option<bool> {
-    implemented_features.get(key).copied().or_else(|| {
-        let mut found_any = false;
-        let mut any_impl = false;
-        for (k, &v) in implemented_features {
-            if matches_feature_tokens(key, k) {
-                found_any = true;
-                if v {
-                    any_impl = true;
-                }
-            }
+    let mut found_any = false;
+    let mut any_impl = false;
+    for (k, &v) in implemented_features {
+        if matches_feature_tokens(key, k) {
+            found_any = true;
+            any_impl |= v;
         }
-        found_any.then_some(any_impl)
-    })
+    }
+    found_any.then_some(any_impl)
 }
 
-/// Evaluates whether a raw claimed feature (supporting `/` composite features like
-/// `"Responses / Schema Object"` or `"Links / Callbacks"`) is implemented in `implemented_features`.
+/// Splits a `camelCase` or `PascalCase` identifier into space-delimited lowercased words
+/// (e.g. `"RequestBody"` -> `"request body"`, `"ServerVariable"` -> `"server variable"`).
+///
+/// # Arguments
+///
+/// * `s` - Input string slice.
+///
+/// # Returns
+///
+/// Space-delimited lowercased words with `camelCase` boundaries expanded.
+fn split_camel_case_words(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut prev_lower = false;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            if c.is_ascii_uppercase() && prev_lower {
+                out.push(' ');
+            }
+            prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+            out.push(c.to_ascii_lowercase());
+        } else {
+            prev_lower = false;
+            out.push(' ');
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Strips leading specification version prefixes and trailing boilerplate words from a normalized key.
+///
+/// # Arguments
+///
+/// * `key` - Normalized alphanumeric feature key.
+///
+/// # Returns
+///
+/// Core feature key with specification prefixes and generic filler words removed.
+fn strip_spec_prefix_and_filler(key: &str) -> String {
+    let mut cleaned = format!(" {key} ")
+        .replace(" open api ", " openapi ")
+        .replace(" model context protocol ", " ")
+        .replace(" stdio server ", " stdio ")
+        .replace(" criterion expression ", " expression ");
+    for spec_ver in [
+        " openapi 3 2 0 ",
+        " openapi 3 1 1 ",
+        " openapi 3 1 0 ",
+        " openapi 3 0 0 ",
+        " swagger 2 0 ",
+        " arazzo 1 1 0 ",
+        " mcp 1 0 0 ",
+        " 1 0 0 ",
+        " draft 2020 12 ",
+    ] {
+        cleaned = cleaned.replace(spec_ver, " ");
+    }
+    let stop_words = [
+        "openapi",
+        "swagger",
+        "arazzo",
+        "model",
+        "context",
+        "protocol",
+        "mcp",
+        "hierarchical",
+        "dags",
+        "object",
+        "objects",
+        "document",
+        "automatic",
+        "upgrade",
+        "downgrade",
+        "up",
+        "conversion",
+        "bidirectional",
+        "sync",
+        "engine",
+        "orchestration",
+        "embedded",
+        "compiler",
+        "live",
+        "endpoints",
+        "adapters",
+        "resolution",
+        "generation",
+        "and",
+        "over",
+    ];
+    cleaned
+        .split_whitespace()
+        .map(|w| match w {
+            "oauth2" => "oauth",
+            "types" => "type",
+            "headers" => "header",
+            "links" => "link",
+            "callbacks" => "callback",
+            "ops" => "operations",
+            _ => w,
+        })
+        .filter(|w| !stop_words.contains(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Evaluates a single non-composite feature phrase against `implemented_features`.
+///
+/// # Arguments
+///
+/// * `part` - Raw feature phrase.
+/// * `implemented_features` - Map of normalized checklist feature keys to implementation status.
+///
+/// # Returns
+///
+/// `Some(true)` if implemented, `Some(false)` if present in checklists but unimplemented, or `None` if absent.
+fn evaluate_single_part(part: &str, implemented_features: &HashMap<String, bool>) -> Option<bool> {
+    let with_parens = normalize_feature_key_with_parens(part);
+    if let Some(&exact) = implemented_features.get(&with_parens) {
+        return Some(exact);
+    }
+    let camel_key = split_camel_case_words(&normalize_feature_key(part));
+    let stripped = strip_spec_prefix_and_filler(&camel_key);
+    if stripped.is_empty() {
+        return ["swagger 2 0", "openapi 3 2 0", "arazzo 1 1 0", "mcp 1 0 0"]
+            .iter()
+            .find(|&&spec_prefix| with_parens.contains(spec_prefix))
+            .and_then(|&spec_prefix| implemented_features.get(spec_prefix).copied());
+    }
+    if let Some(&exact_stripped) = implemented_features.get(&stripped) {
+        return Some(exact_stripped);
+    }
+    lookup_single_claim_key(&stripped, implemented_features)
+}
+
+/// Removes all parenthesized substrings `(...)` from `input`.
+///
+/// # Arguments
+///
+/// * `input` - Raw feature string.
+///
+/// # Returns
+///
+/// String with all parenthesized segments removed.
+fn remove_parenthesized_segments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut depth: usize = 0;
+    for ch in input.chars() {
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Evaluates whether a raw claimed feature (supporting `/`, `&`, and `,` composite features like
+/// `"Responses / Schema Object"`, `"Parameter Object & Reusable Object"`, or `"Info, Contact, License"`)
+/// is implemented in `implemented_features`.
 ///
 /// # Arguments
 ///
@@ -166,15 +320,21 @@ fn evaluate_claim_feature(
     feature_cell: &str,
     implemented_features: &HashMap<String, bool>,
 ) -> Option<bool> {
-    if feature_cell.contains('/') {
+    if !feature_cell.contains(['/', '&', ',']) {
+        return evaluate_single_part(feature_cell, implemented_features);
+    }
+
+    let mut composite_result = None;
+    let base_without_parens = remove_parenthesized_segments(feature_cell);
+    if base_without_parens.contains(['/', '&', ',']) {
         let mut found_any = false;
         let mut all_impl = true;
-        for part in feature_cell.split('/') {
-            let part_key = normalize_feature_key_with_parens(part);
-            if !part_key.is_empty() {
-                match implemented_features.get(&part_key).copied().or_else(|| {
-                    lookup_single_claim_key(&normalize_feature_key(part), implemented_features)
-                }) {
+        for part in base_without_parens.split(['/', '&', ',']) {
+            let trimmed = part.trim();
+            if !trimmed.is_empty()
+                && !strip_spec_prefix_and_filler(&split_camel_case_words(trimmed)).is_empty()
+            {
+                match evaluate_single_part(trimmed, implemented_features) {
                     Some(true) => found_any = true,
                     Some(false) => {
                         found_any = true;
@@ -185,15 +345,29 @@ fn evaluate_claim_feature(
             }
         }
         if found_any {
-            return Some(all_impl);
+            if all_impl {
+                return Some(true);
+            }
+            composite_result = Some(false);
+        }
+    } else if evaluate_single_part(&base_without_parens, implemented_features) == Some(true) {
+        return Some(true);
+    }
+
+    if let Some((_, after_open)) = feature_cell.rsplit_once('(') {
+        if let Some((inside_parens, _)) = after_open.split_once(')') {
+            for tok in inside_parens.split([',', '/', ';']) {
+                let cleaned = normalize_feature_key_with_parens(tok);
+                if !cleaned.is_empty()
+                    && evaluate_single_part(&cleaned, implemented_features) == Some(true)
+                {
+                    return Some(true);
+                }
+            }
         }
     }
-    let with_parens = normalize_feature_key_with_parens(feature_cell);
-    if let Some(&exact) = implemented_features.get(&with_parens) {
-        return Some(exact);
-    }
-    let key = normalize_feature_key(feature_cell);
-    lookup_single_claim_key(&key, implemented_features)
+
+    composite_result.or_else(|| evaluate_single_part(feature_cell, implemented_features))
 }
 
 /// Extracts a claimed feature prefix from a bullet list item string if it contains `: ✅`.
@@ -295,10 +469,75 @@ fn extract_markdown_claims(content: &str) -> Vec<String> {
     claims
 }
 
-/// Verifies that claims made in a repository's `COMPLIANCE.md` match the actual checklist tables.
+/// Inserts a normalized feature key into `map` if non-empty, combining with existing values via `|=`.
 ///
-/// Inspects Markdown tables in `COMPLIANCE.md` where features are marked with `✅`, and cross-references
-/// those features against the parsed `ChecklistTable` rows.
+/// # Arguments
+///
+/// * `map` - Feature implementation lookup map.
+/// * `key` - Normalized feature key.
+/// * `is_impl` - Whether the feature row is implemented.
+fn insert_feature_key(map: &mut HashMap<String, bool>, key: String, is_impl: bool) {
+    if !key.is_empty() {
+        let prev = map.get(&key).copied().unwrap_or(false);
+        map.insert(key, prev | is_impl);
+    }
+}
+
+/// Builds a lookup map of normalized feature keys to whether each feature is implemented
+/// in at least one profile or direction across `tables`.
+///
+/// # Arguments
+///
+/// * `tables` - Slice of parsed `ChecklistTable` instances discovered in the repository.
+///
+/// # Returns
+///
+/// `HashMap` mapping normalized feature strings to implementation booleans.
+fn build_implemented_features_map(tables: &[ChecklistTable]) -> HashMap<String, bool> {
+    let mut implemented_features: HashMap<String, bool> = HashMap::new();
+    for table in tables {
+        let mut table_any_impl = false;
+        for row in &table.rows {
+            let base_key = normalize_feature_key(&row.feature_name);
+            let stripped_base = strip_spec_prefix_and_filler(&base_key);
+            let with_parens_key = normalize_feature_key_with_parens(&row.feature_name);
+            let camel_key = split_camel_case_words(&row.feature_name);
+            let stripped_camel = strip_spec_prefix_and_filler(&camel_key);
+            let is_impl = row.status.is_to_present() || row.status.is_from_present();
+            table_any_impl |= is_impl;
+            insert_feature_key(&mut implemented_features, stripped_base, is_impl);
+            insert_feature_key(&mut implemented_features, base_key, is_impl);
+            insert_feature_key(&mut implemented_features, with_parens_key, is_impl);
+            if is_impl {
+                if let Some(ref note_text) = row.notes {
+                    let note_key = format!("{camel_key} {}", split_camel_case_words(note_text));
+                    let stripped_note = strip_spec_prefix_and_filler(&note_key);
+                    insert_feature_key(&mut implemented_features, stripped_note, true);
+                    insert_feature_key(&mut implemented_features, note_key, true);
+                }
+            }
+            insert_feature_key(&mut implemented_features, stripped_camel, is_impl);
+            insert_feature_key(&mut implemented_features, camel_key, is_impl);
+            if let Some((before_open, after_open)) = row.feature_name.split_once('(') {
+                let outer_key = split_camel_case_words(before_open);
+                let stripped_outer = strip_spec_prefix_and_filler(&outer_key);
+                insert_feature_key(&mut implemented_features, stripped_outer, is_impl);
+                insert_feature_key(&mut implemented_features, outer_key, is_impl);
+                if is_impl {
+                    if let Some((prop, _)) = after_open.split_once(')') {
+                        let prop_key = normalize_feature_key_with_parens(prop);
+                        insert_feature_key(&mut implemented_features, prop_key, true);
+                    }
+                }
+            }
+        }
+        let spec_alias = normalize_feature_key_with_parens(table.spec_id.as_str());
+        insert_feature_key(&mut implemented_features, spec_alias, table_any_impl);
+    }
+    implemented_features
+}
+
+/// Verifies documented compliance claims in `COMPLIANCE.md` against the parsed checklists.
 ///
 /// # Arguments
 ///
@@ -317,43 +556,7 @@ pub fn verify_compliance_claims(
         path: compliance_path.to_path_buf(),
     })?;
 
-    // Build lookup map of normalized feature name -> whether it is implemented in at least one profile/direction
-    let mut implemented_features: HashMap<String, bool> = HashMap::new();
-    for table in tables {
-        let mut table_any_impl = false;
-        for row in &table.rows {
-            let base_key = normalize_feature_key(&row.feature_name);
-            let paren_key = normalize_feature_key_with_parens(&row.feature_name);
-            let is_impl = row.status.is_to_present() || row.status.is_from_present();
-            table_any_impl |= is_impl;
-            implemented_features
-                .entry(base_key)
-                .and_modify(|v| *v = *v || is_impl)
-                .or_insert(is_impl);
-            implemented_features
-                .entry(paren_key)
-                .and_modify(|v| *v = *v || is_impl)
-                .or_insert(is_impl);
-            if let Some((_, after_open)) = row.feature_name.split_once('(') {
-                if let Some((prop, _)) = after_open.split_once(')') {
-                    let prop_key = normalize_feature_key_with_parens(prop);
-                    if !prop_key.is_empty() {
-                        let prev = implemented_features
-                            .get(&prop_key)
-                            .copied()
-                            .unwrap_or(false);
-                        implemented_features.insert(prop_key, prev || is_impl);
-                    }
-                }
-            }
-        }
-        let spec_alias = normalize_feature_key_with_parens(table.spec_id.as_str());
-        let prev_spec = implemented_features
-            .get(&spec_alias)
-            .copied()
-            .unwrap_or(false);
-        implemented_features.insert(spec_alias, prev_spec | table_any_impl);
-    }
+    let implemented_features = build_implemented_features_map(tables);
 
     let mut total_claims = 0;
     let mut verified_claims = 0;
@@ -679,12 +882,7 @@ Introductory paragraph outside list items.
 
         // Test Arazzo 1.1.0 parenthetical discriminator claims and spec-level claim
         let arazzo_comp_path = dir.join("ARAZZO_COMPLIANCE.md");
-        let arazzo_comp_md = r#"# Arazzo 1.1.0 Compliance
-- Arazzo 1.1.0: ✅ Supported
-- Runtime Expressions ($steps): ✅ Supported
-- Runtime Expressions ($message.payload): ✅ Supported
-- Step Object (channelPath) / Selector Object: ✅ Supported
-"#;
+        let arazzo_comp_md = "# Arazzo 1.1.0 Compliance\n- Arazzo 1.1.0: ✅ Supported\n- Arazzo 1.1.0 Engine: ✅ Supported\n- Object: ✅ Supported\n- Runtime Expressions ($steps): ✅ Supported\n- Runtime Expressions ($message.payload): ✅ Supported\n- Step Object (channelPath) / Selector Object: ✅ Supported\n- Selector Object (foo, bar): ✅ Supported\n- UnknownSingle ($unknown, $steps): ✅ Supported\n- UnknownA & UnknownB ($unknown, $steps): ✅ Supported\n- UnknownC, UnknownD (unclosed: ✅ Supported\n- OAuth2 Flows / MediaTypes / Headers / Links / Callbacks / AdditionalOps: ✅ Supported\n";
         let _ = std::fs::write(&arazzo_comp_path, arazzo_comp_md);
         let arazzo_table = ChecklistTable {
             spec_id: SpecId::Arazzo110,
@@ -694,19 +892,19 @@ Introductory paragraph outside list items.
                 ChecklistRow {
                     feature_name: "Runtime Expressions (`$steps`)".to_string(),
                     status: present,
-                    notes: None,
+                    notes: Some("DAG orchestration".to_string()),
                     line_number: 1,
                 },
                 ChecklistRow {
                     feature_name: "Runtime Expressions (`$message.payload`)".to_string(),
                     status: FeatureStatus::new(),
-                    notes: None,
+                    notes: Some("Object".to_string()),
                     line_number: 2,
                 },
                 ChecklistRow {
                     feature_name: "Step Object (`channelPath`)".to_string(),
                     status: present,
-                    notes: None,
+                    notes: Some(String::new()),
                     line_number: 3,
                 },
                 ChecklistRow {
@@ -715,12 +913,48 @@ Introductory paragraph outside list items.
                     notes: None,
                     line_number: 4,
                 },
+                ChecklistRow {
+                    feature_name: "OAuth Flows".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 5,
+                },
+                ChecklistRow {
+                    feature_name: "Media Type Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 6,
+                },
+                ChecklistRow {
+                    feature_name: "Header Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 7,
+                },
+                ChecklistRow {
+                    feature_name: "Link Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 8,
+                },
+                ChecklistRow {
+                    feature_name: "Callback Object".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 9,
+                },
+                ChecklistRow {
+                    feature_name: "Path Item Object (`additionalOperations`)".to_string(),
+                    status: present,
+                    notes: None,
+                    line_number: 10,
+                },
             ],
         };
         let arazzo_rep = verify_compliance_claims(&arazzo_comp_path, &[arazzo_table]).ok();
         assert_eq!(
             arazzo_rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
-            Some((4, 3, 1))
+            Some((10, 8, 2))
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -1383,15 +1383,58 @@ const fn sanitize_status(status: crate::model::FeatureStatus) -> crate::model::F
     )
 }
 
-/// Merges existing parsed checklist rows into a canonical Markdown document, preserving
-/// previously recorded checkbox statuses and notes for matching features across both 5-column
-/// and 6-column tables as well as list-based checklists.
+/// Splits a Markdown table row by unescaped pipe characters (`|`), preserving `\|` inside cells.
 ///
 /// # Arguments
 ///
-/// * `canonical_content` - Raw canonical checklist template string.
-/// * `existing_rows` - Map of feature names to previously recorded `ChecklistRow` entries.
-/// * `profile` - Target `ProfileKind`.
+/// * `line` - Trimmed Markdown table row string.
+///
+/// # Returns
+///
+/// Vector of string slices between unescaped `|` characters.
+fn split_table_cells(line: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
+            parts.push(&line[start..i]);
+            start = i + 1;
+        }
+    }
+    parts.push(&line[start..]);
+    parts
+}
+
+/// Escapes unescaped pipe characters (`|`) as `\|` inside a Markdown table note string.
+///
+/// # Arguments
+///
+/// * `note` - Raw note text.
+///
+/// # Returns
+///
+/// Escaped note string safe for Markdown table cells.
+fn escape_unescaped_pipes(note: &str) -> String {
+    let mut s = String::with_capacity(note.len());
+    let mut prev_bs = false;
+    for ch in note.chars() {
+        if ch == '|' && !prev_bs {
+            s.push('\\');
+        }
+        prev_bs = ch == '\\';
+        s.push(ch);
+    }
+    s
+}
+
+/// Merges existing checklist row statuses and notes into a canonical checklist template.
+///
+/// # Arguments
+///
+/// * `canonical_content` - Canonical template Markdown text.
+/// * `existing_rows` - Map of existing feature keys to `ChecklistRow` values.
+/// * `profile` - Target profile boundary.
 ///
 /// # Returns
 ///
@@ -1442,7 +1485,7 @@ fn merge_checklist_content(
             }
         } else if let Some(inner) = trimmed.strip_prefix('|').and_then(|s| s.strip_suffix('|')) {
             if inner.contains('[') {
-                let parts: Vec<&str> = trimmed.split('|').collect();
+                let parts: Vec<&str> = split_table_cells(trimmed);
                 if parts.len() >= 6 {
                     let is_sub_feature = !parts[2].contains('[');
                     let (key, data_start) = if is_sub_feature {
@@ -1465,8 +1508,9 @@ fn merge_checklist_content(
                         let skip = format_checkbox_pair(clean_stat.skipped);
                         let note_col_idx = data_start + 3;
                         let default_note = parts.get(note_col_idx).map_or("", |s| s.trim());
-                        let resolved_note = existing
-                            .notes
+                        let escaped_existing =
+                            existing.notes.as_deref().map(escape_unescaped_pipes);
+                        let resolved_note = escaped_existing
                             .as_deref()
                             .filter(|n| !n.trim().is_empty())
                             .unwrap_or(default_note);
