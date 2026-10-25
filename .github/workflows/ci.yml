@@ -22,6 +22,10 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
 
+defaults:
+  run:
+    working-directory: cdd-spec-conformance
+
 jobs:
   # ---------------------------------------------------------------------------
   # Hook 1: pre-commit-hooks (trailing-whitespace, end-of-file-fixer,
@@ -31,8 +35,10 @@ jobs:
     name: "Hook [1/8]: pre-commit-hooks (File Hygiene & Schemas)"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Set up Python 3
         uses: actions/setup-python@v7
@@ -67,8 +73,10 @@ jobs:
     name: "Hook [2/8]: cargo-fmt-fix & cargo-fmt-check"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Install Rust stable toolchain with rustfmt
         uses: dtolnay/rust-toolchain@stable
@@ -98,14 +106,18 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Run cargo-build pre-commit hook
         run: cargo build --workspace --all-targets
@@ -127,8 +139,10 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Install Rust stable toolchain with clippy and rust-docs
         uses: dtolnay/rust-toolchain@stable
@@ -137,6 +151,8 @@ jobs:
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Run cargo-clippy pre-commit hook
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -160,14 +176,96 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Run cargo-test pre-commit hook
         run: cargo test --workspace --all-targets
@@ -182,8 +280,88 @@ jobs:
     name: "Hook [6/8]: update-coverage (100% Doc & Test Coverage)"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust nightly toolchain for rustdoc coverage
         uses: dtolnay/rust-toolchain@nightly
@@ -200,6 +378,8 @@ jobs:
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3
         uses: actions/setup-python@v7
@@ -231,14 +411,18 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3
         uses: actions/setup-python@v7
@@ -262,20 +446,102 @@ jobs:
           cargo run -- inspect-source --path src --require-docs
 
   # ---------------------------------------------------------------------------
-  # Hook 8: update-readme-matrix (Standalone + 13-Repo Ecosystem Matrix)
+  # Hook 8: update-readme-matrix (13-Repo Ecosystem Matrix)
   # ---------------------------------------------------------------------------
   hook-update-readme-matrix:
     name: "Hook [8/8]: update-readme-matrix"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3
         uses: actions/setup-python@v7
@@ -285,20 +551,10 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Run update-readme-matrix hook in standalone checkout mode
+      - name: Run update-readme-matrix hook with all 13 sibling repositories
         run: |
           python3 scripts/update_readme_matrix.py
           git diff --exit-code README.md
-
-      - name: Clone sibling CDD ecosystem repositories (best-effort) and run matrix
-        run: |
-          PARENT_DIR="$(dirname "$PWD")"
-          for repo in cdd-c cdd-cpp cdd-csharp cdd-go cdd-java cdd-kotlin cdd-php cdd-python-all cdd-ruby cdd-rust cdd-sh cdd-swift cdd-ts; do
-            if [ ! -d "${PARENT_DIR}/${repo}" ]; then
-              git clone --depth 1 "https://github.com/SamuelMarks/${repo}.git" "${PARENT_DIR}/${repo}" 2>/dev/null || true
-            fi
-          done
-          ./target/release/cdd-conformance matrix --repos-dir "${PARENT_DIR}"
 
   # ---------------------------------------------------------------------------
   # Exported .pre-commit-hooks.yaml Verification (pre-commit try-repo)
@@ -307,14 +563,96 @@ jobs:
     name: "Exported .pre-commit-hooks.yaml Suite"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3 and pre-commit
         uses: actions/setup-python@v7
@@ -343,8 +681,88 @@ jobs:
     name: "Full .pre-commit-config.yaml Suite"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust nightly toolchain for rustdoc coverage
         uses: dtolnay/rust-toolchain@nightly
@@ -361,6 +779,8 @@ jobs:
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3 and pre-commit
         uses: actions/setup-python@v7
@@ -397,8 +817,10 @@ jobs:
           - x86_64-apple-darwin
           - aarch64-apple-darwin
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Install Rust stable toolchain with target ${{ matrix.target }}
         uses: dtolnay/rust-toolchain@stable
@@ -408,6 +830,7 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
+          workspaces: cdd-spec-conformance
           key: check-${{ matrix.target }}
 
       - name: Verify workspace check for ${{ matrix.target }}

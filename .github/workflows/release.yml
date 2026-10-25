@@ -19,6 +19,10 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
 
+defaults:
+  run:
+    working-directory: cdd-spec-conformance
+
 jobs:
   # ---------------------------------------------------------------------------
   # Stage 1: Pre-Release Quality Gate (All Pre-commit Hooks)
@@ -27,8 +31,88 @@ jobs:
     name: "Pre-Release Quality Gate (Pre-commit Suite)"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
+
+      - name: Checkout cdd-c
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-c
+          path: cdd-c
+
+      - name: Checkout cdd-cpp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-cpp
+          path: cdd-cpp
+
+      - name: Checkout cdd-csharp
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-csharp
+          path: cdd-csharp
+
+      - name: Checkout cdd-go
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-go
+          path: cdd-go
+
+      - name: Checkout cdd-java
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-java
+          path: cdd-java
+
+      - name: Checkout cdd-kotlin
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-kotlin
+          path: cdd-kotlin
+
+      - name: Checkout cdd-php
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-php
+          path: cdd-php
+
+      - name: Checkout cdd-python-all
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-python-all
+          path: cdd-python-all
+
+      - name: Checkout cdd-ruby
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-ruby
+          path: cdd-ruby
+
+      - name: Checkout cdd-rust
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-rust
+          path: cdd-rust
+
+      - name: Checkout cdd-sh
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-sh
+          path: cdd-sh
+
+      - name: Checkout cdd-swift
+        uses: actions/checkout@v7
+        with:
+          repository: SamuelMarks/cdd-swift
+          path: cdd-swift
+
+      - name: Checkout cdd-ts
+        uses: actions/checkout@v7
+        with:
+          repository: offscale/cdd-ts
+          path: cdd-ts
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -45,6 +129,8 @@ jobs:
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdd-spec-conformance
 
       - name: Set up Python 3
         uses: actions/setup-python@v7
@@ -128,8 +214,10 @@ jobs:
             bin_ext: ".exe"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Resolve release version tag
         id: version
@@ -158,6 +246,7 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
+          workspaces: cdd-spec-conformance
           key: release-${{ matrix.target }}
 
       - name: Build release binary with Cargo
@@ -233,7 +322,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.os_name }}-${{ matrix.arch_name }}
-          path: dist/*
+          path: cdd-spec-conformance/dist/*
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -245,13 +334,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout cdd-spec-conformance
         uses: actions/checkout@v7
+        with:
+          path: cdd-spec-conformance
 
       - name: Download all OS+arch artifacts
         uses: actions/download-artifact@v8
         with:
-          path: release-assets
+          path: cdd-spec-conformance/release-assets
           merge-multiple: true
 
       - name: Generate consolidated SHA256SUMS.txt
@@ -268,8 +359,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            release-assets/*.tar.gz
-            release-assets/*.zip
-            release-assets/cdd-conformance-*
-            release-assets/*.sha256
-            release-assets/SHA256SUMS.txt
+            cdd-spec-conformance/release-assets/*.tar.gz
+            cdd-spec-conformance/release-assets/*.zip
+            cdd-spec-conformance/release-assets/cdd-conformance-*
+            cdd-spec-conformance/release-assets/*.sha256
+            cdd-spec-conformance/release-assets/SHA256SUMS.txt
