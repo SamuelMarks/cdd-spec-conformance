@@ -126,11 +126,32 @@ fn normalize_word_stem(word: &str) -> String {
     }
 }
 
+/// Checks whether two normalized word stems are canonical synonyms (e.g. `"param"` == `"parameter"`, `"spec"` == `"specification"`).
+///
+/// # Arguments
+///
+/// * `a` - First normalized singular word stem.
+/// * `b` - Second normalized singular word stem.
+///
+/// # Returns
+///
+/// `true` if `a` and `b` are equivalent stems or canonical abbreviations.
+fn stems_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let pair = if a <= b { (a, b) } else { (b, a) };
+    matches!(
+        pair,
+        ("add", "additional") | ("info", "information") | ("param", "parameter")
+    )
+}
+
 /// Checks whether a normalized claimed feature key matches a normalized checklist feature key.
 ///
 /// Matches when every token in `claimed_key` matches a word in `candidate_key` either exactly,
-/// by normalized singular/plural stem (`"webhook"` == `"webhooks"`), or when the shorter token is
-/// a prefix of the longer token and is not a distinct full word with a different root.
+/// by normalized singular/plural stem (`"webhook"` == `"webhooks"`), or by canonical abbreviation
+/// (`"param"` == `"parameter"`), preventing arbitrary short prefix false positives.
 ///
 /// # Arguments
 ///
@@ -146,10 +167,7 @@ fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
         let claimed_stem = normalize_word_stem(claimed_tok);
         candidate_words.iter().any(|cand_tok| {
             let cand_stem = normalize_word_stem(cand_tok);
-            *cand_tok == claimed_tok
-                || cand_stem == claimed_stem
-                || (claimed_stem.len() >= 4 && cand_stem.starts_with(&claimed_stem))
-                || (cand_stem.len() >= 4 && claimed_stem.starts_with(&cand_stem))
+            *cand_tok == claimed_tok || stems_match(&claimed_stem, &cand_stem)
         })
     })
 }
@@ -559,7 +577,9 @@ fn build_implemented_features_map(tables: &[ChecklistTable]) -> HashMap<String, 
                 if is_impl {
                     if let Some((prop, _)) = after_open.split_once(')') {
                         let prop_key = normalize_feature_key_with_parens(prop);
+                        let prop_camel = split_camel_case_words(prop);
                         insert_feature_key(&mut implemented_features, prop_key, true);
+                        insert_feature_key(&mut implemented_features, prop_camel, true);
                     }
                 }
             }
@@ -840,6 +860,11 @@ mod tests {
         assert!(matches_feature_tokens("matches", "match"));
         assert!(matches_feature_tokens("param", "params"));
         assert!(matches_feature_tokens("params", "param"));
+        assert!(matches_feature_tokens("param", "parameter"));
+        assert!(matches_feature_tokens("parameter", "param"));
+        assert!(matches_feature_tokens("info", "information"));
+        assert!(matches_feature_tokens("add", "additional"));
+        assert!(!matches_feature_tokens("path", "pathology"));
         assert!(!matches_feature_tokens("par", "parameter"));
         assert!(!matches_feature_tokens("parent", "parameter"));
         assert!(!matches_feature_tokens("service", "server"));
@@ -994,7 +1019,7 @@ Introductory paragraph outside list items.
         let arazzo_rep = verify_compliance_claims(&arazzo_comp_path, &[arazzo_table]).ok();
         assert_eq!(
             arazzo_rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
-            Some((10, 8, 2))
+            Some((10, 7, 3))
         );
 
         let _ = std::fs::remove_dir_all(&dir);

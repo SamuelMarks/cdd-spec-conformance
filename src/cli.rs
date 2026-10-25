@@ -11,7 +11,9 @@ use crate::matrix_runtime::{
 };
 use crate::mcp::server::McpServer;
 use crate::model::{ChecklistRow, ProfileKind, ServerOperatingMode, SpecId};
-use crate::parser::markdown::{clean_markdown_text, parse_checklist};
+use crate::parser::markdown::{
+    clean_markdown_text, escape_unescaped_pipes, parse_checklist, split_table_cells,
+};
 use crate::registry::CanonicalRegistry;
 use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 use colored::Colorize;
@@ -626,13 +628,10 @@ fn render_sync_command(
             roundtrip,
         } => {
             let resolved_repos = default_repos_dir(repos_dir);
-            let report = verify_backends_matrix(&resolved_repos, &extra_langs)?;
+            let mut report = verify_backends_matrix(&resolved_repos, &extra_langs)?;
             if roundtrip {
-                drop(verify_cross_language_roundtrip_chain(
-                    &resolved_repos,
-                    &extra_langs,
-                    None,
-                ));
+                report.roundtrip_report =
+                    verify_cross_language_roundtrip_chain(&resolved_repos, &extra_langs, None).ok();
             }
             let mut s = serde_json::to_string_pretty(&report).unwrap_or_default();
             let _ = writeln!(s);
@@ -1322,51 +1321,6 @@ const fn sanitize_status(status: crate::model::FeatureStatus) -> crate::model::F
     )
 }
 
-/// Splits a Markdown table row by unescaped pipe characters (`|`), preserving `\|` inside cells.
-///
-/// # Arguments
-///
-/// * `line` - Trimmed Markdown table row string.
-///
-/// # Returns
-///
-/// Vector of string slices between unescaped `|` characters.
-fn split_table_cells(line: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0;
-    let bytes = line.as_bytes();
-    for i in 0..bytes.len() {
-        if bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
-            parts.push(&line[start..i]);
-            start = i + 1;
-        }
-    }
-    parts.push(&line[start..]);
-    parts
-}
-
-/// Escapes unescaped pipe characters (`|`) as `\|` inside a Markdown table note string.
-///
-/// # Arguments
-///
-/// * `note` - Raw note text.
-///
-/// # Returns
-///
-/// Escaped note string safe for Markdown table cells.
-fn escape_unescaped_pipes(note: &str) -> String {
-    let mut s = String::with_capacity(note.len());
-    let mut prev_bs = false;
-    for ch in note.chars() {
-        if ch == '|' && !prev_bs {
-            s.push('\\');
-        }
-        prev_bs = ch == '\\';
-        s.push(ch);
-    }
-    s
-}
-
 /// Merges existing checklist row statuses and notes into a canonical checklist template.
 ///
 /// # Arguments
@@ -1530,20 +1484,27 @@ fn resolve_specs_to_sync(
 ///
 /// # Returns
 ///
-/// Map of feature names to `ChecklistRow` entries (empty if unreadable or malformed).
+/// Map of feature names to `ChecklistRow` entries.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if reading or parsing the existing checklist file fails.
 fn parse_existing_row_map(
     existing_path: &Path,
     spec_id: SpecId,
     profile: ProfileKind,
-) -> HashMap<String, ChecklistRow> {
-    let existing_raw = std::fs::read_to_string(existing_path).unwrap_or_default();
-    let mut map = HashMap::new();
-    if let Ok(table) = parse_checklist(&existing_raw, existing_path, spec_id, profile) {
-        for row in table.rows {
-            map.insert(row.feature_name.clone(), row);
-        }
+) -> Result<HashMap<String, ChecklistRow>, ConformanceError> {
+    let existing_raw =
+        std::fs::read_to_string(existing_path).map_err(|source| ConformanceError::Io {
+            source,
+            path: existing_path.to_path_buf(),
+        })?;
+    let table = parse_checklist(&existing_raw, existing_path, spec_id, profile)?;
+    let mut map = HashMap::with_capacity(table.rows.len());
+    for row in table.rows {
+        map.insert(row.feature_name.clone(), row);
     }
-    map
+    Ok(map)
 }
 
 /// Locates an existing checklist path for `(spec_id, profile)` in `target_file` or `project`.
@@ -1627,7 +1588,7 @@ pub(crate) fn run_sync(
 
             let final_content = if let Some(ref existing_path) = source_file {
                 let _ = writeln!(out, "  - Updating existing {}", profile.filename());
-                let existing_map = parse_existing_row_map(existing_path, spec_id, *profile);
+                let existing_map = parse_existing_row_map(existing_path, spec_id, *profile)?;
                 merge_checklist_content(&canonical_content, &existing_map, *profile)
             } else {
                 let _ = writeln!(out, "  - Scaffolding new {}", profile.filename());
@@ -1890,11 +1851,9 @@ mod tests {
             "--require-docs",
             "--include-tests",
         ])
-        .unwrap_or(Cli {
-            command: Commands::Mcp,
-        });
+        .ok();
         let mut buf = Vec::new();
-        assert!(run_cli_with_writer(parsed_inspect, &mut buf).is_ok());
+        assert!(parsed_inspect.is_some_and(|cli| run_cli_with_writer(cli, &mut buf).is_ok()));
 
         let bad_inspect = Cli {
             command: Commands::InspectSource {
@@ -1932,10 +1891,8 @@ mod tests {
             "--mode",
             "stub",
         ])
-        .unwrap_or(Cli {
-            command: Commands::Mcp,
-        });
-        assert!(run_cli_with_writer(parsed_vc, &mut buf).is_ok());
+        .ok();
+        assert!(parsed_vc.is_some_and(|cli| run_cli_with_writer(cli, &mut buf).is_ok()));
 
         let bad_vc = Cli {
             command: Commands::VerifyClients {
@@ -1949,6 +1906,7 @@ mod tests {
         };
         assert!(run_cli_with_writer(bad_vc, &mut buf).is_err());
 
+        buf.clear();
         let parsed_vb = Cli::try_parse_from([
             "cdd-conformance",
             "verify-backends",
@@ -1958,10 +1916,9 @@ mod tests {
             "cobol",
             "--roundtrip",
         ])
-        .unwrap_or(Cli {
-            command: Commands::Mcp,
-        });
-        assert!(run_cli_with_writer(parsed_vb, &mut buf).is_ok());
+        .ok();
+        assert!(parsed_vb.is_some_and(|cli| run_cli_with_writer(cli, &mut buf).is_ok()));
+        assert!(String::from_utf8_lossy(&buf).contains("\"roundtrip_report\""));
 
         let bad_vb = Cli {
             command: Commands::VerifyBackends {
@@ -1972,11 +1929,8 @@ mod tests {
         };
         assert!(run_cli_with_writer(bad_vb, &mut buf).is_err());
 
-        let parsed_vb_no_rt = Cli::try_parse_from(["cdd-conformance", "verify-backends"])
-            .unwrap_or(Cli {
-                command: Commands::Mcp,
-            });
-        assert!(run_cli_with_writer(parsed_vb_no_rt, &mut buf).is_ok());
+        let parsed_vb_no_rt = Cli::try_parse_from(["cdd-conformance", "verify-backends"]).ok();
+        assert!(parsed_vb_no_rt.is_some_and(|cli| run_cli_with_writer(cli, &mut buf).is_ok()));
 
         let parsed_vrt = Cli::try_parse_from([
             "cdd-conformance",
@@ -1988,10 +1942,8 @@ mod tests {
             "--spec",
             "openapi-3.2.0",
         ])
-        .unwrap_or(Cli {
-            command: Commands::Mcp,
-        });
-        assert!(run_cli_with_writer(parsed_vrt, &mut buf).is_ok());
+        .ok();
+        assert!(parsed_vrt.is_some_and(|cli| run_cli_with_writer(cli, &mut buf).is_ok()));
 
         let bad_vrt = Cli {
             command: Commands::VerifyRoundtrip {
@@ -2595,14 +2547,21 @@ mod tests {
             "# Swagger\n| Object / Feature | Presence |\n| --- | --- |\n| Info | [ ] |\n",
         );
         let _ = std::fs::write(
-            cfg_sync_dir.join("swagger-2.0").join("servers.md"),
-            "# Bad\n| A | B |\n",
-        );
-        let _ = std::fs::write(
             cfg_sync_dir.join(".cdd-conformance.yaml"),
             "standards:\n  - spec: swagger-2.0\n",
         );
         assert!(run_sync(&cfg_sync_dir, None, true, &registry).is_ok());
+        let _ = std::fs::write(
+            cfg_sync_dir.join("swagger-2.0").join("servers.md"),
+            "# Bad\n| A | B |\n",
+        );
+        assert!(run_sync(&cfg_sync_dir, None, true, &registry).is_err());
+        assert!(parse_existing_row_map(
+            Path::new("/nonexistent_checklist_xyz.md"),
+            SpecId::Swagger20,
+            ProfileKind::ClientSdk
+        )
+        .is_err());
 
         #[cfg(unix)]
         {

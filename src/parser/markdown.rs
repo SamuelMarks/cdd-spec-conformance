@@ -91,6 +91,53 @@ pub fn clean_markdown_text(text: &str) -> String {
         .to_string()
 }
 
+/// Splits a Markdown table row by unescaped pipe characters (`|`), preserving `\|` inside cells.
+///
+/// # Arguments
+///
+/// * `line` - Trimmed Markdown table row string.
+///
+/// # Returns
+///
+/// Vector of string slices between unescaped `|` characters.
+#[must_use]
+pub fn split_table_cells(line: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
+            parts.push(&line[start..i]);
+            start = i + 1;
+        }
+    }
+    parts.push(&line[start..]);
+    parts
+}
+
+/// Escapes unescaped pipe characters (`|`) as `\|` inside a Markdown table note string.
+///
+/// # Arguments
+///
+/// * `note` - Raw note text.
+///
+/// # Returns
+///
+/// Escaped note string safe for Markdown table cells.
+#[must_use]
+pub fn escape_unescaped_pipes(note: &str) -> String {
+    let mut s = String::with_capacity(note.len());
+    let mut prev_bs = false;
+    for ch in note.chars() {
+        if ch == '|' && !prev_bs {
+            s.push('\\');
+        }
+        prev_bs = ch == '\\';
+        s.push(ch);
+    }
+    s
+}
+
 /// Parses a specification checklist document into a structured `ChecklistTable`.
 ///
 /// Supports both table-based checklists (`OpenAPI`, Swagger, MCP, Arazzo) and
@@ -916,5 +963,9 @@ line2
             ProfileKind::ClientSdk
         )
         .is_ok());
+
+        let cells = split_table_cells("| a | b\\|c | d |");
+        assert_eq!(cells, vec!["", " a ", " b\\|c ", " d ", ""]);
+        assert_eq!(escape_unescaped_pipes("a|b\\|c"), "a\\|b\\|c");
     }
 }

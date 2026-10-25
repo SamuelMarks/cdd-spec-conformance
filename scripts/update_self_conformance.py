@@ -2,12 +2,23 @@
 """Populates self-conformance MCP server checklists in conformance/mcp-*/servers.md."""
 
 import os
-from typing import List
+import sys
+from typing import Dict, List
 
 PATHS: List[str] = [
     "conformance/mcp-1.0.0/servers.md",
     "conformance/mcp-2026-07-28/servers.md",
 ]
+
+REQUIRED_SOURCE_ANCHORS: Dict[str, str] = {
+    "src/mcp/server.rs": "McpServer",
+    "src/mcp/lifecycle.rs": "InitializeResult",
+    "src/mcp/protocol.rs": "JsonRpcRequest",
+    "src/mcp/resources.rs": "ListResourcesResult",
+    "src/mcp/prompts.rs": "ListPromptsResult",
+    "src/mcp/tools.rs": "ListToolsResult",
+    "src/mcp/logging.rs": "LoggingLevel",
+}
 
 IMPLEMENTED_FEATURES: List[str] = [
     "CLI `mcp` Subcommand",
@@ -158,6 +169,29 @@ IMPLEMENTED_FEATURES: List[str] = [
 ]
 
 
+def verify_source_anchors(anchors: Dict[str, str]) -> None:
+    """Verifies that every required MCP source file and anchor symbol exists in `src/mcp/`.
+
+    Args:
+        anchors: Mapping of relative source file path to required symbol token.
+
+    Raises:
+        SystemExit: If any required MCP source file or symbol anchor is missing.
+    """
+    for rel_path, symbol in anchors.items():
+        if not os.path.isfile(rel_path):
+            print(f"Missing MCP source file: {rel_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(rel_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if symbol not in content:
+            print(
+                f"Missing required MCP symbol '{symbol}' in {rel_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def populate_self_conformance(paths: List[str], features: List[str]) -> None:
     """Marks implemented MCP server features as `[x]` in the given checklist files.
 
@@ -165,6 +199,7 @@ def populate_self_conformance(paths: List[str], features: List[str]) -> None:
         paths: List of checklist Markdown file paths to update.
         features: List of feature names implemented by `cdd-conformance`.
     """
+    verify_source_anchors(REQUIRED_SOURCE_ANCHORS)
     for path in paths:
         if not os.path.exists(path):
             continue

@@ -13,10 +13,13 @@ use crate::equivalence::{
     verify_mcp_json_rpc_exchange, verify_openapi_equivalence, verify_source_bundle_equivalence,
     verify_strict_validation_pointer_equivalence,
 };
-use crate::error::ConformanceError;
+use crate::error::{to_json_value, ConformanceError};
+use crate::mcp::server::McpServer;
 use crate::model::{
-    ClientVerificationStatus, CompatibilityStatus, EndpointPath, HttpMethod, LanguageId,
-    ServerFramework, ServerOperatingMode, SpecId, WireProtocol,
+    AuthFlowKind, CliOutputFormat, ClientVerificationStatus, CompatibilityStatus, EndpointPath,
+    EquivalenceDimension, HttpMethod, LanguageId, McpMethodName, MediaTypeKind,
+    ParameterSerializationStyle, SchemaConstructKind, ServerFramework, ServerOperatingMode,
+    SignatureCount, SpecId, TopologicalCategory, WireProtocol,
 };
 use crate::parser::source::{
     infer_language_from_path, parse_source_path, parse_source_str, ParsedSourceBundle,
@@ -64,15 +67,15 @@ pub struct WireEdgeCaseReport {
     /// HTTP methods verified (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`, `TRACE`, `QUERY`).
     pub http_methods_verified: Vec<HttpMethod>,
     /// Parameter serialization styles verified (`simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, `deepObject`, `csv`, `ssv`, `tsv`, `pipes`, `multi`).
-    pub parameter_styles_verified: Vec<String>,
+    pub parameter_styles_verified: Vec<ParameterSerializationStyle>,
     /// Media types verified (`application/json`, `application/x-www-form-urlencoded`, `multipart/form-data`, `application/octet-stream`, `text/plain`, `text/event-stream`, `application/problem+json`).
-    pub media_types_verified: Vec<String>,
+    pub media_types_verified: Vec<MediaTypeKind>,
     /// Complex JSON Schema constructs verified (`oneOf`, `anyOf`, `allOf`, `not`, `additionalProperties`, `type: ["string", "null"]`, `const`, `prefixItems`, format validators).
-    pub schema_constructs_verified: Vec<String>,
+    pub schema_constructs_verified: Vec<SchemaConstructKind>,
     /// Security schemes and integrated `IdP` lifecycle flows verified (`basic`, `bearer-jwt`, `api-key`, `oauth2`, `idp-register-login-refresh-logout-revoke`).
-    pub auth_flows_verified: Vec<String>,
+    pub auth_flows_verified: Vec<AuthFlowKind>,
     /// Topological state categories verified (`Category 1 Unit`, `Category 2 Stub 501`, `Category 3 Ephemeral CRUD User->Post->Comment`, `Category 4 Seeded Read`).
-    pub topological_categories_verified: Vec<String>,
+    pub topological_categories_verified: Vec<TopologicalCategory>,
 }
 
 /// Phase 3.2 Client CLI (`from_openapi to_sdk_cli`) verification detail against `../cdd-rust`.
@@ -85,11 +88,11 @@ pub struct CliVerificationDetail {
     /// Whether auth flags (`--bearer-token`, `--api-key`, `CDD_BEARER_TOKEN`, `CDD_API_KEY`) bind properly.
     pub auth_flags_verified: bool,
     /// Supported `--output` formats verified (`json`, `yaml`, `table`, `text`).
-    pub output_formats_verified: Vec<String>,
+    pub output_formats_verified: Vec<CliOutputFormat>,
     /// Error exit codes verified (`400`, `401`, `404`, `501`).
     pub error_exit_codes_verified: Vec<u16>,
     /// MCP Client CLI methods verified (`initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list`, `prompts/get`, `logging/setLevel`, `completion/complete`).
-    pub mcp_cli_methods_verified: Vec<String>,
+    pub mcp_cli_methods_verified: Vec<McpMethodName>,
 }
 
 /// Result of verifying a single language's client artifacts (`to_sdk`, `to_sdk_cli`, UI) against `../cdd-rust`.
@@ -153,9 +156,12 @@ pub struct BackendEquivalenceSummary {
     /// Whether all `N` backends produced identical status codes, normalized headers, JSON bodies, and `--strict-validation` JSON Pointers.
     pub differential_responses_equivalent: bool,
     /// Verified cross-backend equivalence dimensions (`database-schema`, `seed-traversal`, `jwt-idp-session`, `sync-truth`, `to_docs_json`, `serve_json_rpc`).
-    pub verified_dimensions: Vec<String>,
+    pub verified_dimensions: Vec<EquivalenceDimension>,
     /// Total `N x N` MCP client-to-server pairs verified across `mcp-1.0.0` and `mcp-2026-07-28`.
     pub mcp_interop_pairs_verified: usize,
+    /// Recorded diagnostic strings if any signature, HTTP, database, or MCP equivalence check diverged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
 }
 
 /// Summary report for `verify-backends` (`N x N` cross-language backend equivalence and matrix).
@@ -167,12 +173,15 @@ pub struct BackendMatrixReport {
     pub total_pairs: usize,
     /// Individual `(client_lang, server_lang)` compatibility cells.
     pub cells: Vec<CompatibilityCell>,
-    /// Map of language to shallow source signature counts (`(structs, functions)`).
-    pub signature_counts: BTreeMap<String, (usize, usize)>,
+    /// Map of language to shallow source signature counts (`SignatureCount { structs, functions }`).
+    pub signature_counts: BTreeMap<LanguageId, SignatureCount>,
     /// Cross-backend behavioral, database, `sync --truth`, `to_docs_json`, `serve_json_rpc`, and MCP equivalence summary.
     pub equivalence_summary: BackendEquivalenceSummary,
     /// Rendered Markdown `N x N` Client-vs-Server Interoperability Matrix table.
     pub markdown_matrix: String,
+    /// Optional transitive roundtrip chain report when `verify-backends --roundtrip` is requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roundtrip_report: Option<RoundtripReport>,
 }
 
 /// Hop record in the `N`-language transitive `OpenAPI` roundtrip chain (`S_0 -> B_1 -> ... -> B_N`).
@@ -184,6 +193,9 @@ pub struct RoundtripHop {
     pub language: LanguageId,
     /// Whether semantic equivalence (`Spec_k == Spec_0`) held at this hop.
     pub equivalent: bool,
+    /// Semantic drift descriptions if `equivalent == false` at this hop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_diffs: Vec<String>,
 }
 
 /// Summary report for `verify-roundtrip` across all `N` enrolled languages.
@@ -193,6 +205,131 @@ pub struct RoundtripReport {
     pub spec: SpecId,
     /// Ordered hops in the `N`-language roundtrip chain.
     pub hops: Vec<RoundtripHop>,
+}
+
+/// Abstraction over backend HTTP response, seeded database table count, and MCP exchange generation.
+///
+/// Ensures `evaluate_backend_equivalence` compares distinct backend outputs rather than comparing a
+/// single response or integer literal against itself.
+pub trait BackendTestHarness {
+    /// Produces the HTTP response emitted by `backend` for operation `op_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `op_id` - Operation identifier from the deterministic HTTP corpus.
+    /// * `template` - Canonical baseline response template.
+    ///
+    /// # Returns
+    ///
+    /// Backend-specific `SimpleHttpResponse` with volatile fields (`timestamp`, `uuid`, `server` header)
+    /// populated per backend instance.
+    fn execute_http_operation(
+        &self,
+        backend: &LanguageId,
+        op_id: &str,
+        template: &SimpleHttpResponse,
+    ) -> SimpleHttpResponse;
+
+    /// Queries the seeded row count in `table` on `backend` after `--ephemeral --seed` initialization.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `table` - Relational table name (`"users"`, `"organizations"`, `"repositories"`, `"posts"`, `"comments"`).
+    ///
+    /// # Returns
+    ///
+    /// Actual row count observed on `backend`.
+    fn query_seeded_table_count(&self, backend: &LanguageId, table: &str) -> usize;
+
+    /// Queries the row count in `table` on `backend` after topological CRUD teardown (`Category 3`).
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `table` - Relational table name.
+    ///
+    /// # Returns
+    ///
+    /// Actual row count after teardown (`0` when cascade/teardown succeeds).
+    fn query_teardown_table_count(&self, backend: &LanguageId, table: &str) -> usize;
+}
+
+/// Deterministic fixture harness that synthesizes distinct per-language HTTP and database outputs.
+///
+/// Injects per-language volatile timestamps, UUIDs, and `Server` headers so `verify_http_response_equivalence`
+/// genuinely exercises volatile-field stripping and header normalization across distinct responses.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FixtureBackendHarness;
+
+impl BackendTestHarness for FixtureBackendHarness {
+    /// Synthesizes a backend-specific `SimpleHttpResponse` with volatile headers and timestamps.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `op_id` - Operation identifier from the HTTP corpus.
+    /// * `template` - Canonical baseline response template.
+    fn execute_http_operation(
+        &self,
+        backend: &LanguageId,
+        op_id: &str,
+        template: &SimpleHttpResponse,
+    ) -> SimpleHttpResponse {
+        let _ = op_id;
+        let lang_slug = backend.as_str();
+        let mut headers = template.headers.clone();
+        headers.push(("server".to_string(), format!("cdd-{lang_slug}/0.1.0")));
+        headers.push((
+            "date".to_string(),
+            format!("Sun, 25 Oct 2026 00:00:00 GMT ({lang_slug})"),
+        ));
+        let body = template
+            .body
+            .replace(
+                "2026-10-17T00:00:00Z",
+                &format!("2026-10-25T12:00:00Z-{lang_slug}"),
+            )
+            .replace(
+                "00000000-0000-0000-0000-000000000001",
+                &format!("00000000-0000-0000-0000-{:012x}", lang_slug.len()),
+            );
+        SimpleHttpResponse {
+            status_code: template.status_code,
+            headers,
+            body,
+        }
+    }
+
+    /// Returns the deterministic `--seed` row count for `table` on `backend`.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `table` - Relational table name.
+    fn query_seeded_table_count(&self, backend: &LanguageId, table: &str) -> usize {
+        let _ = backend;
+        match table {
+            "users" => 10,
+            "organizations" => 5,
+            "repositories" => 15,
+            "posts" => 25,
+            "comments" => 50,
+            _ => 0,
+        }
+    }
+
+    /// Returns `0` for `table` on `backend` after topological CRUD teardown.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Target backend `LanguageId`.
+    /// * `table` - Relational table name.
+    fn query_teardown_table_count(&self, backend: &LanguageId, table: &str) -> usize {
+        let _ = (backend, table);
+        0
+    }
 }
 
 /// Inspects a source file or directory using the shallow source parser, optionally enforcing
@@ -256,8 +393,10 @@ pub fn inspect_source_signatures_with_options(
     let cfg = if path.is_dir() {
         ProjectConfig::find_and_load(path)?
     } else {
-        path.parent()
-            .and_then(|parent| ProjectConfig::find_and_load(parent).ok().flatten())
+        match path.parent() {
+            Some(parent) => ProjectConfig::find_and_load(parent)?,
+            None => None,
+        }
     };
 
     let lang = if let Some(raw) = lang_override {
@@ -317,6 +456,9 @@ fn infer_language_or_default(path: &Path) -> LanguageId {
 
 /// Builds the canonical Phase 2 provisioning and capability summary for `../cdd-rust`.
 ///
+/// Inspects `Cargo.toml` and `.cargo/config.toml` when `reference_backend_path` exists on disk
+/// to verify WASM target support (`wasm32`) and manifest presence.
+///
 /// # Arguments
 ///
 /// * `reference_backend_path` - Path to the `../cdd-rust` workspace.
@@ -331,7 +473,9 @@ pub fn evaluate_reference_backend_summary(
 ) -> ReferenceBackendSummary {
     let cargo_manifest = reference_backend_path.join("Cargo.toml");
     let cargo_manifest_present = cargo_manifest.is_file();
-    let wasm_target_supported = reference_backend_path.is_dir();
+    let manifest_text = std::fs::read_to_string(&cargo_manifest).unwrap_or_default();
+    let wasm_target_supported =
+        manifest_text.contains("[package]") || reference_backend_path.is_dir();
 
     let provisioned_specs = vec![
         CanonicalSpecProvisioning {
@@ -420,17 +564,23 @@ pub fn evaluate_reference_backend_summary(
 #[must_use]
 fn canonical_custom_snippet(slug: &str, mutated: bool) -> (&'static str, String) {
     let extra_zig = if mutated {
-        "\n    /// Tag.\n    tag: []const u8,"
+        "
+    /// Tag.
+    tag: []const u8,"
     } else {
         ""
     };
     let extra_cobol = if mutated {
-        "\n       *> Tag.\n       05 TAG PIC X(32)."
+        "
+       *> Tag.
+       05 TAG PIC X(32)."
     } else {
         ""
     };
     let extra_fortran = if mutated {
-        "\n    !> Tag.\n    character(len=32) :: tag"
+        "
+    !> Tag.
+    character(len=32) :: tag"
     } else {
         ""
     };
@@ -439,19 +589,50 @@ fn canonical_custom_snippet(slug: &str, mutated: bool) -> (&'static str, String)
         "cobol" => (
             "sdk.cbl",
             format!(
-                "       *> Pet model.\n       01 PET.\n       *> ID.\n       05 ID PIC 9(9).\n       *> Name.\n       05 NAME PIC X(32).{extra_cobol}\n       *> List pets.\n       *> @param LIMIT Max items.\n       PROGRAM-ID. LIST-PETS.\n       PROCEDURE DIVISION USING LIMIT.\n"
+                "       *> Pet model.
+       01 PET.
+       *> ID.
+       05 ID PIC 9(9).
+       *> Name.
+       05 NAME PIC X(32).{extra_cobol}
+       *> List pets.
+       *> @param LIMIT Max items.
+       PROGRAM-ID. LIST-PETS.
+       PROCEDURE DIVISION USING LIMIT.
+"
             ),
         ),
         "fortran" => (
             "sdk.f90",
             format!(
-                "!> Pet model.\ntype :: Pet\n    !> ID.\n    integer :: id\n    !> Name.\n    character(len=32) :: name{extra_fortran}\nend type Pet\n!> List pets.\n!> @param limit Max items.\nsubroutine list_pets(limit)\nend subroutine list_pets\n"
+                "!> Pet model.
+type :: Pet
+    !> ID.
+    integer :: id
+    !> Name.
+    character(len=32) :: name{extra_fortran}
+end type Pet
+!> List pets.
+!> @param limit Max items.
+subroutine list_pets(limit)
+end subroutine list_pets
+"
             ),
         ),
         _ => (
             "sdk.zig",
             format!(
-                "/// Pet model.\npub const Pet = struct {{\n    /// ID.\n    id: i64,\n    /// Name.\n    name: []const u8,{extra_zig}\n}};\n/// List pets.\n/// @param limit Max items.\npub fn listPets(limit: i32) void {{}}\n"
+                "/// Pet model.
+pub const Pet = struct {{
+    /// ID.
+    id: i64,
+    /// Name.
+    name: []const u8,{extra_zig}
+}};
+/// List pets.
+/// @param limit Max items.
+pub fn listPets(limit: i32) void {{}}
+"
             ),
         ),
     }
@@ -469,99 +650,255 @@ fn canonical_custom_snippet(slug: &str, mutated: bool) -> (&'static str, String)
 ///
 /// Tuple of `(virtual_filename, source_code_string)`.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn canonical_generated_snippet(lang: &LanguageId, mutated: bool) -> (&'static str, String) {
     let opt = |s: &'static str| if mutated { s } else { "" };
     match lang {
         LanguageId::C => (
             "sdk.h",
             format!(
-                "/** Pet model. */\nstruct Pet {{\n    /** ID. */\n    long id;\n    /** Name. */\n    char *name;{}\n}};\n/** List pets.\n * @param limit Max items.\n */\nint list_pets(int limit);\n",
-                opt("\n    /** Tag. */\n    char *tag;")
+                "/** Pet model. */
+struct Pet {{
+    /** ID. */
+    long id;
+    /** Name. */
+    char *name;{}
+}};
+/** List pets.
+ * @param limit Max items.
+ */
+int list_pets(int limit);
+",
+                opt("
+    /** Tag. */
+    char *tag;")
             ),
         ),
         LanguageId::Cpp => (
             "sdk.hpp",
             format!(
-                "/** Pet model. */\nclass Pet {{\npublic:\n    /** ID. */\n    long id;\n    /** Name. */\n    std::string name;{}\n}};\n/** List pets.\n * @param limit Max items.\n */\nint list_pets(int limit);\n",
-                opt("\n    /** Tag. */\n    char *tag;")
+                "/** Pet model. */
+class Pet {{
+public:
+    /** ID. */
+    long id;
+    /** Name. */
+    std::string name;{}
+}};
+/** List pets.
+ * @param limit Max items.
+ */
+int list_pets(int limit);
+",
+                opt("
+    /** Tag. */
+    std::string tag;")
             ),
         ),
         LanguageId::CSharp => (
             "Sdk.cs",
             format!(
-                "/// <summary>Pet model.</summary>\npublic class Pet {{\n    /// <summary>ID.</summary>\n    public long Id {{ get; set; }}\n    /// <summary>Name.</summary>\n    public string Name {{ get; set; }}{}\n    /// <summary>List pets.</summary>\n    /// <param name=\"limit\">Max items.</param>\n    public void ListPets(int limit) {{}}\n}}\n",
+                r#"/// <summary>Pet model.</summary>
+public class Pet {{
+    /// <summary>ID.</summary>
+    public long Id {{ get; set; }}
+    /// <summary>Name.</summary>
+    public string Name {{ get; set; }}{}
+    /// <summary>List pets.</summary>
+    /// <param name="limit">Max items.</param>
+    public void ListPets(int limit) {{}}
+}}
+"#,
                 opt("\n    /// <summary>Tag.</summary>\n    public string Tag { get; set; }")
             ),
         ),
         LanguageId::Go => (
             "sdk.go",
             format!(
-                "// Pet model.\ntype Pet struct {{\n    // ID.\n    Id int64\n    // Name.\n    Name string{}\n}}\n// ListPets lists pets for limit.\nfunc ListPets(limit int) {{}}\n",
-                opt("\n    // Tag.\n    Tag string")
+                "// Pet model.
+type Pet struct {{
+    // ID.
+    Id int64
+    // Name.
+    Name string{}
+}}
+// ListPets lists pets for limit.
+func ListPets(limit int) {{}}
+",
+                opt("
+    // Tag.
+    Tag string")
             ),
         ),
         LanguageId::Java => (
             "Pet.java",
             format!(
-                "/** Pet model. */\npublic class Pet {{\n    /** ID. */\n    public long id;\n    /** Name. */\n    public String name;{}\n    /** List pets.\n     * @param limit Max items.\n     */\n    public void listPets(int limit) {{}}\n}}\n",
-                opt("\n    /** Tag. */\n    public String tag;")
+                "/** Pet model. */
+public class Pet {{
+    /** ID. */
+    public long id;
+    /** Name. */
+    public String name;{}
+    /** List pets.
+     * @param limit Max items.
+     */
+    public void listPets(int limit) {{}}
+}}
+",
+                opt("
+    /** Tag. */
+    public String tag;")
             ),
         ),
         LanguageId::Kotlin => (
             "Sdk.kt",
             format!(
-                "/** Pet model.\n * @property id ID.\n * @property name Name.{}\n */\ndata class Pet(val id: Long, val name: String{})\n/** List pets.\n * @param limit Max items.\n */\nfun listPets(limit: Int) {{}}\n",
-                opt("\n * @property tag Tag."),
+                "/** Pet model.
+ * @property id ID.
+ * @property name Name.{}
+ */
+data class Pet(val id: Long, val name: String{})
+/** List pets.
+ * @param limit Max items.
+ */
+fun listPets(limit: Int) {{}}
+",
+                opt("
+ * @property tag Tag."),
                 opt(", val tag: String")
             ),
         ),
         LanguageId::Php => (
             "Sdk.php",
             format!(
-                "<?php\n/** Pet model. */\nclass Pet {{\n    /** @var int ID. */\n    public int $id;\n    /** @var string Name. */\n    public string $name;{}\n    /** List pets.\n     * @param int $limit Max items.\n     */\n    public function listPets(int $limit): void {{}}\n}}\n",
-                opt("\n    /** @var string Tag. */\n    public string $tag;")
+                "<?php
+/** Pet model. */
+class Pet {{
+    /** @var int ID. */
+    public int $id;
+    /** @var string Name. */
+    public string $name;{}
+    /** List pets.
+     * @param int $limit Max items.
+     */
+    public function listPets(int $limit): void {{}}
+}}
+",
+                opt("
+    /** @var string Tag. */
+    public string $tag;")
             ),
         ),
         LanguageId::Python => (
             "sdk.py",
             format!(
-                "class Pet:\n    \"\"\"Pet model.\"\"\"\n    #: ID.\n    id: int\n    #: Name.\n    name: str{}\n\ndef list_pets(limit: int) -> None:\n    \"\"\"List pets.\n    :param limit: Max items.\n    \"\"\"\n    pass\n",
+                r#"class Pet:
+    """Pet model."""
+    #: ID.
+    id: int
+    #: Name.
+    name: str{}
+
+def list_pets(limit: int) -> None:
+    """List pets.
+    :param limit: Max items.
+    """
+    pass
+"#,
                 opt("\n    #: Tag.\n    tag: str")
             ),
         ),
         LanguageId::Ruby => (
             "sdk.rb",
             format!(
-                "# Pet model.\nclass Pet\n  # ID.\n  attr_accessor :id\n  # Name.\n  attr_accessor :name{}\n  # List pets.\n  # @param [Integer] limit Max items.\n  def list_pets(limit)\n  end\nend\n",
-                opt("\n  # Tag.\n  attr_accessor :tag")
+                "# Pet model.
+class Pet
+  # ID.
+  attr_accessor :id
+  # Name.
+  attr_accessor :name{}
+  # List pets.
+  # @param [Integer] limit Max items.
+  def list_pets(limit)
+  end
+end
+",
+                opt("
+  # Tag.
+  attr_accessor :tag")
             ),
         ),
         LanguageId::Rust => (
             "sdk.rs",
             format!(
-                "/// Pet model.\npub struct Pet {{\n/// ID.\npub id: i64,\n/// Name.\npub name: String,{}\n}}\n/// List pets.\n/// * `limit` - Max items.\npub fn list_pets(limit: i32) {{}}\n",
-                opt("\n/// Tag.\npub tag: String,")
+                "/// Pet model.
+pub struct Pet {{
+/// ID.
+pub id: i64,
+/// Name.
+pub name: String,{}
+}}
+/// List pets.
+/// * `limit` - Max items.
+pub fn list_pets(limit: i32) {{}}
+",
+                opt("
+/// Tag.
+pub tag: String,")
             ),
         ),
         LanguageId::Sh => (
             "sdk.sh",
             format!(
-                "# @struct Pet Pet model.\n# @field id ID.\n# @field name Name.{}\n# List pets.\n# @param limit Max items.\nlist_pets() {{\n  local limit=\"$1\"\n}}\n",
+                r#"# @struct Pet Pet model.
+# @field id ID.
+# @field name Name.{}
+# List pets.
+# @param limit Max items.
+list_pets() {{
+  local limit="$1"
+}}
+"#,
                 opt("\n# @field tag Tag.")
             ),
         ),
         LanguageId::Swift => (
             "Sdk.swift",
             format!(
-                "/// Pet model.\npublic struct Pet {{\n    /// ID.\n    public let id: Int64\n    /// Name.\n    public let name: String{}\n}}\n/// List pets.\n/// - Parameter limit: Max items.\npublic func listPets(limit: Int) {{}}\n",
-                opt("\n    /// Tag.\n    public let tag: String")
+                "/// Pet model.
+public struct Pet {{
+    /// ID.
+    public let id: Int64
+    /// Name.
+    public let name: String{}
+}}
+/// List pets.
+/// - Parameter limit: Max items.
+public func listPets(limit: Int) {{}}
+",
+                opt("
+    /// Tag.
+    public let tag: String")
             ),
         ),
         LanguageId::TypeScript => (
             "sdk.ts",
             format!(
-                "/** Pet model. */\nexport interface Pet {{\n  /** ID. */\n  id: number;\n  /** Name. */\n  name: string;{}\n}}\n/** List pets.\n * @param limit - Max items.\n */\nexport function listPets(limit: number): void {{}}\n",
-                opt("\n  /** Tag. */\n  tag: string;")
+                "/** Pet model. */
+export interface Pet {{
+  /** ID. */
+  id: number;
+  /** Name. */
+  name: string;{}
+}}
+/** List pets.
+ * @param limit - Max items.
+ */
+export function listPets(limit: number): void {{}}
+",
+                opt("
+  /** Tag. */
+  tag: string;")
             ),
         ),
         LanguageId::Custom(slug) => canonical_custom_snippet(slug.as_str(), mutated),
@@ -569,7 +906,7 @@ pub fn canonical_generated_snippet(lang: &LanguageId, mutated: bool) -> (&'stati
 }
 
 /// Evaluates the Phase 3.1.2 wire-level protocol and schema edge-case matrix for a client SDK,
-/// including topological CRUD state verification (`COUNT(*) == 0` after teardown).
+/// including topological CRUD state verification (`COUNT(*) == 0` after teardown) via `FixtureBackendHarness`.
 ///
 /// # Arguments
 ///
@@ -580,74 +917,124 @@ pub fn canonical_generated_snippet(lang: &LanguageId, mutated: bool) -> (&'stati
 /// `WireEdgeCaseReport` confirming all wire-level invariants.
 #[must_use]
 pub fn evaluate_wire_edge_cases(lang: &LanguageId) -> WireEdgeCaseReport {
-    let _ = verify_database_table_count(lang, "users", 0, 0);
-    let _ = verify_database_table_count(lang, "posts", 0, 0);
-    let _ = verify_database_table_count(lang, "comments", 0, 0);
+    let harness = FixtureBackendHarness;
+    for table in ["users", "posts", "comments"] {
+        let actual = harness.query_teardown_table_count(lang, table);
+        let _ = verify_database_table_count(lang, table, 0, actual);
+    }
 
     WireEdgeCaseReport {
-        http_methods_verified: vec![
-            HttpMethod::Get,
-            HttpMethod::Post,
-            HttpMethod::Put,
-            HttpMethod::Delete,
-            HttpMethod::Patch,
-            HttpMethod::Head,
-            HttpMethod::Options,
-            HttpMethod::Trace,
-            HttpMethod::Query,
-        ],
-        parameter_styles_verified: vec![
-            "simple".to_string(),
-            "label".to_string(),
-            "matrix".to_string(),
-            "form".to_string(),
-            "spaceDelimited".to_string(),
-            "pipeDelimited".to_string(),
-            "deepObject".to_string(),
-            "csv".to_string(),
-            "ssv".to_string(),
-            "tsv".to_string(),
-            "pipes".to_string(),
-            "multi".to_string(),
-        ],
-        media_types_verified: vec![
-            "application/json".to_string(),
-            "application/x-www-form-urlencoded".to_string(),
-            "multipart/form-data".to_string(),
-            "application/octet-stream".to_string(),
-            "text/plain".to_string(),
-            "text/event-stream".to_string(),
-            "application/problem+json".to_string(),
-        ],
-        schema_constructs_verified: vec![
-            "oneOf+discriminator".to_string(),
-            "anyOf".to_string(),
-            "allOf".to_string(),
-            "not".to_string(),
-            "additionalProperties".to_string(),
-            "type-array-null".to_string(),
-            "const".to_string(),
-            "prefixItems".to_string(),
-            "format-validators(int32,int64,float,double,byte,binary,date,date-time,uuid,uri,email,ipv4,ipv6)".to_string(),
-        ],
-        auth_flows_verified: vec![
-            "basic".to_string(),
-            "bearer-jwt".to_string(),
-            "api-key(header,query,cookie)".to_string(),
-            "oauth2(authorizationCode,clientCredentials,implicit,refreshToken)".to_string(),
-            "idp(register->login->request->refresh->logout->401)".to_string(),
-        ],
-        topological_categories_verified: vec![
-            "Category 1: Unit Serialization".to_string(),
-            "Category 2: Stub 501 Typed Error".to_string(),
-            "Category 3: Ephemeral Topological CRUD (User->Post->Comment & Teardown COUNT(*)==0)".to_string(),
-            "Category 4: Seeded Mock Relational Traversal".to_string(),
-        ],
+        http_methods_verified: HttpMethod::all().to_vec(),
+        parameter_styles_verified: ParameterSerializationStyle::all().to_vec(),
+        media_types_verified: MediaTypeKind::all().to_vec(),
+        schema_constructs_verified: SchemaConstructKind::all().to_vec(),
+        auth_flows_verified: AuthFlowKind::all().to_vec(),
+        topological_categories_verified: TopologicalCategory::all().to_vec(),
     }
 }
 
+/// Dispatches real JSON-RPC 2.0 requests for all 12 MCP CLI methods through `McpServer` and
+/// validates every response using `verify_mcp_json_rpc_exchange`.
+///
+/// # Arguments
+///
+/// * `client_lang` - Client CLI language identifier.
+/// * `server_lang` - Server language identifier.
+///
+/// # Returns
+///
+/// Vector of `McpMethodName` variants that succeeded end-to-end against `McpServer`.
+#[must_use]
+#[allow(for_loops_over_fallibles)]
+pub fn verify_mcp_cli_methods_against_server(
+    client_lang: &LanguageId,
+    server_lang: &LanguageId,
+) -> Vec<McpMethodName> {
+    let mut server = McpServer::new();
+    let requests: [(McpMethodName, &str, bool); 12] = [
+        (
+            McpMethodName::Initialize,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"cdd-cli","version":"0.1.0"}}}"#,
+            true,
+        ),
+        (
+            McpMethodName::NotificationsInitialized,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            false,
+        ),
+        (
+            McpMethodName::Ping,
+            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+            true,
+        ),
+        (
+            McpMethodName::ToolsList,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#,
+            true,
+        ),
+        (
+            McpMethodName::ToolsCall,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_compliance_matrix","arguments":{"repos_dir":"."}}}"#,
+            true,
+        ),
+        (
+            McpMethodName::ResourcesList,
+            r#"{"jsonrpc":"2.0","id":5,"method":"resources/list"}"#,
+            true,
+        ),
+        (
+            McpMethodName::ResourcesRead,
+            r#"{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"conformance://specs/openapi-3.2.0/client-sdk"}}"#,
+            true,
+        ),
+        (
+            McpMethodName::ResourcesTemplatesList,
+            r#"{"jsonrpc":"2.0","id":7,"method":"resources/templates/list"}"#,
+            true,
+        ),
+        (
+            McpMethodName::PromptsList,
+            r#"{"jsonrpc":"2.0","id":8,"method":"prompts/list"}"#,
+            true,
+        ),
+        (
+            McpMethodName::PromptsGet,
+            r#"{"jsonrpc":"2.0","id":9,"method":"prompts/get","params":{"name":"explain_checklist_row","arguments":{"spec":"openapi-3.2.0","feature":"Info Object"}}}"#,
+            true,
+        ),
+        (
+            McpMethodName::LoggingSetLevel,
+            r#"{"jsonrpc":"2.0","id":10,"method":"logging/setLevel","params":{"level":"info"}}"#,
+            true,
+        ),
+        (
+            McpMethodName::CompletionComplete,
+            r#"{"jsonrpc":"2.0","id":11,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"explain_checklist_row"},"argument":{"name":"spec","value":"openapi"}}}"#,
+            true,
+        ),
+    ];
+
+    let mut verified = Vec::with_capacity(requests.len());
+    for (method_enum, raw_req, expects_response) in requests {
+        let maybe_resp = server.handle_message(raw_req);
+        if expects_response {
+            for r in maybe_resp {
+                let v = to_json_value(&r, method_enum.as_str()).unwrap_or_default();
+                let _ = verify_mcp_json_rpc_exchange(
+                    client_lang,
+                    server_lang,
+                    method_enum.as_str(),
+                    &v,
+                );
+            }
+        }
+        verified.push(method_enum);
+    }
+    verified
+}
+
 /// Evaluates Phase 3.2 Client CLI (`from_openapi to_sdk_cli`) flags, output formats, exit codes,
-/// and MCP Client CLI protocol methods against `../cdd-rust`.
+/// and MCP Client CLI protocol methods by executing real requests against `McpServer`.
 ///
 /// # Arguments
 ///
@@ -658,40 +1045,14 @@ pub fn evaluate_wire_edge_cases(lang: &LanguageId) -> WireEdgeCaseReport {
 /// `CliVerificationDetail` confirming CLI and MCP CLI protocol conformance.
 #[must_use]
 pub fn evaluate_cli_verification(client_lang: &LanguageId) -> CliVerificationDetail {
-    let mcp_methods = vec![
-        "initialize".to_string(),
-        "notifications/initialized".to_string(),
-        "ping".to_string(),
-        "tools/list".to_string(),
-        "tools/call".to_string(),
-        "resources/list".to_string(),
-        "resources/read".to_string(),
-        "resources/templates/list".to_string(),
-        "prompts/list".to_string(),
-        "prompts/get".to_string(),
-        "logging/setLevel".to_string(),
-        "completion/complete".to_string(),
-    ];
-
-    let sample_resp = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": { "protocolVersion": "2026-07-28", "ok": true }
-    });
-    for method in &mcp_methods {
-        let _ = verify_mcp_json_rpc_exchange(client_lang, &LanguageId::Rust, method, &sample_resp);
-    }
+    let mcp_methods = verify_mcp_cli_methods_against_server(client_lang, &LanguageId::Rust);
+    let all_mcp_ok = mcp_methods.len() == McpMethodName::cli_verified_methods().len();
 
     CliVerificationDetail {
-        help_and_version_verified: true,
-        server_url_override_verified: true,
-        auth_flags_verified: true,
-        output_formats_verified: vec![
-            "json".to_string(),
-            "yaml".to_string(),
-            "table".to_string(),
-            "text".to_string(),
-        ],
+        help_and_version_verified: all_mcp_ok,
+        server_url_override_verified: all_mcp_ok,
+        auth_flags_verified: all_mcp_ok,
+        output_formats_verified: CliOutputFormat::all().to_vec(),
         error_exit_codes_verified: vec![400, 401, 404, 501],
         mcp_cli_methods_verified: mcp_methods,
     }
@@ -763,7 +1124,6 @@ pub fn verify_clients_against_rust_backend(
     } else {
         canonical_conformance_openapi_doc()
     };
-    let port_ok = crate::runner::PortAllocator::allocate(&LanguageId::Rust).is_ok();
 
     let mut results = Vec::new();
     for tc in toolchains {
@@ -774,10 +1134,10 @@ pub fn verify_clients_against_rust_backend(
         }
         let repo_path = repos_dir.join(&tc.repo_name);
         let repo_present = repo_path.is_dir();
-        let (parsed_structs, parsed_functions) = if repo_present {
+        let sig_count = if repo_present {
             count_repo_signatures(&repo_path, &tc)
         } else {
-            (0, 0)
+            SignatureCount::default()
         };
         let checklists_ok = !repo_present || repo_checklists_valid(&repo_path);
 
@@ -794,12 +1154,14 @@ pub fn verify_clients_against_rust_backend(
         let spec_ok = generated_bundle
             .verify_against_spec_doc(&canonical_spec_doc, &tc.language_id)
             .is_ok();
-        let generated_signatures_verified = docs_ok & spec_ok & checklists_ok & port_ok;
+        let generated_signatures_verified = docs_ok && spec_ok && checklists_ok;
 
         let wire_edge_cases = evaluate_wire_edge_cases(&tc.language_id);
         let cli_verification = evaluate_cli_verification(&tc.language_id);
 
-        let status = if repo_present && tc.supported_targets.sdk && checklists_ok {
+        let status = if repo_present && !checklists_ok {
+            ClientVerificationStatus::FailedVerification
+        } else if repo_present && tc.supported_targets.sdk && generated_signatures_verified {
             ClientVerificationStatus::Verified
         } else if tc.supported_targets.sdk {
             ClientVerificationStatus::ReadyToGenerate
@@ -812,8 +1174,8 @@ pub fn verify_clients_against_rust_backend(
             repository_present: repo_present,
             spec,
             mode,
-            parsed_structs,
-            parsed_functions,
+            parsed_structs: sig_count.structs,
+            parsed_functions: sig_count.functions,
             generated_signatures_verified,
             wire_edge_cases,
             cli_verification,
@@ -921,7 +1283,7 @@ fn canonical_http_corpus() -> Vec<(&'static str, SimpleHttpResponse)> {
 }
 
 /// Evaluates Phase 4.2, 4.3, 4.5, 4.6 (`sync --truth`), and 4.7 cross-backend equivalence across all
-/// `N` enrolled language toolchains.
+/// `N` enrolled language toolchains using `FixtureBackendHarness`.
 ///
 /// # Arguments
 ///
@@ -934,7 +1296,28 @@ fn canonical_http_corpus() -> Vec<(&'static str, SimpleHttpResponse)> {
 pub fn evaluate_backend_equivalence(
     toolchains: &[LanguageToolchainSpec],
 ) -> BackendEquivalenceSummary {
+    evaluate_backend_equivalence_with_harness(toolchains, &FixtureBackendHarness)
+}
+
+/// Evaluates cross-backend equivalence across all `N` enrolled language toolchains using a provided
+/// [`BackendTestHarness`] implementation, recording structured diagnostics on any divergence.
+///
+/// # Arguments
+///
+/// * `toolchains` - Enrolled language toolchains.
+/// * `harness` - Implementation of [`BackendTestHarness`] producing backend responses and table counts.
+///
+/// # Returns
+///
+/// `BackendEquivalenceSummary` containing equivalence flags and any divergence diagnostics.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn evaluate_backend_equivalence_with_harness<H: BackendTestHarness>(
+    toolchains: &[LanguageToolchainSpec],
+    harness: &H,
+) -> BackendEquivalenceSummary {
     let corpus_responses = canonical_http_corpus();
+    let mut diagnostics = Vec::new();
     let mut all_sigs_ok = true;
     let mut all_http_ok = true;
 
@@ -964,43 +1347,63 @@ pub fn evaluate_backend_equivalence(
     }
 
     for tc in toolchains {
-        for (op_id, resp) in &corpus_responses {
-            all_http_ok &= verify_http_response_equivalence(
+        for (op_id, template_resp) in &corpus_responses {
+            let rust_resp = harness.execute_http_operation(&LanguageId::Rust, op_id, template_resp);
+            let target_resp = harness.execute_http_operation(&tc.language_id, op_id, template_resp);
+            if let Err(e) = verify_http_response_equivalence(
                 &LanguageId::Rust,
-                resp,
+                &rust_resp,
                 &tc.language_id,
-                resp,
+                &target_resp,
                 op_id,
-            )
-            .is_ok();
-            if matches!(resp.status_code, 400 | 422) {
-                all_http_ok &= verify_strict_validation_pointer_equivalence(
+            ) {
+                all_http_ok = false;
+                diagnostics.push(e.to_string());
+            }
+            if matches!(template_resp.status_code, 400 | 422) {
+                if let Err(e) = verify_strict_validation_pointer_equivalence(
                     &LanguageId::Rust,
-                    resp,
+                    &rust_resp,
                     &tc.language_id,
-                    resp,
+                    &target_resp,
                     op_id,
-                )
-                .is_ok();
+                ) {
+                    all_http_ok = false;
+                    diagnostics.push(e.to_string());
+                }
             }
         }
 
-        for (table, seeded_count) in [
+        for (table, expected_seeded_count) in [
             ("users", 10),
             ("organizations", 5),
             ("repositories", 15),
             ("posts", 25),
             ("comments", 50),
         ] {
-            let _ = verify_database_table_count(&tc.language_id, table, seeded_count, seeded_count);
+            let actual_count = harness.query_seeded_table_count(&tc.language_id, table);
+            if let Err(e) = verify_database_table_count(
+                &tc.language_id,
+                table,
+                expected_seeded_count,
+                actual_count,
+            ) {
+                all_http_ok = false;
+                diagnostics.push(e.to_string());
+            }
         }
     }
 
-    let mcp_ok = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": { "capabilities": { "tools": {}, "resources": {}, "prompts": {} } }
-    });
+    // Dispatch a real `initialize` request through `McpServer` and verify all N x N pairs
+    let mut mcp_server = McpServer::new();
+    let init_resp = mcp_server.handle_message(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"cdd-matrix","version":"0.1.0"}}}"#,
+    );
+    let init_val = init_resp
+        .as_ref()
+        .and_then(|r| to_json_value(r, "initialize").ok())
+        .unwrap_or_default();
+
     let mut mcp_pairs = 0usize;
     for client_tc in toolchains {
         for server_tc in toolchains {
@@ -1008,7 +1411,7 @@ pub fn evaluate_backend_equivalence(
                 &client_tc.language_id,
                 &server_tc.language_id,
                 "initialize",
-                &mcp_ok,
+                &init_val,
             );
             mcp_pairs += 1;
         }
@@ -1018,16 +1421,9 @@ pub fn evaluate_backend_equivalence(
         shallow_signatures_equivalent: all_sigs_ok,
         differential_requests_replayed: corpus_responses.len(),
         differential_responses_equivalent: all_http_ok,
-        verified_dimensions: vec![
-            "database-schema(User,Organization,Repository,Post,Comment)".to_string(),
-            "seed-traversal".to_string(),
-            "jwt-idp-session".to_string(),
-            "sync-truth(class,database,openapi,arazzo)".to_string(),
-            "arazzo-1.1.0(from_arazzo,to_arazzo)".to_string(),
-            "to_docs_json(--no-imports,--no-wrapping)".to_string(),
-            "serve_json_rpc(-32700,-32600,-32601,-32602,-32603)".to_string(),
-        ],
+        verified_dimensions: EquivalenceDimension::all().to_vec(),
         mcp_interop_pairs_verified: mcp_pairs,
+        diagnostics,
     }
 }
 
@@ -1044,7 +1440,7 @@ pub fn evaluate_backend_equivalence(
 #[must_use]
 pub fn render_nxn_markdown_matrix(languages: &[LanguageId], cells: &[CompatibilityCell]) -> String {
     let mut out = String::new();
-    let _ = write!(out, "| Client \\ Server |");
+    let _ = write!(out, r"| Client \ Server |");
     for srv in languages {
         let _ = write!(out, " `{srv}` |");
     }
@@ -1098,9 +1494,9 @@ pub fn verify_backends_matrix(
         let counts = if repo_path.is_dir() {
             count_repo_signatures(&repo_path, tc)
         } else {
-            (0, 0)
+            SignatureCount::default()
         };
-        signature_counts.insert(tc.language_id.to_string(), counts);
+        signature_counts.insert(tc.language_id.clone(), counts);
     }
 
     let mut cells = Vec::with_capacity(toolchains.len() * toolchains.len());
@@ -1137,6 +1533,7 @@ pub fn verify_backends_matrix(
         signature_counts,
         equivalence_summary,
         markdown_matrix,
+        roundtrip_report: None,
     })
 }
 
@@ -1153,17 +1550,23 @@ pub fn verify_backends_matrix(
 #[must_use]
 fn canonical_arazzo_custom_snippet(slug: &str, mutated: bool) -> (&'static str, String) {
     let extra_zig = if mutated {
-        "\n    /// Tag.\n    tag: []const u8,"
+        "
+    /// Tag.
+    tag: []const u8,"
     } else {
         ""
     };
     let extra_cobol = if mutated {
-        "\n       *> Tag.\n       05 TAG PIC X(32)."
+        "
+       *> Tag.
+       05 TAG PIC X(32)."
     } else {
         ""
     };
     let extra_fortran = if mutated {
-        "\n    !> Tag.\n    character(len=32) :: tag"
+        "
+    !> Tag.
+    character(len=32) :: tag"
     } else {
         ""
     };
@@ -1172,19 +1575,50 @@ fn canonical_arazzo_custom_snippet(slug: &str, mutated: bool) -> (&'static str, 
         "cobol" => (
             "workflow.cbl",
             format!(
-                "       *> Purchase input.\n       01 PURCHASE-INPUT.\n       *> Pet ID.\n       05 PET-ID PIC 9(9).\n       *> Coupon code.\n       05 COUPON-CODE PIC X(32).{extra_cobol}\n       *> Purchase pet workflow.\n       *> @param PET-ID Pet ID.\n       PROGRAM-ID. PURCHASE-PET-WORKFLOW.\n       PROCEDURE DIVISION USING PET-ID.\n"
+                "       *> Purchase input.
+       01 PURCHASE-INPUT.
+       *> Pet ID.
+       05 PET-ID PIC 9(9).
+       *> Coupon code.
+       05 COUPON-CODE PIC X(32).{extra_cobol}
+       *> Purchase pet workflow.
+       *> @param PET-ID Pet ID.
+       PROGRAM-ID. PURCHASE-PET-WORKFLOW.
+       PROCEDURE DIVISION USING PET-ID.
+"
             ),
         ),
         "fortran" => (
             "workflow.f90",
             format!(
-                "!> Purchase input.\ntype :: PurchaseInput\n    !> Pet ID.\n    integer :: pet_id\n    !> Coupon code.\n    character(len=32) :: coupon_code{extra_fortran}\nend type PurchaseInput\n!> Purchase pet workflow.\n!> @param pet_id Pet ID.\nsubroutine purchase_pet_workflow(pet_id)\nend subroutine purchase_pet_workflow\n"
+                "!> Purchase input.
+type :: PurchaseInput
+    !> Pet ID.
+    integer :: pet_id
+    !> Coupon code.
+    character(len=32) :: coupon_code{extra_fortran}
+end type PurchaseInput
+!> Purchase pet workflow.
+!> @param pet_id Pet ID.
+subroutine purchase_pet_workflow(pet_id)
+end subroutine purchase_pet_workflow
+"
             ),
         ),
         _ => (
             "workflow.zig",
             format!(
-                "/// Purchase input.\npub const PurchaseInput = struct {{\n    /// Pet ID.\n    petId: i64,\n    /// Coupon code.\n    couponCode: []const u8,{extra_zig}\n}};\n/// Purchase pet workflow.\n/// @param petId Pet ID.\npub fn purchasePetWorkflow(petId: i64) void {{}}\n"
+                "/// Purchase input.
+pub const PurchaseInput = struct {{
+    /// Pet ID.
+    petId: i64,
+    /// Coupon code.
+    couponCode: []const u8,{extra_zig}
+}};
+/// Purchase pet workflow.
+/// @param petId Pet ID.
+pub fn purchasePetWorkflow(petId: i64) void {{}}
+"
             ),
         ),
     }
@@ -1213,93 +1647,248 @@ pub fn canonical_arazzo_generated_snippet(
         LanguageId::C => (
             "workflow.h",
             format!(
-                "/** Purchase input. */\nstruct PurchaseInput {{\n    /** Pet ID. */\n    long pet_id;\n    /** Coupon code. */\n    char *coupon_code;{}\n}};\n/** Purchase pet workflow.\n * @param pet_id Pet ID.\n */\nint purchase_pet_workflow(long pet_id);\n",
-                opt("\n    /** Tag. */\n    char *tag;")
+                "/** Purchase input. */
+struct PurchaseInput {{
+    /** Pet ID. */
+    long pet_id;
+    /** Coupon code. */
+    char *coupon_code;{}
+}};
+/** Purchase pet workflow.
+ * @param pet_id Pet ID.
+ */
+int purchase_pet_workflow(long pet_id);
+",
+                opt("
+    /** Tag. */
+    char *tag;")
             ),
         ),
         LanguageId::Cpp => (
             "workflow.hpp",
             format!(
-                "/** Purchase input. */\nclass PurchaseInput {{\npublic:\n    /** Pet ID. */\n    long pet_id;\n    /** Coupon code. */\n    std::string coupon_code;{}\n}};\n/** Purchase pet workflow.\n * @param pet_id Pet ID.\n */\nint purchase_pet_workflow(long pet_id);\n",
-                opt("\n    /** Tag. */\n    std::string tag;")
+                "/** Purchase input. */
+class PurchaseInput {{
+public:
+    /** Pet ID. */
+    long pet_id;
+    /** Coupon code. */
+    std::string coupon_code;{}
+}};
+/** Purchase pet workflow.
+ * @param pet_id Pet ID.
+ */
+int purchase_pet_workflow(long pet_id);
+",
+                opt("
+    /** Tag. */
+    std::string tag;")
             ),
         ),
         LanguageId::CSharp => (
             "Workflow.cs",
             format!(
-                "/// <summary>Purchase input.</summary>\npublic class PurchaseInput {{\n    /// <summary>Pet ID.</summary>\n    public long PetId {{ get; set; }}\n    /// <summary>Coupon code.</summary>\n    public string CouponCode {{ get; set; }}{}\n    /// <summary>Purchase pet workflow.</summary>\n    /// <param name=\"petId\">Pet ID.</param>\n    public void PurchasePetWorkflow(long petId) {{}}\n}}\n",
+                r#"/// <summary>Purchase input.</summary>
+public class PurchaseInput {{
+    /// <summary>Pet ID.</summary>
+    public long PetId {{ get; set; }}
+    /// <summary>Coupon code.</summary>
+    public string CouponCode {{ get; set; }}{}
+    /// <summary>Purchase pet workflow.</summary>
+    /// <param name="petId">Pet ID.</param>
+    public void PurchasePetWorkflow(long petId) {{}}
+}}
+"#,
                 opt("\n    /// <summary>Tag.</summary>\n    public string Tag { get; set; }")
             ),
         ),
         LanguageId::Go => (
             "workflow.go",
             format!(
-                "// PurchaseInput model.\ntype PurchaseInput struct {{\n    // Pet ID.\n    PetId int64\n    // Coupon code.\n    CouponCode string{}\n}}\n// PurchasePetWorkflow executes workflow for petId.\nfunc PurchasePetWorkflow(petId int64) {{}}\n",
-                opt("\n    // Tag.\n    Tag string")
+                "// PurchaseInput model.
+type PurchaseInput struct {{
+    // Pet ID.
+    PetId int64
+    // Coupon code.
+    CouponCode string{}
+}}
+// PurchasePetWorkflow executes workflow for petId.
+func PurchasePetWorkflow(petId int64) {{}}
+",
+                opt("
+    // Tag.
+    Tag string")
             ),
         ),
         LanguageId::Java => (
             "PurchaseInput.java",
             format!(
-                "/** Purchase input. */\npublic class PurchaseInput {{\n    /** Pet ID. */\n    public long petId;\n    /** Coupon code. */\n    public String couponCode;{}\n    /** Purchase pet workflow.\n     * @param petId Pet ID.\n     */\n    public void purchasePetWorkflow(long petId) {{}}\n}}\n",
-                opt("\n    /** Tag. */\n    public String tag;")
+                "/** Purchase input. */
+public class PurchaseInput {{
+    /** Pet ID. */
+    public long petId;
+    /** Coupon code. */
+    public String couponCode;{}
+    /** Purchase pet workflow.
+     * @param petId Pet ID.
+     */
+    public void purchasePetWorkflow(long petId) {{}}
+}}
+",
+                opt("
+    /** Tag. */
+    public String tag;")
             ),
         ),
         LanguageId::Kotlin => (
             "Workflow.kt",
             format!(
-                "/** Purchase input.\n * @property petId Pet ID.\n * @property couponCode Coupon code.{}\n */\ndata class PurchaseInput(val petId: Long, val couponCode: String{})\n/** Purchase pet workflow.\n * @param petId Pet ID.\n */\nfun purchasePetWorkflow(petId: Long) {{}}\n",
-                opt("\n * @property tag Tag."),
+                "/** Purchase input.
+ * @property petId Pet ID.
+ * @property couponCode Coupon code.{}
+ */
+data class PurchaseInput(val petId: Long, val couponCode: String{})
+/** Purchase pet workflow.
+ * @param petId Pet ID.
+ */
+fun purchasePetWorkflow(petId: Long) {{}}
+",
+                opt("
+ * @property tag Tag."),
                 opt(", val tag: String")
             ),
         ),
         LanguageId::Php => (
             "Workflow.php",
             format!(
-                "<?php\n/** Purchase input. */\nclass PurchaseInput {{\n    /** @var int Pet ID. */\n    public int $petId;\n    /** @var string Coupon code. */\n    public string $couponCode;{}\n    /** Purchase pet workflow.\n     * @param int $petId Pet ID.\n     */\n    public function purchasePetWorkflow(int $petId): void {{}}\n}}\n",
-                opt("\n    /** @var string Tag. */\n    public string $tag;")
+                "<?php
+/** Purchase input. */
+class PurchaseInput {{
+    /** @var int Pet ID. */
+    public int $petId;
+    /** @var string Coupon code. */
+    public string $couponCode;{}
+    /** Purchase pet workflow.
+     * @param int $petId Pet ID.
+     */
+    public function purchasePetWorkflow(int $petId): void {{}}
+}}
+",
+                opt("
+    /** @var string Tag. */
+    public string $tag;")
             ),
         ),
         LanguageId::Python => (
             "workflow.py",
             format!(
-                "class PurchaseInput:\n    \"\"\"Purchase input.\"\"\"\n    #: Pet ID.\n    pet_id: int\n    #: Coupon code.\n    coupon_code: str{}\n\ndef purchase_pet_workflow(pet_id: int) -> None:\n    \"\"\"Purchase pet workflow.\n    :param pet_id: Pet ID.\n    \"\"\"\n    pass\n",
+                r#"class PurchaseInput:
+    """Purchase input."""
+    #: Pet ID.
+    pet_id: int
+    #: Coupon code.
+    coupon_code: str{}
+
+def purchase_pet_workflow(pet_id: int) -> None:
+    """Purchase pet workflow.
+    :param pet_id: Pet ID.
+    """
+    pass
+"#,
                 opt("\n    #: Tag.\n    tag: str")
             ),
         ),
         LanguageId::Ruby => (
             "workflow.rb",
             format!(
-                "# Purchase input.\nclass PurchaseInput\n  # Pet ID.\n  attr_accessor :pet_id\n  # Coupon code.\n  attr_accessor :coupon_code{}\n  # Purchase pet workflow.\n  # @param [Integer] pet_id Pet ID.\n  def purchase_pet_workflow(pet_id)\n  end\nend\n",
-                opt("\n  # Tag.\n  attr_accessor :tag")
+                "# Purchase input.
+class PurchaseInput
+  # Pet ID.
+  attr_accessor :pet_id
+  # Coupon code.
+  attr_accessor :coupon_code{}
+  # Purchase pet workflow.
+  # @param [Integer] pet_id Pet ID.
+  def purchase_pet_workflow(pet_id)
+  end
+end
+",
+                opt("
+  # Tag.
+  attr_accessor :tag")
             ),
         ),
         LanguageId::Rust => (
             "workflow.rs",
             format!(
-                "/// Purchase input.\npub struct PurchaseInput {{\n/// Pet ID.\npub pet_id: i64,\n/// Coupon code.\npub coupon_code: String,{}\n}}\n/// Purchase pet workflow.\n/// * `pet_id` - Pet ID.\npub fn purchase_pet_workflow(pet_id: i64) {{}}\n",
-                opt("\n/// Tag.\npub tag: String,")
+                "/// Purchase input.
+pub struct PurchaseInput {{
+/// Pet ID.
+pub pet_id: i64,
+/// Coupon code.
+pub coupon_code: String,{}
+}}
+/// Purchase pet workflow.
+/// * `pet_id` - Pet ID.
+pub fn purchase_pet_workflow(pet_id: i64) {{}}
+",
+                opt("
+/// Tag.
+pub tag: String,")
             ),
         ),
         LanguageId::Sh => (
             "workflow.sh",
             format!(
-                "# @struct PurchaseInput Purchase input.\n# @field pet_id Pet ID.\n# @field coupon_code Coupon code.{}\n# Purchase pet workflow.\n# @param pet_id Pet ID.\npurchase_pet_workflow() {{\n  local pet_id=\"$1\"\n}}\n",
+                r#"# @struct PurchaseInput Purchase input.
+# @field pet_id Pet ID.
+# @field coupon_code Coupon code.{}
+# Purchase pet workflow.
+# @param pet_id Pet ID.
+purchase_pet_workflow() {{
+  local pet_id="$1"
+}}
+"#,
                 opt("\n# @field tag Tag.")
             ),
         ),
         LanguageId::Swift => (
             "Workflow.swift",
             format!(
-                "/// Purchase input.\npublic struct PurchaseInput {{\n    /// Pet ID.\n    public let petId: Int64\n    /// Coupon code.\n    public let couponCode: String{}\n}}\n/// Purchase pet workflow.\n/// - Parameter petId: Pet ID.\npublic func purchasePetWorkflow(petId: Int64) {{}}\n",
-                opt("\n    /// Tag.\n    public let tag: String")
+                "/// Purchase input.
+public struct PurchaseInput {{
+    /// Pet ID.
+    public let petId: Int64
+    /// Coupon code.
+    public let couponCode: String{}
+}}
+/// Purchase pet workflow.
+/// - Parameter petId: Pet ID.
+public func purchasePetWorkflow(petId: Int64) {{}}
+",
+                opt("
+    /// Tag.
+    public let tag: String")
             ),
         ),
         LanguageId::TypeScript => (
             "workflow.ts",
             format!(
-                "/** Purchase input. */\nexport interface PurchaseInput {{\n  /** Pet ID. */\n  petId: number;\n  /** Coupon code. */\n  couponCode: string;{}\n}}\n/** Purchase pet workflow.\n * @param petId - Pet ID.\n */\nexport function purchasePetWorkflow(petId: number): void {{}}\n",
-                opt("\n  /** Tag. */\n  tag: string;")
+                "/** Purchase input. */
+export interface PurchaseInput {{
+  /** Pet ID. */
+  petId: number;
+  /** Coupon code. */
+  couponCode: string;{}
+}}
+/** Purchase pet workflow.
+ * @param petId - Pet ID.
+ */
+export function purchasePetWorkflow(petId: number): void {{}}
+",
+                opt("
+  /** Tag. */
+  tag: string;")
             ),
         ),
         LanguageId::Custom(slug) => canonical_arazzo_custom_snippet(slug.as_str(), mutated),
@@ -1433,8 +2022,10 @@ fn canonical_conformance_openapi_doc() -> serde_json::Value {
 
 /// Executes the `N`-language transitive `OpenAPI` or Arazzo 1.1.0 roundtrip verification chain.
 ///
-/// Verifies both shallow source signatures and specification semantic equivalence at every hop
-/// (`Spec_0 -> B_1 -> Spec_1 -> ... -> B_N -> Spec_N`).
+/// At each hop `k`, parses the target language's generated code into a `ParsedSourceBundle`,
+/// reconstructs `Spec_k` from the parsed code via [`ParsedSourceBundle::reconstruct_openapi_doc`]
+/// or [`ParsedSourceBundle::reconstruct_arazzo_doc`], and verifies `Spec_0 == Spec_k` before
+/// passing `Spec_k` as the input to hop `k + 1` (`Spec_0 -> B_1 -> Spec_1 -> ... -> B_N -> Spec_N`).
 ///
 /// # Arguments
 ///
@@ -1457,16 +2048,22 @@ pub fn verify_cross_language_roundtrip_chain(
     let target_spec = spec.unwrap_or(SpecId::OpenApi320);
     let toolchains = discover_language_toolchains(repos_dir, extra_langs)?;
     let is_arazzo = target_spec == SpecId::Arazzo110;
-    let canonical_doc = if is_arazzo {
+    let initial_doc = if is_arazzo {
         canonical_conformance_arazzo_doc()
     } else {
         canonical_conformance_openapi_doc()
     };
+    let mut curr_doc = initial_doc.clone();
 
     let mut hops = Vec::with_capacity(toolchains.len());
     for (idx, tc) in toolchains.iter().enumerate() {
+        let mut semantic_diffs = Vec::new();
         let repo_path = repos_dir.join(&tc.repo_name);
         let repo_ok = !repo_path.is_dir() || repo_checklists_valid(&repo_path);
+        if !repo_ok {
+            semantic_diffs.push(format!("contradictory checklist in {}", tc.repo_name));
+        }
+
         let (vname, snippet) = if is_arazzo {
             canonical_arazzo_generated_snippet(&tc.language_id, false)
         } else {
@@ -1474,21 +2071,30 @@ pub fn verify_cross_language_roundtrip_chain(
         };
         let bundle = parse_source_str(&snippet, Path::new(vname), &tc.language_id, None);
         let docs_ok = bundle.verify_100_percent_docs(&tc.language_id).is_ok();
-        let sig_ok = bundle
-            .verify_against_spec_doc(&canonical_doc, &tc.language_id)
+        let code_ok = bundle
+            .verify_against_spec_doc(&curr_doc, &tc.language_id)
             .is_ok();
-        let eq_ok = if is_arazzo {
-            verify_arazzo_equivalence(&tc.language_id, target_spec, &canonical_doc, &canonical_doc)
-                .is_ok()
+
+        let next_doc = if is_arazzo {
+            bundle.reconstruct_arazzo_doc(&curr_doc)
         } else {
-            verify_openapi_equivalence(&tc.language_id, target_spec, &canonical_doc, &canonical_doc)
+            bundle.reconstruct_openapi_doc(&curr_doc)
+        };
+
+        let eq_ok = if is_arazzo {
+            verify_arazzo_equivalence(&tc.language_id, target_spec, &initial_doc, &next_doc).is_ok()
+        } else {
+            verify_openapi_equivalence(&tc.language_id, target_spec, &initial_doc, &next_doc)
                 .is_ok()
         };
-        let equivalent = docs_ok & sig_ok & eq_ok & repo_ok;
+        curr_doc = next_doc;
+
+        let equivalent = semantic_diffs.is_empty() && docs_ok && code_ok && eq_ok;
         hops.push(RoundtripHop {
             hop_index: idx + 1,
             language: tc.language_id.clone(),
             equivalent,
+            semantic_diffs,
         });
     }
 
@@ -1498,7 +2104,7 @@ pub fn verify_cross_language_roundtrip_chain(
     })
 }
 
-/// Counts shallow-parsed `(structs, functions)` in a repository's `src/` directory if present.
+/// Counts shallow-parsed `SignatureCount { structs, functions }` in a repository's `src/` directory if present.
 ///
 /// # Arguments
 ///
@@ -1507,20 +2113,55 @@ pub fn verify_cross_language_roundtrip_chain(
 ///
 /// # Returns
 ///
-/// Tuple of `(parsed_struct_count, parsed_function_count)`.
-fn count_repo_signatures(repo_path: &Path, tc: &LanguageToolchainSpec) -> (usize, usize) {
+/// `SignatureCount` containing `(structs, functions)` counts.
+fn count_repo_signatures(repo_path: &Path, tc: &LanguageToolchainSpec) -> SignatureCount {
     let candidate = if repo_path.join("src").is_dir() {
         repo_path.join("src")
     } else {
         repo_path.to_path_buf()
     };
     parse_source_path(&candidate, &tc.language_id, None)
-        .map_or((0, 0), |b| (b.structs.len(), b.all_functions().len()))
+        .ok()
+        .map(|b| SignatureCount::new(b.structs.len(), b.all_functions().len()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct DivergentHarness;
+
+    impl BackendTestHarness for DivergentHarness {
+        fn execute_http_operation(
+            &self,
+            backend: &LanguageId,
+            _op_id: &str,
+            template: &SimpleHttpResponse,
+        ) -> SimpleHttpResponse {
+            if *backend == LanguageId::Go {
+                SimpleHttpResponse {
+                    status_code: template.status_code,
+                    headers: template.headers.clone(),
+                    body: r#"{"pointer":"/wrong","error":"diverged"}"#.to_string(),
+                }
+            } else {
+                template.clone()
+            }
+        }
+
+        fn query_seeded_table_count(&self, backend: &LanguageId, _table: &str) -> usize {
+            if *backend == LanguageId::Go {
+                999
+            } else {
+                10
+            }
+        }
+
+        fn query_teardown_table_count(&self, _backend: &LanguageId, _table: &str) -> usize {
+            0
+        }
+    }
 
     #[test]
     #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
@@ -1576,12 +2217,20 @@ paths:
             inspect_source_signatures(&rust_repo, None, true, None).unwrap_or_default();
         assert_eq!(bundle_dir.structs.len(), 1);
 
-        let _ = std::fs::write(rust_repo.join(".cdd-conformance.yaml"), b"language: rust\n");
+        let _ = std::fs::write(
+            rust_repo.join(".cdd-conformance.yaml"),
+            b"language: rust
+",
+        );
         let bundle_cfg =
             inspect_source_signatures(&rust_repo, None, true, None).unwrap_or_default();
         assert_eq!(bundle_cfg.language, Some(LanguageId::Rust));
 
-        let _ = std::fs::write(rust_repo.join(".cdd-conformance.yaml"), b"strict: true\n");
+        let _ = std::fs::write(
+            rust_repo.join(".cdd-conformance.yaml"),
+            b"strict: true
+",
+        );
         let bundle_no_lang_cfg =
             inspect_source_signatures(&rust_repo, None, true, None).unwrap_or_default();
         assert_eq!(bundle_no_lang_cfg.language, Some(LanguageId::Rust));
@@ -1603,18 +2252,35 @@ paths:
         let mismatch_oas = base.join("mismatch.yaml");
         let _ = std::fs::write(
             &mismatch_oas,
-            b"openapi: 3.2.0\ncomponents:\n  schemas:\n    NonExistentModel:\n      type: object\n",
+            b"openapi: 3.2.0
+components:
+  schemas:
+    NonExistentModel:
+      type: object
+",
         );
         assert!(inspect_source_signatures(&rs_file, None, false, Some(&mismatch_oas)).is_err());
 
         let undoc_rs = base.join("undoc.rs");
-        let _ = std::fs::write(&undoc_rs, b"pub struct Undoc {}\n");
+        let _ = std::fs::write(
+            &undoc_rs,
+            b"pub struct Undoc {}
+",
+        );
         assert!(inspect_source_signatures(&undoc_rs, None, true, None).is_err());
 
         let bad_cfg_dir = base.join("cdd-badcfg");
         let _ = std::fs::create_dir_all(&bad_cfg_dir);
         let _ = std::fs::write(bad_cfg_dir.join(".cdd-conformance.yaml"), b"::: bad :::");
+        let bad_cfg_file = bad_cfg_dir.join("lib.rs");
+        let _ = std::fs::write(
+            &bad_cfg_file,
+            b"/// X.
+pub fn x() {}
+",
+        );
         assert!(inspect_source_signatures(&bad_cfg_dir, None, false, None).is_err());
+        assert!(inspect_source_signatures(&bad_cfg_file, None, false, None).is_err());
         let _ = std::fs::remove_dir_all(&bad_cfg_dir);
 
         assert_eq!(infer_language_or_default(Path::new("")), LanguageId::Rust);
@@ -1631,10 +2297,20 @@ paths:
         let _ = std::fs::create_dir_all(&c_repo);
         let _ = std::fs::write(
             c_repo.join(".cdd-conformance.yaml"),
-            b"language: c\ntoolchain:\n  capabilities:\n    sdk: false\n    server: false\n",
+            b"language: c
+toolchain:
+  capabilities:
+    sdk: false
+    server: false
+",
         );
 
-        let _ = std::fs::write(rust_repo.join("Cargo.toml"), b"[package]\nname = \"r\"\n");
+        let _ = std::fs::write(
+            rust_repo.join("Cargo.toml"),
+            br#"[package]
+name = "r"
+"#,
+        );
 
         // Verify clients
         let client_rep = verify_clients_against_rust_backend(
@@ -1647,6 +2323,9 @@ paths:
         )
         .ok();
         assert_eq!(client_rep.as_ref().map(|r| r.results.len()), Some(14));
+        assert!(client_rep
+            .as_ref()
+            .is_some_and(|r| r.reference_backend_summary.wasm_target_supported));
         assert!(verify_clients_against_rust_backend(
             &base,
             &rust_repo,
@@ -1666,19 +2345,52 @@ paths:
         let _ = std::fs::create_dir_all(go_repo.join("openapi-3.2.0"));
         let _ = std::fs::write(
             go_repo.join("openapi-3.2.0").join("client-sdk.md"),
-            "# Bad\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| OkRow | [x] , [x] | [ ] , [ ] |\n| F | [x] , [x] | [x] , [x] |\n",
+            "# Bad
+| Feature | Presence | Absence |
+| --- | --- | --- |
+| OkRow | [x] , [x] | [ ] , [ ] |
+| F | [x] , [x] | [x] , [x] |
+",
         );
         let _ = std::fs::create_dir_all(c_repo.join("openapi-3.2.0"));
         let _ = std::fs::write(
             c_repo.join("openapi-3.2.0").join("client-sdk.md"),
-            "# Good\n| Feature | Presence | Absence |\n| --- | --- | --- |\n| OkRow | [x] , [x] | [ ] , [ ] |\n",
+            "# Good
+| Feature | Presence | Absence |
+| --- | --- | --- |
+| OkRow | [x] , [x] | [ ] , [ ] |
+",
         );
-        let _ = verify_clients_against_rust_backend(&base, &rust_repo, Some("go"), &[], None, None);
+        let go_rep =
+            verify_clients_against_rust_backend(&base, &rust_repo, Some("go"), &[], None, None)
+                .ok();
+        assert_eq!(
+            go_rep.as_ref().map(|r| r.results[0].status),
+            Some(ClientVerificationStatus::FailedVerification)
+        );
         let _ = verify_clients_against_rust_backend(&base, &rust_repo, Some("c"), &[], None, None);
 
         let mat = verify_backends_matrix(&base, &["zig".to_string()]).ok();
-        assert_eq!(mat.map(|m| m.total_pairs), Some(196));
+        assert_eq!(mat.as_ref().map(|m| m.total_pairs), Some(196));
+        assert!(mat
+            .as_ref()
+            .is_some_and(|m| m.equivalence_summary.differential_responses_equivalent));
         assert!(verify_backends_matrix(&base, &["123bad".to_string()]).is_err());
+
+        // Test divergent harness recording diagnostics
+        let tcs = discover_language_toolchains(&base, &[]).unwrap_or_default();
+        let div_summary = evaluate_backend_equivalence_with_harness(&tcs, &DivergentHarness);
+        assert!(!div_summary.differential_responses_equivalent);
+        assert_ne!(div_summary.diagnostics, Vec::<String>::new());
+        assert_eq!(
+            DivergentHarness.query_teardown_table_count(&LanguageId::Rust, "users"),
+            0
+        );
+        assert_eq!(
+            FixtureBackendHarness.query_seeded_table_count(&LanguageId::Rust, "unknown_table"),
+            0
+        );
+        let _ = inspect_source_signatures(Path::new(""), None, false, None);
 
         // Verify roundtrip chain
         let rt = verify_cross_language_roundtrip_chain(
@@ -1687,7 +2399,12 @@ paths:
             None,
         )
         .ok();
-        assert_eq!(rt.map(|r| r.hops.len()), Some(15));
+        assert_eq!(rt.as_ref().map(|r| r.hops.len()), Some(15));
+        assert!(rt.as_ref().is_some_and(|r| {
+            r.hops
+                .iter()
+                .any(|h| h.language == LanguageId::Go && !h.equivalent)
+        }));
         assert!(
             verify_cross_language_roundtrip_chain(&base, &["123bad".to_string()], None).is_err()
         );

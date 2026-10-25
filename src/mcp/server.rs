@@ -2,8 +2,8 @@
 
 use crate::error::ConformanceError;
 use crate::mcp::lifecycle::{
-    CancelledNotificationParams, InitializeParams, InitializeResult, PaginatedRequestParams,
-    ProgressNotificationParams,
+    CancelledNotificationParams, CompleteRequestParams, CompleteResult, CompletionValues,
+    InitializeParams, InitializeResult, PaginatedRequestParams, ProgressNotificationParams,
 };
 use crate::mcp::logging::{LogMessageParams, LoggingLevel, SetLevelParams};
 use crate::mcp::prompts::{get_prompt_typed, list_prompts, GetPromptParams};
@@ -14,10 +14,12 @@ use crate::mcp::resources::{
     list_resource_templates, list_resources, read_resource, ReadResourceParams,
 };
 use crate::mcp::tools::{execute_tool_with_roots, list_tools, CallToolParams};
+use crate::model::{McpMethodName, ProfileKind, SpecId};
 use crate::registry::CanonicalRegistry;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// The Model Context Protocol server instance.
@@ -190,6 +192,7 @@ impl McpServer {
     /// # Returns
     ///
     /// Outbound `JsonRpcResponse`.
+    #[allow(clippy::too_many_lines)]
     fn dispatch_request(&mut self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id;
         let method = req.method.as_str();
@@ -218,23 +221,32 @@ impl McpServer {
             }
         }
 
-        match method {
-            "initialize" => match Self::parse_params::<InitializeParams>(method, req.params) {
-                Ok(init) => {
-                    let init_result = InitializeResult::new(&init.protocol_version);
-                    JsonRpcResponse::from_serializable(id, &init_result)
+        let Ok(parsed_method) = McpMethodName::from_str(method) else {
+            let err = ConformanceError::JsonRpcMethodNotFound {
+                method: method.to_string(),
+            };
+            return JsonRpcResponse::from_conformance_error(id, &err);
+        };
+
+        match parsed_method {
+            McpMethodName::Initialize => {
+                match Self::parse_params::<InitializeParams>(method, req.params) {
+                    Ok(init) => {
+                        let init_result = InitializeResult::new(&init.protocol_version);
+                        JsonRpcResponse::from_serializable(id, &init_result)
+                    }
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
                 }
-                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
-            },
+            }
 
-            "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
+            McpMethodName::Ping => JsonRpcResponse::success(id, serde_json::json!({})),
 
-            "tools/list" => match Self::validate_pagination(method, req.params) {
+            McpMethodName::ToolsList => match Self::validate_pagination(method, req.params) {
                 Ok(_) => JsonRpcResponse::from_serializable(id, &list_tools()),
                 Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
             },
 
-            "tools/call" => {
+            McpMethodName::ToolsCall => {
                 match Self::parse_params::<CallToolParams>(method, req.params).and_then(|call| {
                     execute_tool_with_roots(
                         &call.name,
@@ -248,44 +260,84 @@ impl McpServer {
                 }
             }
 
-            "resources/list" => match Self::validate_pagination(method, req.params) {
+            McpMethodName::ResourcesList => match Self::validate_pagination(method, req.params) {
                 Ok(_) => JsonRpcResponse::from_serializable(id, &list_resources(&self.registry)),
                 Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
             },
 
-            "resources/templates/list" => match Self::validate_pagination(method, req.params) {
-                Ok(_) => JsonRpcResponse::from_serializable(id, &list_resource_templates()),
-                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
-            },
+            McpMethodName::ResourcesTemplatesList => {
+                match Self::validate_pagination(method, req.params) {
+                    Ok(_) => JsonRpcResponse::from_serializable(id, &list_resource_templates()),
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+                }
+            }
 
-            "resources/read" => match Self::parse_params::<ReadResourceParams>(method, req.params)
-                .and_then(|read_params| read_resource(&read_params.uri, &self.registry))
-            {
-                Ok(read_res) => JsonRpcResponse::from_serializable(id, &read_res),
-                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
-            },
+            McpMethodName::ResourcesRead => {
+                match Self::parse_params::<ReadResourceParams>(method, req.params)
+                    .and_then(|read_params| read_resource(&read_params.uri, &self.registry))
+                {
+                    Ok(read_res) => JsonRpcResponse::from_serializable(id, &read_res),
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+                }
+            }
 
-            "prompts/list" => match Self::validate_pagination(method, req.params) {
+            McpMethodName::PromptsList => match Self::validate_pagination(method, req.params) {
                 Ok(_) => JsonRpcResponse::from_serializable(id, &list_prompts()),
                 Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
             },
 
-            "prompts/get" => match Self::parse_params::<GetPromptParams>(method, req.params)
-                .and_then(|prompt_params| get_prompt_typed(&prompt_params))
-            {
-                Ok(prompt_res) => JsonRpcResponse::from_serializable(id, &prompt_res),
-                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
-            },
-
-            "logging/setLevel" => match Self::parse_params::<SetLevelParams>(method, req.params) {
-                Ok(p) => {
-                    self.log_level = p.level;
-                    JsonRpcResponse::success(id, serde_json::json!({}))
+            McpMethodName::PromptsGet => {
+                match Self::parse_params::<GetPromptParams>(method, req.params)
+                    .and_then(|prompt_params| get_prompt_typed(&prompt_params))
+                {
+                    Ok(prompt_res) => JsonRpcResponse::from_serializable(id, &prompt_res),
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
                 }
-                Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
-            },
+            }
 
-            _ => {
+            McpMethodName::LoggingSetLevel => {
+                match Self::parse_params::<SetLevelParams>(method, req.params) {
+                    Ok(p) => {
+                        self.log_level = p.level;
+                        JsonRpcResponse::success(id, serde_json::json!({}))
+                    }
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+                }
+            }
+
+            McpMethodName::CompletionComplete => {
+                match Self::parse_params::<CompleteRequestParams>(method, req.params) {
+                    Ok(comp) => {
+                        let prefix = comp.argument.value.to_lowercase();
+                        let candidates: Vec<String> = match comp.argument.name.as_str() {
+                            "profile" => ProfileKind::standard_profiles()
+                                .iter()
+                                .map(|p| p.as_str().to_string())
+                                .filter(|s| s.starts_with(&prefix))
+                                .collect(),
+                            _ => SpecId::all()
+                                .iter()
+                                .map(|s| s.as_str().to_string())
+                                .filter(|s| s.starts_with(&prefix))
+                                .collect(),
+                        };
+                        let total = candidates.len();
+                        let res = CompleteResult {
+                            completion: CompletionValues {
+                                values: candidates,
+                                total: Some(total),
+                                has_more: Some(false),
+                            },
+                        };
+                        JsonRpcResponse::from_serializable(id, &res)
+                    }
+                    Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
+                }
+            }
+
+            McpMethodName::NotificationsInitialized
+            | McpMethodName::NotificationsCancelled
+            | McpMethodName::NotificationsProgress => {
                 let err = ConformanceError::JsonRpcMethodNotFound {
                     method: method.to_string(),
                 };
@@ -301,11 +353,11 @@ impl McpServer {
     /// * `method` - Notification method name.
     /// * `params` - Optional notification parameters.
     fn dispatch_notification(&mut self, method: &str, params: Option<&serde_json::Value>) {
-        match method {
-            "notifications/initialized" => {
+        match McpMethodName::from_str(method) {
+            Ok(McpMethodName::NotificationsInitialized) => {
                 self.initialized = true;
             }
-            "notifications/cancelled" => {
+            Ok(McpMethodName::NotificationsCancelled) => {
                 if let Some(val) = params {
                     if let Ok(cancel) =
                         serde_json::from_value::<CancelledNotificationParams>(val.clone())
@@ -314,7 +366,7 @@ impl McpServer {
                     }
                 }
             }
-            "notifications/progress" => {
+            Ok(McpMethodName::NotificationsProgress) => {
                 if let Some(val) = params {
                     if let Ok(prog) =
                         serde_json::from_value::<ProgressNotificationParams>(val.clone())
@@ -815,7 +867,7 @@ mod tests {
             .handle_message(prompts_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
-        assert_eq!(prompts_payload.map(|p| p.prompts.len()), Some(2));
+        assert_eq!(prompts_payload.map(|p| p.prompts.len()), Some(3));
 
         let prompts_bad_cursor =
             r#"{"jsonrpc":"2.0","id":50,"method":"prompts/list","params":{"cursor":"bad"}}"#;
@@ -902,6 +954,38 @@ mod tests {
             Some(serde_json::json!({}))
         );
         assert_eq!(server.log_level, LoggingLevel::Debug);
+
+        let comp_spec_req = r#"{"jsonrpc":"2.0","id":80,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"explain_checklist_row"},"argument":{"name":"spec","value":"openapi"}}}"#;
+        let comp_spec_res: Option<CompleteResult> = server
+            .handle_message(comp_spec_req)
+            .and_then(|r| r.result)
+            .and_then(|v| serde_json::from_value(v).ok());
+        assert!(comp_spec_res.is_some_and(|c| !c.completion.values.is_empty()));
+
+        let comp_prof_req = r#"{"jsonrpc":"2.0","id":81,"method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"conformance://specs/{spec_id}/{profile}"},"argument":{"name":"profile","value":"client"}}}"#;
+        let comp_prof_res: Option<CompleteResult> = server
+            .handle_message(comp_prof_req)
+            .and_then(|r| r.result)
+            .and_then(|v| serde_json::from_value(v).ok());
+        assert_eq!(comp_prof_res.map(|c| c.completion.values.len()), Some(2));
+
+        let comp_bad_req = r#"{"jsonrpc":"2.0","id":82,"method":"completion/complete"}"#;
+        assert_eq!(
+            server
+                .handle_message(comp_bad_req)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::INVALID_PARAMS)
+        );
+
+        let notif_as_req = r#"{"jsonrpc":"2.0","id":83,"method":"notifications/initialized"}"#;
+        assert_eq!(
+            server
+                .handle_message(notif_as_req)
+                .and_then(|r| r.error)
+                .map(|e| e.code),
+            Some(error_codes::METHOD_NOT_FOUND)
+        );
 
         let unknown_req = r#"{"jsonrpc":"2.0","id":99,"method":"unknown/method"}"#;
         assert_eq!(

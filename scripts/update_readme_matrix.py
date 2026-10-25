@@ -23,7 +23,14 @@ TARGET_ECOSYSTEM_REPOS = (
 
 
 def has_all_ecosystem_repos(parent_dir: str) -> bool:
-    """Returns True if all 13 core CDD language repositories exist in `parent_dir`."""
+    """Returns True if all 13 core CDD language repositories exist in `parent_dir`.
+
+    Args:
+        parent_dir: Parent directory path containing `cdd-*` sibling repositories.
+
+    Returns:
+        `True` if every core ecosystem repository directory exists in `parent_dir`.
+    """
     return all(
         os.path.isdir(os.path.join(parent_dir, repo)) for repo in TARGET_ECOSYSTEM_REPOS
     )

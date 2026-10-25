@@ -3,6 +3,67 @@
 use crate::error::ConformanceError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
+
+/// Strongly typed identifier for an MCP prompt template exposed by `cdd-conformance`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptName {
+    /// `audit_repo_conformance` prompt template.
+    AuditRepoConformance,
+    /// `implement_conformance_feature` prompt template.
+    ImplementConformanceFeature,
+    /// `explain_checklist_row` prompt template.
+    ExplainChecklistRow,
+}
+
+impl PromptName {
+    /// Returns the canonical `snake_case` prompt template name.
+    ///
+    /// # Returns
+    ///
+    /// Canonical prompt name string slice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuditRepoConformance => "audit_repo_conformance",
+            Self::ImplementConformanceFeature => "implement_conformance_feature",
+            Self::ExplainChecklistRow => "explain_checklist_row",
+        }
+    }
+}
+
+impl fmt::Display for PromptName {
+    /// Formats the prompt name as its canonical `snake_case` string.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - Formatter instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PromptName {
+    type Err = ConformanceError;
+
+    /// Parses a `PromptName` from a wire string slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - Raw prompt template name string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "audit_repo_conformance" => Ok(Self::AuditRepoConformance),
+            "implement_conformance_feature" => Ok(Self::ImplementConformanceFeature),
+            "explain_checklist_row" => Ok(Self::ExplainChecklistRow),
+            other => Err(ConformanceError::JsonRpcMethodNotFound {
+                method: format!("Prompt '{other}' not found"),
+            }),
+        }
+    }
+}
 
 /// Parameter payload for `prompts/get`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,7 +147,7 @@ pub fn list_prompts() -> ListPromptsResult {
     ListPromptsResult {
         prompts: vec![
             Prompt {
-                name: "audit_repo_conformance".to_string(),
+                name: PromptName::AuditRepoConformance.to_string(),
                 description: Some("Guides an AI assistant to audit a language repository against CDD conformance tables.".to_string()),
                 arguments: vec![
                     PromptArgument {
@@ -102,7 +163,7 @@ pub fn list_prompts() -> ListPromptsResult {
                 ],
             },
             Prompt {
-                name: "implement_conformance_feature".to_string(),
+                name: PromptName::ImplementConformanceFeature.to_string(),
                 description: Some("Guides the implementation of an absent or unreviewed feature in a CDD toolchain.".to_string()),
                 arguments: vec![
                     PromptArgument {
@@ -113,6 +174,22 @@ pub fn list_prompts() -> ListPromptsResult {
                     PromptArgument {
                         name: "spec_id".to_string(),
                         description: Some("Target specification identifier.".to_string()),
+                        required: Some(true),
+                    },
+                ],
+            },
+            Prompt {
+                name: PromptName::ExplainChecklistRow.to_string(),
+                description: Some("Explains the normative requirements and directional `[To, From]` verification expectations for a checklist row.".to_string()),
+                arguments: vec![
+                    PromptArgument {
+                        name: "spec".to_string(),
+                        description: Some("Target specification identifier.".to_string()),
+                        required: Some(true),
+                    },
+                    PromptArgument {
+                        name: "feature".to_string(),
+                        description: Some("Feature or object row name.".to_string()),
                         required: Some(true),
                     },
                 ],
@@ -132,9 +209,10 @@ pub fn list_prompts() -> ListPromptsResult {
 ///
 /// Returns `ConformanceError::JsonRpcMethodNotFound` if the prompt does not exist.
 pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, ConformanceError> {
+    let prompt_name = PromptName::from_str(&params.name)?;
     let args = params.arguments.as_ref();
-    match params.name.as_str() {
-        "audit_repo_conformance" => {
+    match prompt_name {
+        PromptName::AuditRepoConformance => {
             let repo = args
                 .and_then(|a| a.get("repo_path"))
                 .map_or(".", String::as_str);
@@ -163,7 +241,7 @@ pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, Con
             })
         }
 
-        "implement_conformance_feature" => {
+        PromptName::ImplementConformanceFeature => {
             let feature = args
                 .and_then(|a| a.get("feature_name"))
                 .map_or("Unknown Feature", String::as_str);
@@ -185,9 +263,24 @@ pub fn get_prompt_typed(params: &GetPromptParams) -> Result<GetPromptResult, Con
             })
         }
 
-        other => Err(ConformanceError::JsonRpcMethodNotFound {
-            method: format!("Prompt '{other}' not found"),
-        }),
+        PromptName::ExplainChecklistRow => {
+            let spec = args
+                .and_then(|a| a.get("spec"))
+                .map_or("openapi-3.2.0", String::as_str);
+            let feature = args
+                .and_then(|a| a.get("feature"))
+                .map_or("Info Object", String::as_str);
+            let prompt_text = format!(
+                "Explain the normative specification requirements for '{feature}' in '{spec}', including both `[To]` (Code -> Spec extraction) and `[From]` (Spec -> Code generation) verification rules."
+            );
+            Ok(GetPromptResult {
+                description: Some(format!("Explain '{feature}' in {spec}")),
+                messages: vec![PromptMessage {
+                    role: PromptRole::User,
+                    content: prompt_text,
+                }],
+            })
+        }
     }
 }
 
@@ -198,8 +291,12 @@ mod tests {
     #[test]
     fn test_list_and_get_prompts() {
         let list = list_prompts();
-        assert_eq!(list.prompts.len(), 2);
+        assert_eq!(list.prompts.len(), 3);
         assert!(list.next_cursor.is_none());
+        for p in &list.prompts {
+            let parsed = PromptName::from_str(&p.name).ok();
+            assert!(parsed.is_some_and(|pn| pn.as_str() == p.name && pn.to_string() == p.name));
+        }
 
         let mut args = HashMap::new();
         args.insert("repo_path".to_string(), "../cdd-rust".to_string());
@@ -230,6 +327,13 @@ mod tests {
         })
         .ok();
         assert!(impl_prompt.is_some_and(|res| !res.messages.is_empty()));
+
+        let explain_prompt = get_prompt_typed(&GetPromptParams {
+            name: "explain_checklist_row".to_string(),
+            arguments: None,
+        })
+        .ok();
+        assert!(explain_prompt.is_some_and(|res| res.messages[0].content.contains("Info Object")));
 
         let assistant_msg = PromptMessage {
             role: PromptRole::Assistant,

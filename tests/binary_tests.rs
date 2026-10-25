@@ -11,10 +11,18 @@
 )]
 
 use cdd_conformance::error::ConformanceError;
+use cdd_conformance::matrix_runtime::{
+    BackendMatrixReport, ClientVerificationReport, RoundtripReport,
+};
+use cdd_conformance::model::SpecId;
+use cdd_conformance::parser::source::ParsedSourceBundle;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Verifies `cdd-conformance` CLI binary subcommands (`--help`, `check`, `report`, `inspect-source`, `verify-clients`, `verify-backends`, `verify-roundtrip`, `mcp`).
+/// Verifies `cdd-conformance` CLI binary subcommands and asserts on deserialized stdout payloads.
+///
+/// Exercises `--help`, `check`, `report`, `inspect-source`, `verify-clients`, `verify-backends`,
+/// `verify-roundtrip`, and `mcp`.
 ///
 /// # Errors
 ///
@@ -40,18 +48,25 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
         .output()
         .map_err(map_io)?;
     assert!(out_check.status.success());
+    let check_str = String::from_utf8_lossy(&out_check.stdout);
+    assert!(check_str.contains("All specification checks passed"));
 
     let out_report = Command::new(bin_path)
         .args(["report", "--path", ".", "--markdown"])
         .output()
         .map_err(map_io)?;
     assert!(out_report.status.success());
+    let report_str = String::from_utf8_lossy(&out_report.stdout);
+    assert!(report_str.contains("| Specification | Profile |"));
 
     let out_inspect = Command::new(bin_path)
         .args(["inspect-source", "--path", "src", "--require-docs"])
         .output()
         .map_err(map_io)?;
     assert!(out_inspect.status.success());
+    let parsed_bundle: Option<ParsedSourceBundle> =
+        serde_json::from_slice(&out_inspect.stdout).ok();
+    assert!(parsed_bundle.is_some_and(|b| !b.structs.is_empty() && !b.functions.is_empty()));
 
     let out_clients = Command::new(bin_path)
         .args([
@@ -64,12 +79,18 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
         .output()
         .map_err(map_io)?;
     assert!(out_clients.status.success());
+    let parsed_clients: Option<ClientVerificationReport> =
+        serde_json::from_slice(&out_clients.stdout).ok();
+    assert!(parsed_clients.is_some_and(|r| r.results.len() >= 14));
 
     let out_backends = Command::new(bin_path)
         .args(["verify-backends", "--extra-lang", "cobol", "--roundtrip"])
         .output()
         .map_err(map_io)?;
     assert!(out_backends.status.success());
+    let parsed_backends: Option<BackendMatrixReport> =
+        serde_json::from_slice(&out_backends.stdout).ok();
+    assert!(parsed_backends.is_some_and(|m| m.total_pairs >= 196 && m.roundtrip_report.is_some()));
 
     let out_roundtrip = Command::new(bin_path)
         .args([
@@ -82,6 +103,8 @@ fn test_binary_help_report_and_check() -> Result<(), ConformanceError> {
         .output()
         .map_err(map_io)?;
     assert!(out_roundtrip.status.success());
+    let parsed_rt: Option<RoundtripReport> = serde_json::from_slice(&out_roundtrip.stdout).ok();
+    assert!(parsed_rt.is_some_and(|r| r.spec == SpecId::Arazzo110 && r.hops.len() >= 14));
 
     let out_mcp = Command::new(bin_path)
         .arg("mcp")

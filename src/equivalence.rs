@@ -757,14 +757,20 @@ export function deletePet(id: number) {}
             headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
             body: r#"{"ok":true}"#.to_string(),
         };
-        assert!(verify_http_response_equivalence(
+        let hdr_err = verify_http_response_equivalence(
             &LanguageId::Rust,
             &r_hdr_a,
             &LanguageId::Go,
             &r_hdr_mismatch,
-            "hdrs"
-        )
-        .is_err());
+            "hdrs",
+        );
+        assert!(matches!(
+            hdr_err,
+            Err(ConformanceError::BackendEquivalenceViolation {
+                ref divergence,
+                ..
+            }) if divergence.contains("normalized header mismatch")
+        ));
     }
 
     #[test]
@@ -989,13 +995,20 @@ export function deletePet(id: number) {}
         let mut xpath_10_arazzo = valid_arazzo.clone();
         xpath_10_arazzo["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
             serde_json::json!({"type": "xpath", "version": "xpath-10"});
-        assert!(verify_arazzo_equivalence(
+        let drift_res = verify_arazzo_equivalence(
             &LanguageId::Rust,
             SpecId::Arazzo110,
             &valid_arazzo,
-            &xpath_10_arazzo
-        )
-        .is_err());
+            &xpath_10_arazzo,
+        );
+        assert!(matches!(
+            drift_res,
+            Err(ConformanceError::AstRoundtripDrift {
+                spec: SpecId::Arazzo110,
+                ref semantic_diff,
+                ..
+            }) if semantic_diff.iter().any(|s| s.contains("JsonPathRfc9535") && s.contains("XPath10"))
+        ));
 
         // Test invalid arazzo version and non-string $self in validate_arazzo_110_document
         let mut no_self = valid_arazzo.clone();

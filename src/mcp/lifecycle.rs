@@ -104,6 +104,60 @@ pub struct PromptsCapability {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LoggingCapability {}
 
+/// Reference target for a `completion/complete` request (`ref/prompt` or `ref/resource`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompleteReference {
+    /// Reference type (`"ref/prompt"` or `"ref/resource"`).
+    #[serde(rename = "type")]
+    pub ref_type: String,
+    /// Optional prompt name when `ref_type == "ref/prompt"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Optional resource URI template when `ref_type == "ref/resource"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+}
+
+/// Argument prefix being autocompleted in a `completion/complete` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompleteArgument {
+    /// Argument name being completed (e.g. `"spec"`, `"spec_id"`, `"profile"`).
+    pub name: String,
+    /// Partial prefix value typed by the user.
+    pub value: String,
+}
+
+/// Parameter payload for `completion/complete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompleteRequestParams {
+    /// Target prompt or resource reference.
+    #[serde(rename = "ref")]
+    pub reference: CompleteReference,
+    /// Argument name and prefix value to autocomplete.
+    pub argument: CompleteArgument,
+}
+
+/// Inner completion candidates payload inside `CompleteResult`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionValues {
+    /// Matching completion candidate strings.
+    pub values: Vec<String>,
+    /// Optional total number of matching candidates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    /// Whether additional candidates exist beyond `values`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+}
+
+/// Result returned in response to `completion/complete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompleteResult {
+    /// Completion candidate values and metadata.
+    pub completion: CompletionValues,
+}
+
 /// Server capabilities declared in the initialization response.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ServerCapabilities {

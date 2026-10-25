@@ -58,8 +58,16 @@ def calculate_test_coverage() -> str:
         if pct >= 99.995:
             return "100.00"
         return f"{pct:.2f}"
-    except Exception:
-        pass
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+        ValueError,
+    ) as exc:
+        if os.environ.get("VERBOSE"):
+            print(f"cargo llvm-cov fallback triggered: {exc}", file=sys.stderr)
 
     try:
         res = subprocess.run(
@@ -74,7 +82,7 @@ def calculate_test_coverage() -> str:
             if val >= 99.995:
                 return "100.00"
             return f"{val:.2f}"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
         print(f"Failed to calculate test coverage: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -115,8 +123,9 @@ def calculate_doc_coverage() -> str:
             if val >= 99.995:
                 return "100.00"
             return f"{val:.2f}"
-    except Exception:
-        pass
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        if os.environ.get("VERBOSE"):
+            print(f"nightly rustdoc fallback triggered: {exc}", file=sys.stderr)
 
     total_items, documented_items = count_documented_pub_items("src")
     if total_items == 0:
@@ -128,7 +137,7 @@ def calculate_doc_coverage() -> str:
 
 
 def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
-    """Counts public Rust items and how many have preceding `///` doc comments.
+    """Counts module, public, and private Rust items and how many have `//!` or `///` doc comments.
 
     Args:
         src_dir: Root source directory to walk.
@@ -138,8 +147,8 @@ def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
     """
     total_items = 0
     documented_items = 0
-    pub_pattern = re.compile(
-        r"^\s*pub\s+(fn|struct|enum|mod|trait|type|const)\s+"
+    item_pattern = re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|const\s+)?(?:fn|struct|enum|mod|trait|type|const)\s+"
     )
     for root, _, files in os.walk(src_dir):
         for file in files:
@@ -148,6 +157,10 @@ def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
             path = os.path.join(root, file)
             with open(path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
+
+            total_items += 1
+            if any(line.strip().startswith("//!") for line in lines):
+                documented_items += 1
 
             has_doc = False
             for line in lines:
@@ -158,7 +171,7 @@ def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
                     has_doc = True
                 elif stripped.startswith("#["):
                     continue
-                elif pub_pattern.match(line):
+                elif item_pattern.match(line):
                     total_items += 1
                     if has_doc:
                         documented_items += 1

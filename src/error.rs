@@ -1,8 +1,9 @@
 //! Monolithic error definitions for specification conformance operations.
 
 use crate::mcp::protocol::error_codes;
-use crate::model::{Direction, LanguageId, ProfileKind, SpecId};
+use crate::model::{Direction, LanguageId, ProfileKind, SpecId, SymbolKind};
 use derive_more::{Display, Error};
+use serde::Serialize;
 use std::path::PathBuf;
 
 /// The central monolithic error type for the CDD conformance engine and MCP server.
@@ -260,8 +261,8 @@ pub enum ConformanceError {
     MissingSourceSymbol {
         /// Target language identifier.
         language: LanguageId,
-        /// Symbol category (`struct`, `field`, `function`, or `arg`).
-        symbol_kind: String,
+        /// Strongly typed symbol category (`struct`, `field`, `function`, `method`, `arg`, or `workflow`).
+        symbol_kind: SymbolKind,
         /// Expected symbol name.
         expected_name: String,
     },
@@ -282,8 +283,8 @@ pub enum ConformanceError {
         path: PathBuf,
         /// 1-based line number of the undocumented declaration.
         line: usize,
-        /// Symbol category (`struct`, `field`, `function`, or `arg`).
-        symbol_kind: String,
+        /// Strongly typed symbol category (`struct`, `field`, `function`, `method`, `arg`, or `workflow`).
+        symbol_kind: SymbolKind,
         /// Name of the undocumented symbol.
         symbol_name: String,
     },
@@ -623,6 +624,53 @@ impl ConformanceError {
     }
 }
 
+/// Serializes `value` into a pretty-printed JSON string, mapping any `serde_json::Error` into
+/// `ConformanceError::Serialization`.
+///
+/// # Arguments
+///
+/// * `value` - Serializable value to format as pretty JSON.
+/// * `context` - Human-readable context describing the payload being serialized.
+///
+/// # Returns
+///
+/// Pretty-printed JSON `String`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::Serialization` if `serde_json::to_string_pretty` fails.
+pub fn to_pretty_json<T: Serialize>(value: &T, context: &str) -> Result<String, ConformanceError> {
+    serde_json::to_string_pretty(value).map_err(|source| ConformanceError::Serialization {
+        context: context.to_string(),
+        source,
+    })
+}
+
+/// Converts `value` into a `serde_json::Value`, mapping any `serde_json::Error` into
+/// `ConformanceError::Serialization`.
+///
+/// # Arguments
+///
+/// * `value` - Serializable value to convert into a JSON value AST.
+/// * `context` - Human-readable context describing the payload being serialized.
+///
+/// # Returns
+///
+/// Serialized `serde_json::Value`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::Serialization` if `serde_json::to_value` fails.
+pub fn to_json_value<T: Serialize>(
+    value: &T,
+    context: &str,
+) -> Result<serde_json::Value, ConformanceError> {
+    serde_json::to_value(value).map_err(|source| ConformanceError::Serialization {
+        context: context.to_string(),
+        source,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,7 +935,7 @@ mod tests {
 
         let missing_sym = ConformanceError::MissingSourceSymbol {
             language: LanguageId::C,
-            symbol_kind: "struct".to_string(),
+            symbol_kind: SymbolKind::Struct,
             expected_name: "Pet".to_string(),
         };
         assert_eq!(
@@ -899,7 +947,7 @@ mod tests {
             language: LanguageId::Go,
             path: PathBuf::from("pet.go"),
             line: 7,
-            symbol_kind: "field".to_string(),
+            symbol_kind: SymbolKind::Field,
             symbol_name: "Name".to_string(),
         };
         assert_eq!(
@@ -1056,6 +1104,17 @@ mod tests {
 
     #[test]
     fn test_serialization_endpoint_regex_and_enum_errors() {
+        /// Helper type that always fails during `Serialize::serialize`.
+        struct FailingSerialize;
+        impl Serialize for FailingSerialize {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("fail serialize"))
+            }
+        }
+
         let ser_err = ConformanceError::Serialization {
             context: "matrix report".to_string(),
             source: <serde_json::Error as serde::ser::Error>::custom("serialize failure"),
@@ -1100,5 +1159,14 @@ mod tests {
             "Unrecognized ServerFramework token: 'flask'"
         );
         assert_eq!(enum_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
+
+        let pretty = to_pretty_json(&serde_json::json!({"ok": true}), "test_pretty").ok();
+        assert!(pretty.is_some_and(|s| s.contains("\"ok\": true")));
+
+        let val = to_json_value(&serde_json::json!({"ok": 1}), "test_val").ok();
+        assert_eq!(val, Some(serde_json::json!({"ok": 1})));
+
+        assert!(to_pretty_json(&FailingSerialize, "fail_pretty").is_err());
+        assert!(to_json_value(&FailingSerialize, "fail_val").is_err());
     }
 }

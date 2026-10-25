@@ -29,6 +29,10 @@ pub struct PortAllocator;
 impl PortAllocator {
     /// Allocates an available ephemeral TCP port bound to `127.0.0.1`.
     ///
+    /// Note: The OS socket is closed when this method returns so a child process can bind to the
+    /// returned port. Callers that want to hold the bound listener open before transferring or
+    /// dropping it immediately prior to spawn should use [`PortAllocator::reserve_listener`].
+    ///
     /// # Arguments
     ///
     /// * `language` - Language identifier for error attribution.
@@ -42,6 +46,37 @@ impl PortAllocator {
     /// Returns `ConformanceError::ServerStartupFailure` if binding an ephemeral socket fails.
     pub fn allocate(language: &LanguageId) -> Result<u16, ConformanceError> {
         Self::allocate_on_addr(language, "127.0.0.1:0")
+    }
+
+    /// Reserves an ephemeral `TcpListener` on `bind_addr` and returns the listener and its port.
+    ///
+    /// Minimizes the TOCTOU window before spawning a server subprocess.
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - Language identifier for error attribution.
+    /// * `bind_addr` - Socket address string to bind (e.g. `"127.0.0.1:0"`).
+    ///
+    /// # Returns
+    ///
+    /// Tuple `(TcpListener, u16)` containing the active listener and bound port.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ServerStartupFailure` if binding fails.
+    pub fn reserve_listener(
+        language: &LanguageId,
+        bind_addr: &str,
+    ) -> Result<(TcpListener, u16), ConformanceError> {
+        let listener =
+            TcpListener::bind(bind_addr).map_err(|e| ConformanceError::ServerStartupFailure {
+                language: language.clone(),
+                mode: "port-alloc".to_string(),
+                port: 0,
+                reason: e.to_string(),
+            })?;
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or_default();
+        Ok((listener, port))
     }
 
     /// Allocates an available TCP port on a specified bind address.
@@ -62,14 +97,8 @@ impl PortAllocator {
         language: &LanguageId,
         bind_addr: &str,
     ) -> Result<u16, ConformanceError> {
-        let listener =
-            TcpListener::bind(bind_addr).map_err(|e| ConformanceError::ServerStartupFailure {
-                language: language.clone(),
-                mode: "port-alloc".to_string(),
-                port: 0,
-                reason: e.to_string(),
-            })?;
-        Ok(listener.local_addr().map_or(1, |a| a.port()))
+        let (_listener, port) = Self::reserve_listener(language, bind_addr)?;
+        Ok(port)
     }
 }
 
@@ -91,7 +120,7 @@ impl PortAllocator {
 ///
 /// Returns `ConformanceError::ToolchainUnavailable` if `cmd_tokens` is empty or fails to spawn,
 /// `ConformanceError::SubprocessTimeout` if execution exceeds `timeout_ms`, or
-/// `ConformanceError::SubprocessExecution` if the command exits with a non-zero code.
+/// `ConformanceError::SubprocessExecution` if the command exits with a non-zero code or I/O wait error.
 pub async fn run_command_with_timeout(
     language: &LanguageId,
     cmd_tokens: &[String],
@@ -231,11 +260,11 @@ impl ManagedProcess {
         })
     }
 
-    /// Terminates the managed background process immediately.
+    /// Terminates the managed background process immediately and awaits its exit.
     ///
     /// # Errors
     ///
-    /// Returns `ConformanceError::Io` if killing or waiting on the child fails.
+    /// Returns `ConformanceError::SubprocessExecution` if waiting on the child process fails.
     pub async fn stop(&mut self) -> Result<(), ConformanceError> {
         let _ = self.child.start_kill();
         let _ = self.child.wait().await;
@@ -337,8 +366,9 @@ pub async fn send_local_http_request(
     req.push_str("\r\n");
     req.push_str(body_str);
 
-    let mut raw_resp = Vec::new();
     let _ = stream.write_all(req.as_bytes()).await;
+
+    let mut raw_resp = Vec::new();
     let _ = stream.read_to_end(&mut raw_resp).await;
     let text = String::from_utf8_lossy(&raw_resp).to_string();
     let (head_part, body_part) = text
@@ -380,6 +410,8 @@ mod tests {
     async fn test_port_allocator_and_command_execution() {
         let port = PortAllocator::allocate(&LanguageId::Rust).unwrap_or(0);
         assert!(port > 0);
+        let reserved = PortAllocator::reserve_listener(&LanguageId::Rust, "127.0.0.1:0").ok();
+        assert!(reserved.is_some_and(|(_, p)| p > 0));
         assert!(PortAllocator::allocate_on_addr(&LanguageId::Rust, "invalid_addr:0").is_err());
 
         let empty_cmd: Vec<String> = Vec::new();
