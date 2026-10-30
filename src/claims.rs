@@ -664,7 +664,6 @@ pub fn verify_compliance_claims(
 }
 
 #[cfg(test)]
-#[allow(clippy::needless_raw_string_hashes)]
 mod tests {
     use super::*;
     use crate::model::{ChecklistRow, FeatureStatus, ProfileKind, SpecId};
@@ -741,11 +740,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let comp_path = dir.join("COMPLIANCE.md");
 
-        let comp_content = r#"# OpenAPI 3.2.0 Compliance
-| Feature | Status |
-| :--- | :---: |
-| `Info-Object` | ✅ |
-"#;
+        let comp_content =
+            "# OpenAPI 3.2.0 Compliance\n| Feature | Status |\n| :--- | :---: |\n| `Info-Object` | ✅ |\n";
         let _ = std::fs::write(&comp_path, comp_content);
 
         let table = ChecklistTable {
@@ -777,34 +773,15 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let comp_path = dir.join("COMPLIANCE.md");
 
-        let comp_content = r#"# Compliance Edge Cases
-| SingleCol |
-| :--- |
-| One |
-
-| Feature | Status |
-| :--- | :---: |
-| | ✅ |
-| --- | ✅ |
-| Total | ✅ |
-| Unknown Feature XYZ | ✅ |
-| Paths Object | ❌ |
-| Server Variable | ✅ |
-| Webhook | ✅ |
-"#;
+        let comp_content = "# Compliance Edge Cases\n| SingleCol |\n| :--- |\n| One |\n\n| Feature | Status |\n| :--- | :---: |\n| | ✅ |\n| --- | ✅ |\n| Total | ✅ |\n| Unknown Feature XYZ | ✅ |\n| Paths Object | ❌ |\n| Server Variable | ✅ |\n| Webhook | ✅ |\n";
         let _ = std::fs::write(&comp_path, comp_content);
 
-        // 1. With empty checklists slice, unknown feature is accepted
         let empty_tables_rep = verify_compliance_claims(&comp_path, &[]).ok();
         assert_eq!(
             empty_tables_rep.map(|r| (r.is_consistent, r.verified_claims)),
             Some((true, 3))
         );
 
-        // 2. With non-empty checklists slice:
-        //    - "Unknown Feature XYZ" -> None branch (discrepancy)
-        //    - "Server Variable" -> matches "Server Variable Object" where status is false
-        //    - "Webhook" -> stem matches "Webhooks Object" where status is true
         let table = ChecklistTable {
             spec_id: SpecId::OpenApi320,
             profile: ProfileKind::ClientSdk,
@@ -853,7 +830,6 @@ mod tests {
             !r.is_consistent
         }));
 
-        // Verify token matching edge cases
         assert!(matches_feature_tokens("webhook", "webhooks object"));
         assert!(matches_feature_tokens("webhooks", "webhook object"));
         assert!(matches_feature_tokens("security", "securities"));
@@ -874,26 +850,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn test_verify_composite_and_bullet_claims() {
         let dir = std::env::temp_dir().join(format!("cdd_claims_test3_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let bullet_path = dir.join("COMPLIANCE2.md");
-        let bullet_md = r#"# Compliance
-Introductory paragraph outside list items.
-
-- `Info Object`: ✅ Supported
-- Info Object / (): ✅ Supported
-- Responses / Schema Object: ✅ Supported
-- Links / MissingPart: ✅ Supported
-- Unimplemented / Schema Object: ✅ Supported
-- UnknownA / UnknownB: ✅ Supported
-- Webhooks: ✅ Supported
-- ✅ Schema Object (JSON Schema)
-- ✅
-- : ✅ Ignored Empty
-- Plain item without check
-"#;
+        let bullet_md = "# Compliance\nIntroductory paragraph outside list items.\n\n- `Info Object`: ✅ Supported\n- Info Object / (): ✅ Supported\n- Responses / Schema Object: ✅ Supported\n- Links / MissingPart: ✅ Supported\n- Unimplemented / Schema Object: ✅ Supported\n- UnknownA / UnknownB: ✅ Supported\n- Webhooks: ✅ Supported\n- ✅ Schema Object (JSON Schema)\n- ✅\n- : ✅ Ignored Empty\n- Plain item without check\n";
         let _ = std::fs::write(&bullet_path, bullet_md);
         let present = FeatureStatus::from_arrays([true, true], [false, false], [false, false]);
         let table = ChecklistTable {
@@ -944,8 +905,14 @@ Introductory paragraph outside list items.
             rep.map(|r| (r.total_claims, r.verified_claims, r.discrepancies.len())),
             Some((7, 4, 3))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        // Test Arazzo 1.1.0 parenthetical discriminator claims and spec-level claim
+    #[test]
+    fn test_verify_arazzo_parenthetical_claims() {
+        let dir = std::env::temp_dir().join(format!("cdd_claims_test3b_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let present = FeatureStatus::from_arrays([true, true], [false, false], [false, false]);
         let arazzo_comp_path = dir.join("ARAZZO_COMPLIANCE.md");
         let arazzo_comp_md = "# Arazzo 1.1.0 Compliance\n- Arazzo 1.1.0: ✅ Supported\n- Arazzo 1.1.0 Engine: ✅ Supported\n- Object: ✅ Supported\n- Runtime Expressions ($steps): ✅ Supported\n- Runtime Expressions ($message.payload): ✅ Supported\n- Step Object (channelPath) / Selector Object: ✅ Supported\n- Selector Object (foo, bar): ✅ Supported\n- UnknownSingle ($unknown, $steps): ✅ Supported\n- UnknownA & UnknownB ($unknown, $steps): ✅ Supported\n- UnknownC, UnknownD (unclosed: ✅ Supported\n- OAuth2 Flows / MediaTypes / Headers / Links / Callbacks / AdditionalOps: ✅ Supported\n";
         let _ = std::fs::write(&arazzo_comp_path, arazzo_comp_md);

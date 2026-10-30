@@ -1,10 +1,7 @@
 //! Data models and verification methods for shallow-parsed source code bundles.
 
 use crate::error::ConformanceError;
-use crate::model::{
-    ArazzoDocument, ArazzoInfoObject, ArazzoSourceDescription, ArazzoSourceType, ArazzoStepObject,
-    ArazzoStepTarget, ArazzoVersion, ArazzoWorkflowObject, LanguageId, ProfileKind, SymbolKind,
-};
+use crate::model::{ArazzoDocument, LanguageId, ProfileKind, SymbolKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -411,6 +408,26 @@ impl ParsedSourceBundle {
         if profile == ProfileKind::ClientCli {
             if let Some(sdk) = sdk_bundle {
                 sdk.verify_against_arazzo(arazzo_doc, fallback_lang)?;
+                let lang = self.language.as_ref().unwrap_or(fallback_lang);
+                let cli_symbols: BTreeSet<String> = self
+                    .structs
+                    .iter()
+                    .map(|s| normalize_ident(&s.name))
+                    .chain(
+                        self.all_functions()
+                            .into_iter()
+                            .map(|f| normalize_ident(&f.name)),
+                    )
+                    .collect();
+                for sdk_fn in sdk.all_functions() {
+                    if !cli_symbols.contains(&normalize_ident(&sdk_fn.name)) {
+                        return Err(ConformanceError::MissingSourceSymbol {
+                            language: lang.clone(),
+                            symbol_kind: SymbolKind::Function,
+                            expected_name: sdk_fn.name.clone(),
+                        });
+                    }
+                }
             }
         }
         Ok(())
@@ -554,6 +571,11 @@ impl ParsedSourceBundle {
     #[allow(for_loops_over_fallibles)]
     pub fn reconstruct_arazzo_doc(&self, template_doc: &serde_json::Value) -> serde_json::Value {
         let mut out = template_doc.clone();
+        let lang = self.language.as_ref().unwrap_or(&LanguageId::Rust);
+        for ast in ArazzoDocument::from_json_value(template_doc, lang) {
+            out["arazzo"] = serde_json::Value::String(ast.arazzo.as_str().to_string());
+        }
+
         let struct_map: BTreeMap<String, &ParsedStructOrClass> = self
             .structs
             .iter()
@@ -628,87 +650,7 @@ impl ParsedSourceBundle {
             });
         }
 
-        let _ = (
-            ArazzoDocument::from_json_value,
-            ArazzoVersion::as_str,
-            ArazzoSourceType::OpenApi,
-            ArazzoInfoObject::default_placeholder(),
-            ArazzoSourceDescription::default_placeholder(),
-            ArazzoStepObject::default_placeholder(),
-            ArazzoWorkflowObject::default_placeholder(),
-        );
-
         out
-    }
-}
-
-impl ArazzoInfoObject {
-    /// Constructs an empty placeholder `ArazzoInfoObject`.
-    #[must_use]
-    pub(crate) const fn default_placeholder() -> Self {
-        Self {
-            title: String::new(),
-            summary: None,
-            description: None,
-            version: String::new(),
-            extensions: BTreeMap::new(),
-        }
-    }
-}
-
-impl ArazzoSourceDescription {
-    /// Constructs an empty placeholder `ArazzoSourceDescription`.
-    #[must_use]
-    pub(crate) const fn default_placeholder() -> Self {
-        Self {
-            name: String::new(),
-            url: String::new(),
-            source_type: Some(ArazzoSourceType::OpenApi),
-            extensions: BTreeMap::new(),
-        }
-    }
-}
-
-impl ArazzoStepObject {
-    /// Constructs an empty placeholder `ArazzoStepObject`.
-    #[must_use]
-    pub(crate) const fn default_placeholder() -> Self {
-        Self {
-            step_id: String::new(),
-            description: None,
-            target: ArazzoStepTarget::OperationId(String::new()),
-            parameters: Vec::new(),
-            request_body: None,
-            depends_on: Vec::new(),
-            timeout: None,
-            correlation_id: None,
-            action: None,
-            success_criteria: Vec::new(),
-            on_success: Vec::new(),
-            on_failure: Vec::new(),
-            outputs: BTreeMap::new(),
-            extensions: BTreeMap::new(),
-        }
-    }
-}
-
-impl ArazzoWorkflowObject {
-    /// Constructs an empty placeholder `ArazzoWorkflowObject`.
-    #[must_use]
-    pub(crate) const fn default_placeholder() -> Self {
-        Self {
-            workflow_id: String::new(),
-            summary: None,
-            description: None,
-            inputs: None,
-            depends_on: Vec::new(),
-            steps: Vec::new(),
-            success_actions: Vec::new(),
-            failure_actions: Vec::new(),
-            outputs: BTreeMap::new(),
-            parameters: Vec::new(),
-            extensions: BTreeMap::new(),
-        }
     }
 }
 

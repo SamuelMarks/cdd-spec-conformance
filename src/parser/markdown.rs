@@ -664,7 +664,6 @@ fn parse_list_checklist(
 }
 
 #[cfg(test)]
-#[allow(clippy::needless_raw_string_hashes)]
 mod tests {
     use super::*;
 
@@ -693,28 +692,16 @@ mod tests {
             Some([false, false])
         );
 
-        // Unclosed bracket returns explicit reason
         let unclosed_res = parse_checkbox_pair("[x", p, 4);
         assert!(unclosed_res.is_err());
-
-        // >2 checkboxes rejected
         assert!(parse_checkbox_pair("[x] , [ ] , [x]", p, 1).is_err());
-        // Invalid content rejected
         assert!(parse_checkbox_pair("[invalid]", p, 1).is_err());
-        // 0 checkboxes rejected
         assert!(parse_checkbox_pair("no boxes here", p, 1).is_err());
     }
 
     #[test]
     fn test_parse_table_checklist_valid_and_line_numbers() {
-        let content = r#"# OpenAPI 3.2.0 Conformance Table: Client SDK
-
-| OpenAPI 3.2.0 Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes / Implementation Strategy |
-| :--- | :---: | :---: | :---: | :--- |
-| **OpenAPI Object (Root)** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Root generation / parsing |
-| **OpenAPI Object (`openapi`)** | `[x]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | TODO |
-| **OpenAPI Object (`$self`)** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[x]` , `[x]` | Base URI skip rationale |
-"#;
+        let content = "# OpenAPI 3.2.0 Conformance Table: Client SDK\n\n| OpenAPI 3.2.0 Object / Feature | Presence [To, From] | Absence [To, From] | Skipped [To, From] | Notes / Implementation Strategy |\n| :--- | :---: | :---: | :---: | :--- |\n| **OpenAPI Object (Root)** | `[x]` , `[x]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | Root generation / parsing |\n| **OpenAPI Object (`openapi`)** | `[x]` , `[ ]` | `[ ]` , `[ ]` | `[ ]` , `[ ]` | TODO |\n| **OpenAPI Object (`$self`)** | `[ ]` , `[ ]` | `[ ]` , `[ ]` | `[x]` , `[x]` | Base URI skip rationale |\n";
 
         let t_res = parse_checklist(
             content,
@@ -739,12 +726,7 @@ mod tests {
             t.rows[2].status.is_from_skipped()
         }));
 
-        // Test binary_search Err branch when offset is mid-line
-        let starts = compute_line_starts(
-            "line1
-line2
-",
-        );
+        let starts = compute_line_starts("line1\nline2\n");
         assert_eq!(line_number_for_offset(&starts, 0), 1);
         assert_eq!(line_number_for_offset(&starts, 2), 1);
         assert_eq!(line_number_for_offset(&starts, 6), 2);
@@ -753,11 +735,8 @@ line2
 
     #[test]
     fn test_parse_table_checklist_invalid_headers() {
-        let content = r#"# Bad Table
-| Column A | Column B | Column C |
-| --- | --- | --- |
-| 1 | 2 | 3 |
-"#;
+        let content =
+            "# Bad Table\n| Column A | Column B | Column C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n";
         let res = parse_checklist(
             content,
             Path::new("bad.md"),
@@ -769,14 +748,7 @@ line2
 
     #[test]
     fn test_parse_list_checklist_mock_server() {
-        let content = r#"# Exhaustive Mock Server Implementation Checklist
-
-- [x] Review package manifest
-- [ ] Add the Faker library
-- [X] Concrete DAOs
-- [-] Legacy SOAP Adapter: Not applicable to HTTP/JSON
-- [~] GraphQL Federation — Out of scope for REST mock server
-"#;
+        let content = "# Exhaustive Mock Server Implementation Checklist\n\n- [x] Review package manifest\n- [ ] Add the Faker library\n- [X] Concrete DAOs\n- [-] Legacy SOAP Adapter: Not applicable to HTTP/JSON\n- [~] GraphQL Federation — Out of scope for REST mock server\n";
         let table_res = parse_checklist(
             content,
             Path::new("mock-server-plan.md"),

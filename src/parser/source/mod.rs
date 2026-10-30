@@ -28,15 +28,7 @@ pub use model::{
 use crate::ecosystem::SyntaxProfileConfig;
 use crate::error::ConformanceError;
 use crate::model::LanguageId;
-use crate::parser::source::languages::{
-    c_cpp::parse_c_cpp_source,
-    dynamic::{parse_php_source, parse_python_source, parse_ruby_source, parse_shell_source},
-    go::parse_go_source,
-    jvm_dotnet::{parse_csharp_java_source, parse_kotlin_source},
-    legacy::{parse_cobol_source, parse_custom_profile_source, parse_fortran_source},
-    rust::parse_rust_source,
-    swift_ts_zig::{parse_swift_source, parse_ts_source, parse_zig_source},
-};
+use crate::parser::source::languages::{LanguageDispatcher, LanguageSyntaxExtractor};
 use crate::parser::source::lexer_helpers::collapse_multiline_fn_headers;
 use std::path::{Path, PathBuf};
 
@@ -259,26 +251,11 @@ pub fn parse_source_str(
     };
 
     let collapsed = collapse_multiline_fn_headers(source);
-    let source = collapsed.as_str();
-    match language {
-        LanguageId::Python => parse_python_source(source, &mut bundle),
-        LanguageId::Ruby => parse_ruby_source(source, &mut bundle),
-        LanguageId::Sh => parse_shell_source(source, &mut bundle),
-        LanguageId::Go => parse_go_source(source, &mut bundle),
-        LanguageId::Rust => parse_rust_source(source, &mut bundle),
-        LanguageId::C | LanguageId::Cpp => parse_c_cpp_source(source, &mut bundle),
-        LanguageId::CSharp | LanguageId::Java => parse_csharp_java_source(source, &mut bundle),
-        LanguageId::Kotlin => parse_kotlin_source(source, &mut bundle),
-        LanguageId::Php => parse_php_source(source, &mut bundle),
-        LanguageId::Swift => parse_swift_source(source, &mut bundle),
-        LanguageId::TypeScript => parse_ts_source(source, &mut bundle),
-        LanguageId::Custom(slug) => match slug.as_str() {
-            "cobol" => parse_cobol_source(source, &mut bundle),
-            "fortran" => parse_fortran_source(source, &mut bundle),
-            "zig" => parse_zig_source(source, &mut bundle),
-            _ => parse_custom_profile_source(source, custom_syntax, &mut bundle),
-        },
-    }
+    let dispatcher = LanguageDispatcher {
+        language,
+        custom_syntax,
+    };
+    dispatcher.extract(collapsed.as_str(), &mut bundle);
 
     bundle
 }
@@ -1658,14 +1635,30 @@ pub struct PurchasePetWorkflow {
                 &LanguageId::Rust
             )
             .is_ok());
-        assert!(bundle_arazzo_st
+        assert!(bundle_arazzo_fn
             .verify_against_arazzo_profile(
                 &arazzo_doc,
                 ProfileKind::ClientCli,
-                Some(&bundle_arazzo_st),
+                Some(&bundle_arazzo_fn),
                 &LanguageId::Rust
             )
             .is_ok());
+        let mut sdk_with_extra = bundle_arazzo_fn.clone();
+        sdk_with_extra.functions.push(ParsedFunction {
+            name: "unmirrored_sdk_helper".to_string(),
+            doc_comment: Some("Helper.".to_string()),
+            args: Vec::new(),
+            return_type: None,
+            line: 99,
+        });
+        assert!(bundle_arazzo_fn
+            .verify_against_arazzo_profile(
+                &arazzo_doc,
+                ProfileKind::ClientCli,
+                Some(&sdk_with_extra),
+                &LanguageId::Rust
+            )
+            .is_err());
         assert!(bundle_arazzo_st
             .verify_against_arazzo_profile(
                 &arazzo_doc,
@@ -1696,8 +1689,15 @@ pub struct PurchasePetWorkflow {
         assert_eq!(ml_bundle.functions[0].args.len(), 3);
         assert!(ml_bundle.verify_100_percent_docs(&LanguageId::Rust).is_ok());
 
-        // Multi-line C header
+        // Multi-line C header and lowercase struct server_state
         let multiline_c = "/**
+ * Server state.
+ */
+struct server_state {
+    /** Port. */
+    int port;
+};
+/**
  * Add two numbers.
  * @param a First.
  * @param b Second.
@@ -1708,8 +1708,37 @@ int add_numbers(
 );
 ";
         let ml_c_bundle = parse_source_str(multiline_c, Path::new("ml.h"), &LanguageId::C, None);
+        assert_eq!(ml_c_bundle.structs.len(), 1);
+        assert_eq!(ml_c_bundle.structs[0].name, "server_state");
         assert_eq!(ml_c_bundle.functions.len(), 1);
         assert_eq!(ml_c_bundle.functions[0].args.len(), 2);
         assert!(ml_c_bundle.verify_100_percent_docs(&LanguageId::C).is_ok());
+
+        // Rust #[cfg(test)] single-line and multi-line fn skipping followed by production function
+        let cfg_test_rs = "
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+/// Ignored test doc.
+fn test_helper() {
+    // Ignored inner comment.
+    let x = 1;
+}
+#[cfg(test)]
+const TEST_ONLY: usize = 1;
+/// Production function after cfg(test).
+#[allow(
+    dead_code
+)]
+pub unsafe fn after_cfg_test() {}
+#[cfg(test)]
+mod trailing_tests {
+    fn ignored() {}
+}
+";
+        let cfg_bundle =
+            parse_source_str(cfg_test_rs, Path::new("cfg.rs"), &LanguageId::Rust, None);
+        assert_eq!(cfg_bundle.functions.len(), 1);
+        assert_eq!(cfg_bundle.functions[0].name, "after_cfg_test");
     }
 }

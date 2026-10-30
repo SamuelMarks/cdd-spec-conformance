@@ -160,7 +160,7 @@ pub fn read_resource(
             .iter()
             .map(|s| serde_json::Value::String(s.as_str().to_string()))
             .collect();
-        let json = serde_json::to_string_pretty(&items).unwrap_or_default();
+        let json = crate::error::to_pretty_json(&items, "conformance://specs").unwrap_or_default();
         return Ok(ReadResourceResult {
             contents: vec![ResourceContents {
                 uri: uri.to_string(),

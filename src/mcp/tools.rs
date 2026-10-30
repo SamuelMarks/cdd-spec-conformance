@@ -753,7 +753,7 @@ fn handle_diff_checklists(
     let canonical = registry.get_table(args.spec_id, args.profile)?;
     let diff = compare_checklists_with_path(&target_table, &canonical, &checklist.path);
 
-    let json_str = serde_json::to_string_pretty(&diff).unwrap_or_default();
+    let json_str = crate::error::to_pretty_json(&diff, "diff_checklists").unwrap_or_default();
     Ok(CallToolResult::text(json_str))
 }
 
@@ -781,7 +781,7 @@ fn handle_validate_claims(
 
     if let Some(ref comp_file) = project.compliance_file {
         let report = verify_compliance_claims(comp_file, &tables)?;
-        let res_json = serde_json::to_string_pretty(&report).unwrap_or_default();
+        let res_json = crate::error::to_pretty_json(&report, "validate_claims").unwrap_or_default();
         Ok(CallToolResult::text(res_json))
     } else {
         Ok(CallToolResult::text(
@@ -922,7 +922,9 @@ pub fn execute_tool_with_roots(
                 args.require_docs,
                 spec_path,
             )?;
-            let json_str = serde_json::to_string_pretty(&bundle).unwrap_or_default();
+            let json_str =
+                crate::error::to_pretty_json(&bundle, "inspect_language_source_signatures")
+                    .unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
         ToolName::VerifyLanguageClientsAgainstRustBackend => {
@@ -940,7 +942,11 @@ pub fn execute_tool_with_roots(
                 args.spec,
                 args.mode,
             )?;
-            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let json_str = crate::error::to_pretty_json(
+                &report,
+                "verify_language_clients_against_rust_backend",
+            )
+            .unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
         ToolName::VerifyLanguageBackendCompatibilityMatrix => {
@@ -948,7 +954,11 @@ pub fn execute_tool_with_roots(
             let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let report = verify_backends_matrix(&valid_parent, &args.extra_langs)?;
-            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let json_str = crate::error::to_pretty_json(
+                &report,
+                "verify_language_backend_compatibility_matrix",
+            )
+            .unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
         ToolName::VerifyCrossLanguageRoundtrip => {
@@ -957,7 +967,8 @@ pub fn execute_tool_with_roots(
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let report =
                 verify_cross_language_roundtrip_chain(&valid_parent, &args.extra_langs, args.spec)?;
-            let json_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let json_str = crate::error::to_pretty_json(&report, "verify_cross_language_roundtrip")
+                .unwrap_or_default();
             Ok(CallToolResult::text(json_str))
         }
         ToolName::ValidateArazzoSpec => {

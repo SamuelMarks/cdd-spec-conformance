@@ -10,13 +10,60 @@ use crate::parser::source::model::{
     ParsedArg, ParsedField, ParsedFunction, ParsedSourceBundle, ParsedStructOrClass,
 };
 
+/// Parses a single non-closing member line inside a Go `struct` or `interface` body.
+///
+/// # Arguments
+///
+/// * `code` - Trimmed code line inside the struct or interface body.
+/// * `line_num` - 1-based line number.
+/// * `doc_buf` - Accumulated doc comment lines above the member.
+/// * `inline_doc` - Optional trailing inline doc comment.
+/// * `st` - Mutable `ParsedStructOrClass` to populate.
+fn parse_go_struct_member(
+    code: &str,
+    line_num: usize,
+    doc_buf: &mut Vec<String>,
+    inline_doc: Option<String>,
+    st: &mut ParsedStructOrClass,
+) {
+    if let Some((fn_part, params_inside, after_params)) = code
+        .find('(')
+        .and_then(|idx| split_first_paren(&code[idx..]).map(|(p, a)| (&code[..idx], p, a)))
+    {
+        let doc = join_doc_lines(doc_buf).or(inline_doc);
+        doc_buf.clear();
+        let mut args = parse_go_args(&params_inside, line_num);
+        attach_arg_docs(&mut args, doc.as_deref());
+        let return_out = after_params.trim();
+        st.methods.push(ParsedFunction {
+            name: fn_part.trim().to_string(),
+            doc_comment: doc,
+            args,
+            return_type: (!return_out.is_empty()).then(|| return_out.to_string()),
+            line: line_num,
+        });
+    } else {
+        let without_tag = code.split('`').next().unwrap_or(code).trim();
+        let mut parts = without_tag.split_whitespace();
+        if let (Some(f_name), Some(f_type)) = (parts.next(), parts.next()) {
+            let doc = join_doc_lines(doc_buf).or(inline_doc);
+            doc_buf.clear();
+            st.fields.push(ParsedField {
+                name: f_name.to_string(),
+                type_annotation: Some(f_type.to_string()),
+                doc_comment: doc,
+                line: line_num,
+            });
+        }
+    }
+}
+
 /// Parses Go source code (`.go`) for `type <Name> struct`, fields, `func`, args, and `//` `GoDoc` comments.
 ///
 /// # Arguments
 ///
 /// * `source` - Raw Go source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
     let mut doc_buf: Vec<String> = Vec::new();
     let mut in_block_comment = false;
@@ -59,35 +106,8 @@ pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
             if code.starts_with('}') {
                 finish_struct(&mut current_struct, bundle);
                 doc_buf.clear();
-            } else if let Some((fn_part, params_inside, after_params)) = code
-                .find('(')
-                .and_then(|idx| split_first_paren(&code[idx..]).map(|(p, a)| (&code[..idx], p, a)))
-            {
-                let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                doc_buf.clear();
-                let mut args = parse_go_args(&params_inside, line_num);
-                attach_arg_docs(&mut args, &doc);
-                let return_out = after_params.trim();
-                st.methods.push(ParsedFunction {
-                    name: fn_part.trim().to_string(),
-                    doc_comment: doc,
-                    args,
-                    return_type: (!return_out.is_empty()).then(|| return_out.to_string()),
-                    line: line_num,
-                });
             } else {
-                let without_tag = code.split('`').next().unwrap_or(code).trim();
-                let mut parts = without_tag.split_whitespace();
-                if let (Some(f_name), Some(f_type)) = (parts.next(), parts.next()) {
-                    let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                    doc_buf.clear();
-                    st.fields.push(ParsedField {
-                        name: f_name.to_string(),
-                        type_annotation: Some(f_type.to_string()),
-                        doc_comment: doc,
-                        line: line_num,
-                    });
-                }
+                parse_go_struct_member(code, line_num, &mut doc_buf, inline_doc, st);
             }
             continue;
         }
@@ -114,7 +134,7 @@ pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
             {
                 let fn_name = fn_part.split('[').next().unwrap_or("").trim().to_string();
                 let mut args = parse_go_args(&params_inside, line_num);
-                attach_arg_docs(&mut args, &doc);
+                attach_arg_docs(&mut args, doc.as_deref());
                 let return_out = after_params.trim_end_matches('{').trim();
                 let func = ParsedFunction {
                     name: fn_name,

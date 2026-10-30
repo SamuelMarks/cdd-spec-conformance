@@ -1,9 +1,7 @@
 //! Shallow COBOL, Fortran, and custom `SyntaxProfileConfig` source-code extractors.
 
 use crate::ecosystem::SyntaxProfileConfig;
-use crate::parser::source::comments::{
-    attach_arg_docs, attach_field_docs, clean_comment_line, join_doc_lines,
-};
+use crate::parser::source::comments::{attach_arg_docs, clean_comment_line, join_doc_lines};
 use crate::parser::source::lexer_helpers::{
     finish_struct, match_fn_decl, match_keyword_decl, parse_colon_style_args, split_first_paren,
     split_top_level_params,
@@ -43,10 +41,7 @@ pub(crate) fn parse_cobol_source(source: &str, bundle: &mut ParsedSourceBundle) 
                 .to_string();
             let doc = join_doc_lines(&doc_buf);
             doc_buf.clear();
-            if let Some(mut prev) = current_struct.take() {
-                attach_field_docs(&mut prev.fields, &prev.doc_comment);
-                bundle.structs.push(prev);
-            }
+            finish_struct(&mut current_struct, bundle);
             current_struct = Some(ParsedStructOrClass {
                 name,
                 doc_comment: doc,
@@ -113,7 +108,7 @@ pub(crate) fn parse_cobol_source(source: &str, bundle: &mut ParsedSourceBundle) 
                         line: line_num,
                     });
                 }
-                attach_arg_docs(&mut last_fn.args, &combined_doc);
+                attach_arg_docs(&mut last_fn.args, combined_doc.as_deref());
             }
         }
     }
@@ -204,7 +199,7 @@ pub(crate) fn parse_fortran_source(source: &str, bundle: &mut ParsedSourceBundle
                     line: line_num,
                 });
             }
-            attach_arg_docs(&mut args, &doc);
+            attach_arg_docs(&mut args, doc.as_deref());
             bundle.functions.push(ParsedFunction {
                 name: fn_name,
                 doc_comment: doc,
@@ -270,7 +265,7 @@ pub(crate) fn parse_custom_profile_source(
             let doc = join_doc_lines(&doc_buf);
             doc_buf.clear();
             let mut args = parse_colon_style_args(&params, line_num);
-            attach_arg_docs(&mut args, &doc);
+            attach_arg_docs(&mut args, doc.as_deref());
             bundle.functions.push(ParsedFunction {
                 name: fn_name,
                 doc_comment: doc,

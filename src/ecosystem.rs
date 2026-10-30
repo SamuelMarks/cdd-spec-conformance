@@ -264,543 +264,340 @@ pub struct LanguageToolchainSpec {
     pub supported_targets: LanguageCapabilities,
 }
 
+/// Converts a slice of string literals into an owned `Vec<String>`.
+///
+/// # Arguments
+///
+/// * `args` - Slice of static string slices.
+///
+/// # Returns
+///
+/// Owned `Vec<String>`.
+fn cmd_vec(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| (*s).to_string()).collect()
+}
+
 impl LanguageToolchainSpec {
-    /// Returns the built-in default `LanguageToolchainSpec` for any `LanguageId` (including the 13 core
-    /// languages and presets for `cobol`, `fortran`, `zig`, or generic custom slugs).
+    /// Returns the default toolchain specification for compiled systems languages (`C`, `Cpp`, `Go`, `Rust`, `Swift`).
     ///
     /// # Arguments
     ///
-    /// * `language_id` - The target `LanguageId`.
+    /// * `language_id` - Target `LanguageId`.
+    ///
+    /// # Returns
+    ///
+    /// `Some(LanguageToolchainSpec)` if `language_id` is in the compiled systems family, or `None`.
+    #[must_use]
+    fn default_systems_toolchain(language_id: &LanguageId) -> Option<Self> {
+        let repo_name = language_id.repo_name();
+        match language_id {
+            LanguageId::C => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["./build/cdd-c"]),
+                client_sdk_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["ctest", "--test-dir", "build"]),
+                client_cli_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                client_cli_run_cmd: cmd_vec(&["./build/cdd-c-cli"]),
+                server_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                server_start_cmd: cmd_vec(&["./build/cdd-c-server"]),
+                linter_cmd: cmd_vec(&[
+                    "cc",
+                    "-std=c89",
+                    "-pedantic",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                ]),
+                supported_targets: LanguageCapabilities {
+                    wasm: true,
+                    ..LanguageCapabilities::full()
+                },
+            }),
+            LanguageId::Cpp => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["./build/cdd-cpp"]),
+                client_sdk_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["ctest", "--test-dir", "build"]),
+                client_cli_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                client_cli_run_cmd: cmd_vec(&["./build/cdd-cpp-cli"]),
+                server_build_cmd: cmd_vec(&["cmake", "--build", "build"]),
+                server_start_cmd: cmd_vec(&["./build/cdd-cpp-server"]),
+                linter_cmd: cmd_vec(&["c++", "-std=c++17", "-Wall", "-Werror"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            LanguageId::Go => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["go", "run", "."]),
+                client_sdk_build_cmd: cmd_vec(&["go", "build", "./..."]),
+                client_sdk_test_cmd: cmd_vec(&["go", "test", "./..."]),
+                client_cli_build_cmd: cmd_vec(&["go", "build", "./..."]),
+                client_cli_run_cmd: cmd_vec(&["./cdd-go-cli"]),
+                server_build_cmd: cmd_vec(&["go", "build", "./..."]),
+                server_start_cmd: cmd_vec(&["./cdd-go-server"]),
+                linter_cmd: cmd_vec(&["go", "vet", "./..."]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            LanguageId::Rust => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["cargo", "run", "--quiet", "--"]),
+                client_sdk_build_cmd: cmd_vec(&["cargo", "build", "--quiet"]),
+                client_sdk_test_cmd: cmd_vec(&["cargo", "test", "--quiet"]),
+                client_cli_build_cmd: cmd_vec(&["cargo", "build", "--quiet"]),
+                client_cli_run_cmd: cmd_vec(&["cargo", "run", "--quiet", "--"]),
+                server_build_cmd: cmd_vec(&["cargo", "build", "--quiet"]),
+                server_start_cmd: cmd_vec(&["cargo", "run", "--quiet", "--", "start"]),
+                linter_cmd: cmd_vec(&["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]),
+                supported_targets: LanguageCapabilities {
+                    wasm: true,
+                    ..LanguageCapabilities::full()
+                },
+            }),
+            LanguageId::Swift => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["swift", "run", "cdd-swift"]),
+                client_sdk_build_cmd: cmd_vec(&["swift", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["swift", "test"]),
+                client_cli_build_cmd: cmd_vec(&["swift", "build"]),
+                client_cli_run_cmd: cmd_vec(&["swift", "run", "sdk-cli"]),
+                server_build_cmd: cmd_vec(&["swift", "build"]),
+                server_start_cmd: cmd_vec(&["swift", "run", "server"]),
+                linter_cmd: cmd_vec(&["swift", "build", "-Xswiftc", "-warnings-as-errors"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            _ => Self::default_managed_toolchain(language_id),
+        }
+    }
+
+    /// Returns the default toolchain specification for JVM/.NET/Web languages (`CSharp`, `Java`, `Kotlin`, `TypeScript`).
+    ///
+    /// # Arguments
+    ///
+    /// * `language_id` - Target `LanguageId`.
+    ///
+    /// # Returns
+    ///
+    /// `Some(LanguageToolchainSpec)` if `language_id` is in the managed/web family, or `None`.
+    #[must_use]
+    fn default_managed_toolchain(language_id: &LanguageId) -> Option<Self> {
+        let repo_name = language_id.repo_name();
+        match language_id {
+            LanguageId::CSharp => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["dotnet", "run", "--"]),
+                client_sdk_build_cmd: cmd_vec(&["dotnet", "build", "-warnaserror"]),
+                client_sdk_test_cmd: cmd_vec(&["dotnet", "test"]),
+                client_cli_build_cmd: cmd_vec(&["dotnet", "build"]),
+                client_cli_run_cmd: cmd_vec(&["dotnet", "run", "--"]),
+                server_build_cmd: cmd_vec(&["dotnet", "build"]),
+                server_start_cmd: cmd_vec(&["dotnet", "run", "--"]),
+                linter_cmd: cmd_vec(&["dotnet", "format", "--verify-no-changes"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            LanguageId::Java => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["mvn", "-q", "exec:java"]),
+                client_sdk_build_cmd: cmd_vec(&["mvn", "-q", "test-compile"]),
+                client_sdk_test_cmd: cmd_vec(&["mvn", "-q", "test"]),
+                client_cli_build_cmd: cmd_vec(&["mvn", "-q", "package"]),
+                client_cli_run_cmd: cmd_vec(&["java", "-jar", "target/cli.jar"]),
+                server_build_cmd: cmd_vec(&["mvn", "-q", "package"]),
+                server_start_cmd: cmd_vec(&["java", "-jar", "target/server.jar"]),
+                linter_cmd: cmd_vec(&["mvn", "-q", "checkstyle:check"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            LanguageId::Kotlin => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["./gradlew", "-q", "run"]),
+                client_sdk_build_cmd: cmd_vec(&["./gradlew", "-q", "assemble"]),
+                client_sdk_test_cmd: cmd_vec(&["./gradlew", "-q", "test"]),
+                client_cli_build_cmd: cmd_vec(&["./gradlew", "-q", "installDist"]),
+                client_cli_run_cmd: cmd_vec(&["./build/install/cli/bin/cli"]),
+                server_build_cmd: cmd_vec(&["./gradlew", "-q", "installDist"]),
+                server_start_cmd: cmd_vec(&["./build/install/server/bin/server"]),
+                linter_cmd: cmd_vec(&["./gradlew", "-q", "check"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            LanguageId::TypeScript => Some(Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["node", "dist/cli.js"]),
+                client_sdk_build_cmd: cmd_vec(&["npm", "run", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["npm", "test"]),
+                client_cli_build_cmd: cmd_vec(&["npm", "run", "build"]),
+                client_cli_run_cmd: cmd_vec(&["node", "dist/sdk-cli.js"]),
+                server_build_cmd: cmd_vec(&["npm", "run", "build"]),
+                server_start_cmd: cmd_vec(&["node", "dist/server.js"]),
+                linter_cmd: cmd_vec(&["npx", "tsc", "--strict", "--noEmit"]),
+                supported_targets: LanguageCapabilities::full(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Returns the default toolchain specification for custom extension languages (`zig`, `cobol`, `fortran`, or generic).
+    ///
+    /// # Arguments
+    ///
+    /// * `language_id` - Target `LanguageId`.
+    /// * `slug` - Custom language slug string.
+    ///
+    /// # Returns
+    ///
+    /// Canonical default `LanguageToolchainSpec` for `slug`.
+    #[must_use]
+    fn default_custom_toolchain(language_id: &LanguageId, slug: &str) -> Self {
+        let repo_name = language_id.repo_name();
+        match slug {
+            "zig" => Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["zig", "build", "run", "--"]),
+                client_sdk_build_cmd: cmd_vec(&["zig", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["zig", "build", "test"]),
+                client_cli_build_cmd: cmd_vec(&["zig", "build"]),
+                client_cli_run_cmd: cmd_vec(&["./zig-out/bin/sdk-cli"]),
+                server_build_cmd: cmd_vec(&["zig", "build"]),
+                server_start_cmd: cmd_vec(&["./zig-out/bin/server"]),
+                linter_cmd: cmd_vec(&["zig", "fmt", "--check", "src/"]),
+                supported_targets: LanguageCapabilities {
+                    wasm: true,
+                    ..LanguageCapabilities::full()
+                },
+            },
+            "cobol" => Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["./bin/cdd-cobol"]),
+                client_sdk_build_cmd: cmd_vec(&[
+                    "cobc",
+                    "-x",
+                    "-std=cobol2014",
+                    "-Wall",
+                    "src/sdk.cob",
+                ]),
+                client_sdk_test_cmd: cmd_vec(&["./bin/test-sdk"]),
+                client_cli_build_cmd: cmd_vec(&["cobc", "-x", "src/cli.cob"]),
+                client_cli_run_cmd: cmd_vec(&["./bin/sdk-cli"]),
+                server_build_cmd: cmd_vec(&["cobc", "-x", "src/server.cob"]),
+                server_start_cmd: cmd_vec(&["./bin/server"]),
+                linter_cmd: cmd_vec(&["cobc", "-fsyntax-only", "-Wall", "src/sdk.cob"]),
+                supported_targets: LanguageCapabilities::full(),
+            },
+            "fortran" => Self {
+                language_id: language_id.clone(),
+                repo_name,
+                cli_binary_cmd: cmd_vec(&["fpm", "run", "--"]),
+                client_sdk_build_cmd: cmd_vec(&["fpm", "build"]),
+                client_sdk_test_cmd: cmd_vec(&["fpm", "test"]),
+                client_cli_build_cmd: cmd_vec(&["fpm", "build"]),
+                client_cli_run_cmd: cmd_vec(&["fpm", "run", "sdk-cli", "--"]),
+                server_build_cmd: cmd_vec(&["fpm", "build"]),
+                server_start_cmd: cmd_vec(&["fpm", "run", "server", "--"]),
+                linter_cmd: cmd_vec(&[
+                    "gfortran",
+                    "-fsyntax-only",
+                    "-std=f2018",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                ]),
+                supported_targets: LanguageCapabilities::full(),
+            },
+            other => Self {
+                language_id: language_id.clone(),
+                repo_name: format!("cdd-{other}"),
+                cli_binary_cmd: vec![format!("cdd-{other}")],
+                client_sdk_build_cmd: cmd_vec(&["make", "build-sdk"]),
+                client_sdk_test_cmd: cmd_vec(&["make", "test-sdk"]),
+                client_cli_build_cmd: cmd_vec(&["make", "build-cli"]),
+                client_cli_run_cmd: cmd_vec(&["./bin/sdk-cli"]),
+                server_build_cmd: cmd_vec(&["make", "build-server"]),
+                server_start_cmd: cmd_vec(&["./bin/server"]),
+                linter_cmd: cmd_vec(&["make", "lint"]),
+                supported_targets: LanguageCapabilities::full(),
+            },
+        }
+    }
+
+    /// Returns the canonical default toolchain specification for a given `LanguageId`.
+    ///
+    /// # Arguments
+    ///
+    /// * `language_id` - Target `LanguageId`.
     ///
     /// # Returns
     ///
     /// Canonical default `LanguageToolchainSpec` for `language_id`.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn default_for(language_id: &LanguageId) -> Self {
-        let repo_name = language_id.repo_name();
-        match language_id {
-            LanguageId::C => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["./build/cdd-c".to_string()],
-                client_sdk_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "ctest".to_string(),
-                    "--test-dir".to_string(),
-                    "build".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                client_cli_run_cmd: vec!["./build/cdd-c-cli".to_string()],
-                server_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                server_start_cmd: vec!["./build/cdd-c-server".to_string()],
-                linter_cmd: vec![
-                    "cc".to_string(),
-                    "-std=c89".to_string(),
-                    "-pedantic".to_string(),
-                    "-Wall".to_string(),
-                    "-Wextra".to_string(),
-                    "-Werror".to_string(),
-                ],
-                supported_targets: LanguageCapabilities {
-                    wasm: true,
-                    ..LanguageCapabilities::full()
-                },
-            },
-            LanguageId::Cpp => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["./build/cdd-cpp".to_string()],
-                client_sdk_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "ctest".to_string(),
-                    "--test-dir".to_string(),
-                    "build".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                client_cli_run_cmd: vec!["./build/cdd-cpp-cli".to_string()],
-                server_build_cmd: vec![
-                    "cmake".to_string(),
-                    "--build".to_string(),
-                    "build".to_string(),
-                ],
-                server_start_cmd: vec!["./build/cdd-cpp-server".to_string()],
-                linter_cmd: vec![
-                    "c++".to_string(),
-                    "-std=c++17".to_string(),
-                    "-Wall".to_string(),
-                    "-Werror".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::CSharp => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["dotnet".to_string(), "run".to_string(), "--".to_string()],
-                client_sdk_build_cmd: vec![
-                    "dotnet".to_string(),
-                    "build".to_string(),
-                    "-warnaserror".to_string(),
-                ],
-                client_sdk_test_cmd: vec!["dotnet".to_string(), "test".to_string()],
-                client_cli_build_cmd: vec!["dotnet".to_string(), "build".to_string()],
-                client_cli_run_cmd: vec!["dotnet".to_string(), "run".to_string(), "--".to_string()],
-                server_build_cmd: vec!["dotnet".to_string(), "build".to_string()],
-                server_start_cmd: vec!["dotnet".to_string(), "run".to_string(), "--".to_string()],
-                linter_cmd: vec![
-                    "dotnet".to_string(),
-                    "format".to_string(),
-                    "--verify-no-changes".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Go => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["go".to_string(), "run".to_string(), ".".to_string()],
-                client_sdk_build_cmd: vec![
-                    "go".to_string(),
-                    "build".to_string(),
-                    "./...".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "go".to_string(),
-                    "test".to_string(),
-                    "./...".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "go".to_string(),
-                    "build".to_string(),
-                    "./...".to_string(),
-                ],
-                client_cli_run_cmd: vec!["./cdd-go-cli".to_string()],
-                server_build_cmd: vec!["go".to_string(), "build".to_string(), "./...".to_string()],
-                server_start_cmd: vec!["./cdd-go-server".to_string()],
-                linter_cmd: vec!["go".to_string(), "vet".to_string(), "./...".to_string()],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Java => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["mvn".to_string(), "-q".to_string(), "exec:java".to_string()],
-                client_sdk_build_cmd: vec![
-                    "mvn".to_string(),
-                    "-q".to_string(),
-                    "test-compile".to_string(),
-                ],
-                client_sdk_test_cmd: vec!["mvn".to_string(), "-q".to_string(), "test".to_string()],
-                client_cli_build_cmd: vec![
-                    "mvn".to_string(),
-                    "-q".to_string(),
-                    "package".to_string(),
-                ],
-                client_cli_run_cmd: vec![
-                    "java".to_string(),
-                    "-jar".to_string(),
-                    "target/cli.jar".to_string(),
-                ],
-                server_build_cmd: vec!["mvn".to_string(), "-q".to_string(), "package".to_string()],
-                server_start_cmd: vec![
-                    "java".to_string(),
-                    "-jar".to_string(),
-                    "target/server.jar".to_string(),
-                ],
-                linter_cmd: vec![
-                    "mvn".to_string(),
-                    "-q".to_string(),
-                    "checkstyle:check".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Kotlin => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["./gradlew".to_string(), "-q".to_string(), "run".to_string()],
-                client_sdk_build_cmd: vec![
-                    "./gradlew".to_string(),
-                    "-q".to_string(),
-                    "assemble".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "./gradlew".to_string(),
-                    "-q".to_string(),
-                    "test".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "./gradlew".to_string(),
-                    "-q".to_string(),
-                    "installDist".to_string(),
-                ],
-                client_cli_run_cmd: vec!["./build/install/cli/bin/cli".to_string()],
-                server_build_cmd: vec![
-                    "./gradlew".to_string(),
-                    "-q".to_string(),
-                    "installDist".to_string(),
-                ],
-                server_start_cmd: vec!["./build/install/server/bin/server".to_string()],
-                linter_cmd: vec![
-                    "./gradlew".to_string(),
-                    "-q".to_string(),
-                    "check".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Php => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["php".to_string(), "bin/cdd-php".to_string()],
-                client_sdk_build_cmd: vec!["composer".to_string(), "validate".to_string()],
-                client_sdk_test_cmd: vec!["vendor/bin/phpunit".to_string()],
-                client_cli_build_cmd: vec![
-                    "php".to_string(),
-                    "-l".to_string(),
-                    "bin/cli.php".to_string(),
-                ],
-                client_cli_run_cmd: vec!["php".to_string(), "bin/cli.php".to_string()],
-                server_build_cmd: vec![
-                    "php".to_string(),
-                    "-l".to_string(),
-                    "public/index.php".to_string(),
-                ],
-                server_start_cmd: vec![
-                    "php".to_string(),
-                    "-S".to_string(),
-                    "127.0.0.1:0".to_string(),
-                    "public/index.php".to_string(),
-                ],
-                linter_cmd: vec!["vendor/bin/phpstan".to_string(), "analyse".to_string()],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Python => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["python3".to_string(), "-m".to_string(), "cdd".to_string()],
-                client_sdk_build_cmd: vec![
-                    "python3".to_string(),
-                    "-m".to_string(),
-                    "py_compile".to_string(),
-                ],
-                client_sdk_test_cmd: vec!["pytest".to_string(), "-q".to_string()],
-                client_cli_build_cmd: vec![
-                    "python3".to_string(),
-                    "-m".to_string(),
-                    "py_compile".to_string(),
-                ],
-                client_cli_run_cmd: vec![
-                    "python3".to_string(),
-                    "-m".to_string(),
-                    "sdk_cli".to_string(),
-                ],
-                server_build_cmd: vec![
-                    "python3".to_string(),
-                    "-m".to_string(),
-                    "py_compile".to_string(),
-                ],
-                server_start_cmd: vec!["uvicorn".to_string(), "main:app".to_string()],
-                linter_cmd: vec!["ruff".to_string(), "check".to_string(), ".".to_string()],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Ruby => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec![
-                    "bundle".to_string(),
-                    "exec".to_string(),
-                    "bin/cdd-ruby".to_string(),
-                ],
-                client_sdk_build_cmd: vec![
-                    "ruby".to_string(),
-                    "-c".to_string(),
-                    "lib/sdk.rb".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "bundle".to_string(),
-                    "exec".to_string(),
-                    "rspec".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "ruby".to_string(),
-                    "-c".to_string(),
-                    "bin/sdk-cli".to_string(),
-                ],
-                client_cli_run_cmd: vec![
-                    "bundle".to_string(),
-                    "exec".to_string(),
-                    "bin/sdk-cli".to_string(),
-                ],
-                server_build_cmd: vec!["ruby".to_string(), "-c".to_string(), "app.rb".to_string()],
-                server_start_cmd: vec![
-                    "bundle".to_string(),
-                    "exec".to_string(),
-                    "rackup".to_string(),
-                ],
-                linter_cmd: vec![
-                    "bundle".to_string(),
-                    "exec".to_string(),
-                    "rubocop".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Rust => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec![
-                    "cargo".to_string(),
-                    "run".to_string(),
-                    "--quiet".to_string(),
-                    "--".to_string(),
-                ],
-                client_sdk_build_cmd: vec![
-                    "cargo".to_string(),
-                    "build".to_string(),
-                    "--quiet".to_string(),
-                ],
-                client_sdk_test_cmd: vec![
-                    "cargo".to_string(),
-                    "test".to_string(),
-                    "--quiet".to_string(),
-                ],
-                client_cli_build_cmd: vec![
-                    "cargo".to_string(),
-                    "build".to_string(),
-                    "--quiet".to_string(),
-                ],
-                client_cli_run_cmd: vec![
-                    "cargo".to_string(),
-                    "run".to_string(),
-                    "--quiet".to_string(),
-                    "--".to_string(),
-                ],
-                server_build_cmd: vec![
-                    "cargo".to_string(),
-                    "build".to_string(),
-                    "--quiet".to_string(),
-                ],
-                server_start_cmd: vec![
-                    "cargo".to_string(),
-                    "run".to_string(),
-                    "--quiet".to_string(),
-                    "--".to_string(),
-                    "start".to_string(),
-                ],
-                linter_cmd: vec![
-                    "cargo".to_string(),
-                    "clippy".to_string(),
-                    "--all-targets".to_string(),
-                    "--".to_string(),
-                    "-D".to_string(),
-                    "warnings".to_string(),
-                ],
-                supported_targets: LanguageCapabilities {
-                    wasm: true,
-                    ..LanguageCapabilities::full()
-                },
-            },
-            LanguageId::Sh => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["sh".to_string(), "bin/cdd-sh".to_string()],
-                client_sdk_build_cmd: vec![
-                    "sh".to_string(),
-                    "-n".to_string(),
-                    "sdk.sh".to_string(),
-                ],
-                client_sdk_test_cmd: vec!["sh".to_string(), "test_sdk.sh".to_string()],
-                client_cli_build_cmd: vec![
-                    "sh".to_string(),
-                    "-n".to_string(),
-                    "cli.sh".to_string(),
-                ],
-                client_cli_run_cmd: vec!["sh".to_string(), "cli.sh".to_string()],
-                server_build_cmd: vec!["sh".to_string(), "-n".to_string(), "server.sh".to_string()],
-                server_start_cmd: vec!["sh".to_string(), "server.sh".to_string()],
-                linter_cmd: vec!["shellcheck".to_string(), "bin/cdd-sh".to_string()],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Swift => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec![
-                    "swift".to_string(),
-                    "run".to_string(),
-                    "cdd-swift".to_string(),
-                ],
-                client_sdk_build_cmd: vec!["swift".to_string(), "build".to_string()],
-                client_sdk_test_cmd: vec!["swift".to_string(), "test".to_string()],
-                client_cli_build_cmd: vec!["swift".to_string(), "build".to_string()],
-                client_cli_run_cmd: vec![
-                    "swift".to_string(),
-                    "run".to_string(),
-                    "sdk-cli".to_string(),
-                ],
-                server_build_cmd: vec!["swift".to_string(), "build".to_string()],
-                server_start_cmd: vec![
-                    "swift".to_string(),
-                    "run".to_string(),
-                    "server".to_string(),
-                ],
-                linter_cmd: vec![
-                    "swift".to_string(),
-                    "build".to_string(),
-                    "-Xswiftc".to_string(),
-                    "-warnings-as-errors".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::TypeScript => Self {
-                language_id: language_id.clone(),
-                repo_name,
-                cli_binary_cmd: vec!["node".to_string(), "dist/cli.js".to_string()],
-                client_sdk_build_cmd: vec![
-                    "npm".to_string(),
-                    "run".to_string(),
-                    "build".to_string(),
-                ],
-                client_sdk_test_cmd: vec!["npm".to_string(), "test".to_string()],
-                client_cli_build_cmd: vec![
-                    "npm".to_string(),
-                    "run".to_string(),
-                    "build".to_string(),
-                ],
-                client_cli_run_cmd: vec!["node".to_string(), "dist/sdk-cli.js".to_string()],
-                server_build_cmd: vec!["npm".to_string(), "run".to_string(), "build".to_string()],
-                server_start_cmd: vec!["node".to_string(), "dist/server.js".to_string()],
-                linter_cmd: vec![
-                    "npx".to_string(),
-                    "tsc".to_string(),
-                    "--strict".to_string(),
-                    "--noEmit".to_string(),
-                ],
-                supported_targets: LanguageCapabilities::full(),
-            },
-            LanguageId::Custom(slug) => match slug.as_str() {
-                "zig" => Self {
+        Self::default_systems_toolchain(language_id).unwrap_or_else(|| {
+            let repo_name = language_id.repo_name();
+            match language_id {
+                LanguageId::Php => Self {
                     language_id: language_id.clone(),
                     repo_name,
-                    cli_binary_cmd: vec![
-                        "zig".to_string(),
-                        "build".to_string(),
-                        "run".to_string(),
-                        "--".to_string(),
-                    ],
-                    client_sdk_build_cmd: vec!["zig".to_string(), "build".to_string()],
-                    client_sdk_test_cmd: vec![
-                        "zig".to_string(),
-                        "build".to_string(),
-                        "test".to_string(),
-                    ],
-                    client_cli_build_cmd: vec!["zig".to_string(), "build".to_string()],
-                    client_cli_run_cmd: vec!["./zig-out/bin/sdk-cli".to_string()],
-                    server_build_cmd: vec!["zig".to_string(), "build".to_string()],
-                    server_start_cmd: vec!["./zig-out/bin/server".to_string()],
-                    linter_cmd: vec![
-                        "zig".to_string(),
-                        "fmt".to_string(),
-                        "--check".to_string(),
-                        "src/".to_string(),
-                    ],
-                    supported_targets: LanguageCapabilities {
-                        wasm: true,
-                        ..LanguageCapabilities::full()
-                    },
+                    cli_binary_cmd: cmd_vec(&["php", "bin/cdd-php"]),
+                    client_sdk_build_cmd: cmd_vec(&["composer", "validate"]),
+                    client_sdk_test_cmd: cmd_vec(&["vendor/bin/phpunit"]),
+                    client_cli_build_cmd: cmd_vec(&["php", "-l", "bin/cli.php"]),
+                    client_cli_run_cmd: cmd_vec(&["php", "bin/cli.php"]),
+                    server_build_cmd: cmd_vec(&["php", "-l", "public/index.php"]),
+                    server_start_cmd: cmd_vec(&["php", "-S", "127.0.0.1:0", "public/index.php"]),
+                    linter_cmd: cmd_vec(&["vendor/bin/phpstan", "analyse"]),
+                    supported_targets: LanguageCapabilities::full(),
                 },
-                "cobol" => Self {
+                LanguageId::Python => Self {
                     language_id: language_id.clone(),
                     repo_name,
-                    cli_binary_cmd: vec!["./bin/cdd-cobol".to_string()],
-                    client_sdk_build_cmd: vec![
-                        "cobc".to_string(),
-                        "-x".to_string(),
-                        "-std=cobol2014".to_string(),
-                        "-Wall".to_string(),
-                        "src/sdk.cob".to_string(),
-                    ],
-                    client_sdk_test_cmd: vec!["./bin/test-sdk".to_string()],
-                    client_cli_build_cmd: vec![
-                        "cobc".to_string(),
-                        "-x".to_string(),
-                        "src/cli.cob".to_string(),
-                    ],
-                    client_cli_run_cmd: vec!["./bin/sdk-cli".to_string()],
-                    server_build_cmd: vec![
-                        "cobc".to_string(),
-                        "-x".to_string(),
-                        "src/server.cob".to_string(),
-                    ],
-                    server_start_cmd: vec!["./bin/server".to_string()],
-                    linter_cmd: vec![
-                        "cobc".to_string(),
-                        "-fsyntax-only".to_string(),
-                        "-Wall".to_string(),
-                        "src/sdk.cob".to_string(),
-                    ],
+                    cli_binary_cmd: cmd_vec(&["python3", "-m", "cdd"]),
+                    client_sdk_build_cmd: cmd_vec(&["python3", "-m", "py_compile"]),
+                    client_sdk_test_cmd: cmd_vec(&["pytest", "-q"]),
+                    client_cli_build_cmd: cmd_vec(&["python3", "-m", "py_compile"]),
+                    client_cli_run_cmd: cmd_vec(&["python3", "-m", "sdk_cli"]),
+                    server_build_cmd: cmd_vec(&["python3", "-m", "py_compile"]),
+                    server_start_cmd: cmd_vec(&["uvicorn", "main:app"]),
+                    linter_cmd: cmd_vec(&["ruff", "check", "."]),
                     supported_targets: LanguageCapabilities::full(),
                 },
-                "fortran" => Self {
+                LanguageId::Ruby => Self {
                     language_id: language_id.clone(),
                     repo_name,
-                    cli_binary_cmd: vec!["fpm".to_string(), "run".to_string(), "--".to_string()],
-                    client_sdk_build_cmd: vec!["fpm".to_string(), "build".to_string()],
-                    client_sdk_test_cmd: vec!["fpm".to_string(), "test".to_string()],
-                    client_cli_build_cmd: vec!["fpm".to_string(), "build".to_string()],
-                    client_cli_run_cmd: vec![
-                        "fpm".to_string(),
-                        "run".to_string(),
-                        "sdk-cli".to_string(),
-                        "--".to_string(),
-                    ],
-                    server_build_cmd: vec!["fpm".to_string(), "build".to_string()],
-                    server_start_cmd: vec![
-                        "fpm".to_string(),
-                        "run".to_string(),
-                        "server".to_string(),
-                        "--".to_string(),
-                    ],
-                    linter_cmd: vec![
-                        "gfortran".to_string(),
-                        "-fsyntax-only".to_string(),
-                        "-std=f2018".to_string(),
-                        "-Wall".to_string(),
-                        "-Wextra".to_string(),
-                        "-Werror".to_string(),
-                    ],
+                    cli_binary_cmd: cmd_vec(&["bundle", "exec", "bin/cdd-ruby"]),
+                    client_sdk_build_cmd: cmd_vec(&["ruby", "-c", "lib/sdk.rb"]),
+                    client_sdk_test_cmd: cmd_vec(&["bundle", "exec", "rspec"]),
+                    client_cli_build_cmd: cmd_vec(&["ruby", "-c", "bin/sdk-cli"]),
+                    client_cli_run_cmd: cmd_vec(&["bundle", "exec", "bin/sdk-cli"]),
+                    server_build_cmd: cmd_vec(&["ruby", "-c", "app.rb"]),
+                    server_start_cmd: cmd_vec(&["bundle", "exec", "rackup"]),
+                    linter_cmd: cmd_vec(&["bundle", "exec", "rubocop"]),
                     supported_targets: LanguageCapabilities::full(),
                 },
-                other => Self {
+                LanguageId::Custom(slug) => {
+                    Self::default_custom_toolchain(language_id, slug.as_str())
+                }
+                _ => Self {
                     language_id: language_id.clone(),
-                    repo_name: format!("cdd-{other}"),
-                    cli_binary_cmd: vec![format!("cdd-{other}")],
-                    client_sdk_build_cmd: vec!["make".to_string(), "build-sdk".to_string()],
-                    client_sdk_test_cmd: vec!["make".to_string(), "test-sdk".to_string()],
-                    client_cli_build_cmd: vec!["make".to_string(), "build-cli".to_string()],
-                    client_cli_run_cmd: vec!["./bin/sdk-cli".to_string()],
-                    server_build_cmd: vec!["make".to_string(), "build-server".to_string()],
-                    server_start_cmd: vec!["./bin/server".to_string()],
-                    linter_cmd: vec!["make".to_string(), "lint".to_string()],
+                    repo_name,
+                    cli_binary_cmd: cmd_vec(&["sh", "bin/cdd-sh"]),
+                    client_sdk_build_cmd: cmd_vec(&["sh", "-n", "sdk.sh"]),
+                    client_sdk_test_cmd: cmd_vec(&["sh", "test_sdk.sh"]),
+                    client_cli_build_cmd: cmd_vec(&["sh", "-n", "cli.sh"]),
+                    client_cli_run_cmd: cmd_vec(&["sh", "cli.sh"]),
+                    server_build_cmd: cmd_vec(&["sh", "-n", "server.sh"]),
+                    server_start_cmd: cmd_vec(&["sh", "server.sh"]),
+                    linter_cmd: cmd_vec(&["shellcheck", "bin/cdd-sh"]),
                     supported_targets: LanguageCapabilities::full(),
                 },
-            },
-        }
+            }
+        })
     }
 
     /// Constructs the command-line argument sequence to generate code from an Arazzo 1.1.0 specification.
@@ -970,10 +767,12 @@ pub fn discover_language_toolchains(
         let repo_path = repos_dir.join(lang_id.repo_name());
         let mut spec = LanguageToolchainSpec::default_for(&lang_id);
         if repo_path.is_dir() {
-            if let Some(cfg) = ProjectConfig::find_and_load(&repo_path).ok().flatten() {
-                if let Some(tc_override) = cfg.toolchain {
-                    tc_override.apply_to(&mut spec);
-                }
+            if let Some(tc_override) = ProjectConfig::find_and_load(&repo_path)
+                .ok()
+                .flatten()
+                .and_then(|cfg| cfg.toolchain)
+            {
+                tc_override.apply_to(&mut spec);
             }
         }
         specs.push(spec);

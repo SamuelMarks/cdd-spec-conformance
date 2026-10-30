@@ -1076,126 +1076,22 @@ fn parse_arazzo_criterion(
     })
 }
 
-/// Parses a single `Step Object` from an Arazzo 1.1.0 workflow JSON value.
+/// Parses `onSuccess` and `onFailure` action arrays from a step JSON object.
 ///
 /// # Arguments
 ///
 /// * `step` - Step JSON value.
-/// * `step_ptr` - JSON Pointer to this step.
-/// * `seen_steps` - Set of `stepId` values already seen in this workflow.
-/// * `language` - Language identifier for error attribution.
 ///
 /// # Returns
 ///
-/// Validated `ArazzoStepObject`.
-///
-/// # Errors
-///
-/// Returns `ConformanceError` if any normative step constraint is violated.
-#[allow(clippy::too_many_lines)]
-fn parse_arazzo_step_ast(
+/// Tuple `(on_success, on_failure)`.
+#[must_use]
+fn parse_arazzo_step_actions(
     step: &serde_json::Value,
-    step_ptr: &str,
-    seen_steps: &mut BTreeSet<String>,
-    language: &LanguageId,
-) -> Result<ArazzoStepObject, ConformanceError> {
-    let step_id = step
-        .get("stepId")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    if step_id.trim().is_empty() || !seen_steps.insert(step_id.to_string()) {
-        return Err(ConformanceError::ArazzoSchemaViolation {
-            language: language.clone(),
-            pointer: format!("{step_ptr}/stepId"),
-            reason: "each step must have a unique, non-empty 'stepId' within its workflow"
-                .to_string(),
-        });
-    }
-
-    let op_id = step.get("operationId").and_then(serde_json::Value::as_str);
-    let op_path = step
-        .get("operationPath")
-        .and_then(serde_json::Value::as_str);
-    let ch_path = step.get("channelPath").and_then(serde_json::Value::as_str);
-    let wf_id = step.get("workflowId").and_then(serde_json::Value::as_str);
-    let target = match (op_id, op_path, ch_path, wf_id) {
-        (Some(id), None, None, None) => ArazzoStepTarget::OperationId(id.to_string()),
-        (None, Some(p), None, None) => ArazzoStepTarget::OperationPath(p.to_string()),
-        (None, None, Some(c), None) => ArazzoStepTarget::ChannelPath(c.to_string()),
-        (None, None, None, Some(w)) => ArazzoStepTarget::WorkflowId(w.to_string()),
-        _ => {
-            return Err(ConformanceError::ArazzoSchemaViolation {
-                language: language.clone(),
-                pointer: step_ptr.to_string(),
-                reason: "step must specify exactly one of 'operationId', 'operationPath', 'channelPath', or 'workflowId'".to_string(),
-            });
-        }
-    };
-
-    let action = if let Some(act_val) = step.get("action") {
-        let act_str = act_val.as_str().unwrap_or("");
-        let Ok(act) = ArazzoMessageAction::from_str(act_str) else {
-            return Err(ConformanceError::ArazzoSchemaViolation {
-                language: language.clone(),
-                pointer: format!("{step_ptr}/action"),
-                reason: format!("invalid step action '{act_str}'"),
-            });
-        };
-        Some(act)
-    } else {
-        None
-    };
-
-    let correlation_id = step
-        .get("correlationId")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    if let Some(corr) = correlation_id.as_deref().filter(|s| s.starts_with('$')) {
-        let _ =
-            ArazzoRuntimeExpressionKind::parse_root(corr, &format!("{step_ptr}/correlationId"))?;
-    }
-
-    let mut parameters = Vec::new();
-    let mut has_query = false;
-    let mut has_querystring = false;
-    for (p_idx, param) in step
-        .get("parameters")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        let p_ptr = format!("{step_ptr}/parameters/{p_idx}");
-        let (parsed_param, loc) = parse_arazzo_param_or_reusable(param, &p_ptr, language)?;
-        if loc == Some(ArazzoParameterIn::Query) {
-            has_query = true;
-        }
-        if loc == Some(ArazzoParameterIn::QueryString) {
-            has_querystring = true;
-        }
-        parameters.push(parsed_param);
-    }
-    if has_query && has_querystring {
-        return Err(ConformanceError::ArazzoSchemaViolation {
-            language: language.clone(),
-            pointer: format!("{step_ptr}/parameters"),
-            reason: "'querystring' and 'query' parameters are mutually exclusive in a single step"
-                .to_string(),
-        });
-    }
-
-    let mut success_criteria = Vec::new();
-    for (c_idx, crit) in step
-        .get("successCriteria")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        let c_ptr = format!("{step_ptr}/successCriteria/{c_idx}");
-        success_criteria.push(parse_arazzo_criterion(crit, &c_ptr, language)?);
-    }
-
+) -> (
+    Vec<ArazzoSuccessActionOrReusable>,
+    Vec<ArazzoFailureActionOrReusable>,
+) {
     let mut on_success = Vec::new();
     for act_val in step
         .get("onSuccess")
@@ -1291,7 +1187,146 @@ fn parse_arazzo_step_ast(
             ));
         }
     }
+    (on_success, on_failure)
+}
 
+/// Parses the mutually exclusive target (`operationId`, `operationPath`, `channelPath`, or `workflowId`) of an Arazzo step.
+///
+/// # Arguments
+///
+/// * `step` - Step JSON value.
+/// * `step_ptr` - JSON Pointer for this step.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Validated `ArazzoStepTarget`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if not exactly one target is specified.
+fn parse_arazzo_step_target(
+    step: &serde_json::Value,
+    step_ptr: &str,
+    language: &LanguageId,
+) -> Result<ArazzoStepTarget, ConformanceError> {
+    let op_id = step.get("operationId").and_then(serde_json::Value::as_str);
+    let op_path = step
+        .get("operationPath")
+        .and_then(serde_json::Value::as_str);
+    let ch_path = step.get("channelPath").and_then(serde_json::Value::as_str);
+    let wf_id = step.get("workflowId").and_then(serde_json::Value::as_str);
+    match (op_id, op_path, ch_path, wf_id) {
+        (Some(id), None, None, None) => Ok(ArazzoStepTarget::OperationId(id.to_string())),
+        (None, Some(p), None, None) => Ok(ArazzoStepTarget::OperationPath(p.to_string())),
+        (None, None, Some(c), None) => Ok(ArazzoStepTarget::ChannelPath(c.to_string())),
+        (None, None, None, Some(w)) => Ok(ArazzoStepTarget::WorkflowId(w.to_string())),
+        _ => Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: step_ptr.to_string(),
+            reason: "step must specify exactly one of 'operationId', 'operationPath', 'channelPath', or 'workflowId'".to_string(),
+        }),
+    }
+}
+
+/// Parses and validates a single `ArazzoStepObject` from a JSON object.
+///
+/// # Arguments
+///
+/// * `step` - Step JSON value.
+/// * `step_ptr` - JSON Pointer for this step.
+/// * `seen_steps` - Set of `stepId` strings already seen in the enclosing workflow.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Validated `ArazzoStepObject`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if any normative step constraint is violated.
+fn parse_arazzo_step_ast(
+    step: &serde_json::Value,
+    step_ptr: &str,
+    seen_steps: &mut BTreeSet<String>,
+    language: &LanguageId,
+) -> Result<ArazzoStepObject, ConformanceError> {
+    let step_id = step
+        .get("stepId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if step_id.trim().is_empty() || !seen_steps.insert(step_id.to_string()) {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/stepId"),
+            reason: "each step must have a unique, non-empty 'stepId' within its workflow"
+                .to_string(),
+        });
+    }
+
+    let target = parse_arazzo_step_target(step, step_ptr, language)?;
+
+    let action = if let Some(act_val) = step.get("action") {
+        let act_str = act_val.as_str().unwrap_or("");
+        let Ok(act) = ArazzoMessageAction::from_str(act_str) else {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{step_ptr}/action"),
+                reason: format!("invalid step action '{act_str}'"),
+            });
+        };
+        Some(act)
+    } else {
+        None
+    };
+
+    let correlation_id = step
+        .get("correlationId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if let Some(corr) = correlation_id.as_deref().filter(|s| s.starts_with('$')) {
+        let _ =
+            ArazzoRuntimeExpressionKind::parse_root(corr, &format!("{step_ptr}/correlationId"))?;
+    }
+
+    let mut parameters = Vec::new();
+    let mut has_query = false;
+    let mut has_querystring = false;
+    for (p_idx, param) in step
+        .get("parameters")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let p_ptr = format!("{step_ptr}/parameters/{p_idx}");
+        let (parsed_param, loc) = parse_arazzo_param_or_reusable(param, &p_ptr, language)?;
+        has_query |= loc == Some(ArazzoParameterIn::Query);
+        has_querystring |= loc == Some(ArazzoParameterIn::QueryString);
+        parameters.push(parsed_param);
+    }
+    if has_query && has_querystring {
+        return Err(ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: format!("{step_ptr}/parameters"),
+            reason: "'querystring' and 'query' parameters are mutually exclusive in a single step"
+                .to_string(),
+        });
+    }
+
+    let mut success_criteria = Vec::new();
+    for (c_idx, crit) in step
+        .get("successCriteria")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let c_ptr = format!("{step_ptr}/successCriteria/{c_idx}");
+        success_criteria.push(parse_arazzo_criterion(crit, &c_ptr, language)?);
+    }
+
+    let (on_success, on_failure) = parse_arazzo_step_actions(step);
     let depends_on: Vec<String> = step
         .get("dependsOn")
         .and_then(serde_json::Value::as_array)
@@ -1439,6 +1474,168 @@ fn validate_arazzo_component_ref(
     Ok(())
 }
 
+/// Parses and validates the `sourceDescriptions` array of an Arazzo 1.1.0 document.
+///
+/// # Arguments
+///
+/// * `doc` - Root Arazzo 1.1.0 JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Non-empty vector of `ArazzoSourceDescription` entries.
+///
+/// # Errors
+///
+/// Returns `ConformanceError::ArazzoSchemaViolation` if `sourceDescriptions` is missing, empty, or invalid.
+fn parse_arazzo_source_descriptions(
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<Vec<ArazzoSourceDescription>, ConformanceError> {
+    let sources = doc
+        .get("sourceDescriptions")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: "/sourceDescriptions".to_string(),
+            reason: "'sourceDescriptions' must be a non-empty array".to_string(),
+        })?;
+
+    let mut source_descriptions = Vec::with_capacity(sources.len());
+    let mut seen_sources = BTreeSet::new();
+    for (idx, src) in sources.iter().enumerate() {
+        let ptr = format!("/sourceDescriptions/{idx}");
+        let name = src
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let url = src
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if name.trim().is_empty() || url.trim().is_empty() || !seen_sources.insert(name.to_string())
+        {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: ptr,
+                reason: "each sourceDescription must have a unique 'name' and non-empty 'url'"
+                    .to_string(),
+            });
+        }
+        let source_type = if let Some(t_val) = src.get("type") {
+            let t_str = t_val.as_str().unwrap_or("");
+            let Ok(st) = ArazzoSourceType::from_str(t_str) else {
+                return Err(ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{ptr}/type"),
+                    reason: format!("invalid sourceDescription type '{t_str}'"),
+                });
+            };
+            Some(st)
+        } else {
+            None
+        };
+        source_descriptions.push(ArazzoSourceDescription {
+            name: name.to_string(),
+            url: url.to_string(),
+            source_type,
+            extensions: extract_extensions_map(src.as_object()),
+        });
+    }
+    Ok(source_descriptions)
+}
+
+/// Parses and validates the `workflows` array of an Arazzo 1.1.0 document.
+///
+/// # Arguments
+///
+/// * `doc` - Root Arazzo 1.1.0 JSON value.
+/// * `language` - Language identifier for error attribution.
+///
+/// # Returns
+///
+/// Non-empty vector of `ArazzoWorkflowObject` entries.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if `workflows` is missing, empty, or violates step/dependency rules.
+fn parse_arazzo_workflows(
+    doc: &serde_json::Value,
+    language: &LanguageId,
+) -> Result<Vec<ArazzoWorkflowObject>, ConformanceError> {
+    let raw_workflows = doc
+        .get("workflows")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+            language: language.clone(),
+            pointer: "/workflows".to_string(),
+            reason: "'workflows' must be a non-empty array".to_string(),
+        })?;
+
+    let mut workflows = Vec::with_capacity(raw_workflows.len());
+    let mut seen_workflows = BTreeSet::new();
+    for (w_idx, wf) in raw_workflows.iter().enumerate() {
+        let wf_ptr = format!("/workflows/{w_idx}");
+        let wf_id = wf
+            .get("workflowId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if wf_id.trim().is_empty() || !seen_workflows.insert(wf_id.to_string()) {
+            return Err(ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{wf_ptr}/workflowId"),
+                reason: "each workflow must have a unique, non-empty 'workflowId'".to_string(),
+            });
+        }
+
+        let raw_steps = wf
+            .get("steps")
+            .and_then(serde_json::Value::as_array)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: language.clone(),
+                pointer: format!("{wf_ptr}/steps"),
+                reason: "each workflow must contain a non-empty 'steps' array".to_string(),
+            })?;
+
+        let mut steps = Vec::with_capacity(raw_steps.len());
+        let mut seen_steps = BTreeSet::new();
+        for (s_idx, step_val) in raw_steps.iter().enumerate() {
+            let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
+            steps.push(parse_arazzo_step_ast(
+                step_val,
+                &step_ptr,
+                &mut seen_steps,
+                language,
+            )?);
+        }
+        validate_arazzo_ast_workflow_refs(&steps, &wf_ptr, &seen_steps, doc, language)?;
+
+        workflows.push(ArazzoWorkflowObject {
+            workflow_id: wf_id.to_string(),
+            summary: wf
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            description: wf
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            inputs: wf.get("inputs").cloned(),
+            depends_on: Vec::new(),
+            steps,
+            success_actions: Vec::new(),
+            failure_actions: Vec::new(),
+            outputs: BTreeMap::new(),
+            parameters: Vec::new(),
+            extensions: extract_extensions_map(wf.as_object()),
+        });
+    }
+    Ok(workflows)
+}
+
 impl ArazzoDocument {
     /// Parses and validates an `ArazzoDocument` AST from a raw JSON/YAML `serde_json::Value`.
     ///
@@ -1455,7 +1652,6 @@ impl ArazzoDocument {
     ///
     /// Returns `ConformanceError::ArazzoSchemaViolation` or `ConformanceError::ArazzoRuntimeExpressionError`
     /// if any normative Arazzo 1.1.0 structural or expression rule is violated.
-    #[allow(clippy::too_many_lines)]
     pub fn from_json_value(
         doc: &serde_json::Value,
         language: &LanguageId,
@@ -1513,129 +1709,8 @@ impl ArazzoDocument {
             extensions: extract_extensions_map(info_obj.and_then(serde_json::Value::as_object)),
         };
 
-        let sources = doc
-            .get("sourceDescriptions")
-            .and_then(serde_json::Value::as_array)
-            .filter(|a| !a.is_empty())
-            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
-                language: language.clone(),
-                pointer: "/sourceDescriptions".to_string(),
-                reason: "'sourceDescriptions' must be a non-empty array".to_string(),
-            })?;
-
-        let mut source_descriptions = Vec::with_capacity(sources.len());
-        let mut seen_sources = BTreeSet::new();
-        for (idx, src) in sources.iter().enumerate() {
-            let ptr = format!("/sourceDescriptions/{idx}");
-            let name = src
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let url = src
-                .get("url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if name.trim().is_empty()
-                || url.trim().is_empty()
-                || !seen_sources.insert(name.to_string())
-            {
-                return Err(ConformanceError::ArazzoSchemaViolation {
-                    language: language.clone(),
-                    pointer: ptr,
-                    reason: "each sourceDescription must have a unique 'name' and non-empty 'url'"
-                        .to_string(),
-                });
-            }
-            let source_type = if let Some(t_val) = src.get("type") {
-                let t_str = t_val.as_str().unwrap_or("");
-                let Ok(st) = ArazzoSourceType::from_str(t_str) else {
-                    return Err(ConformanceError::ArazzoSchemaViolation {
-                        language: language.clone(),
-                        pointer: format!("{ptr}/type"),
-                        reason: format!("invalid sourceDescription type '{t_str}'"),
-                    });
-                };
-                Some(st)
-            } else {
-                None
-            };
-            source_descriptions.push(ArazzoSourceDescription {
-                name: name.to_string(),
-                url: url.to_string(),
-                source_type,
-                extensions: extract_extensions_map(src.as_object()),
-            });
-        }
-
-        let raw_workflows = doc
-            .get("workflows")
-            .and_then(serde_json::Value::as_array)
-            .filter(|a| !a.is_empty())
-            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
-                language: language.clone(),
-                pointer: "/workflows".to_string(),
-                reason: "'workflows' must be a non-empty array".to_string(),
-            })?;
-
-        let mut workflows = Vec::with_capacity(raw_workflows.len());
-        let mut seen_workflows = BTreeSet::new();
-        for (w_idx, wf) in raw_workflows.iter().enumerate() {
-            let wf_ptr = format!("/workflows/{w_idx}");
-            let wf_id = wf
-                .get("workflowId")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if wf_id.trim().is_empty() || !seen_workflows.insert(wf_id.to_string()) {
-                return Err(ConformanceError::ArazzoSchemaViolation {
-                    language: language.clone(),
-                    pointer: format!("{wf_ptr}/workflowId"),
-                    reason: "each workflow must have a unique, non-empty 'workflowId'".to_string(),
-                });
-            }
-
-            let raw_steps = wf
-                .get("steps")
-                .and_then(serde_json::Value::as_array)
-                .filter(|a| !a.is_empty())
-                .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
-                    language: language.clone(),
-                    pointer: format!("{wf_ptr}/steps"),
-                    reason: "each workflow must contain a non-empty 'steps' array".to_string(),
-                })?;
-
-            let mut steps = Vec::with_capacity(raw_steps.len());
-            let mut seen_steps = BTreeSet::new();
-            for (s_idx, step_val) in raw_steps.iter().enumerate() {
-                let step_ptr = format!("{wf_ptr}/steps/{s_idx}");
-                steps.push(parse_arazzo_step_ast(
-                    step_val,
-                    &step_ptr,
-                    &mut seen_steps,
-                    language,
-                )?);
-            }
-            validate_arazzo_ast_workflow_refs(&steps, &wf_ptr, &seen_steps, doc, language)?;
-
-            workflows.push(ArazzoWorkflowObject {
-                workflow_id: wf_id.to_string(),
-                summary: wf
-                    .get("summary")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string),
-                description: wf
-                    .get("description")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string),
-                inputs: wf.get("inputs").cloned(),
-                depends_on: Vec::new(),
-                steps,
-                success_actions: Vec::new(),
-                failure_actions: Vec::new(),
-                outputs: BTreeMap::new(),
-                parameters: Vec::new(),
-                extensions: extract_extensions_map(wf.as_object()),
-            });
-        }
+        let source_descriptions = parse_arazzo_source_descriptions(doc, language)?;
+        let workflows = parse_arazzo_workflows(doc, language)?;
 
         let components = doc
             .get("components")

@@ -14,7 +14,7 @@ pub(crate) fn finish_struct(
     bundle: &mut ParsedSourceBundle,
 ) {
     if let Some(mut st) = current_struct.take() {
-        attach_field_docs(&mut st.fields, &st.doc_comment);
+        attach_field_docs(&mut st.fields, st.doc_comment.as_deref());
         bundle.structs.push(st);
     }
 }
@@ -282,7 +282,6 @@ pub(crate) fn parse_colon_style_args(params_str: &str, line: usize) -> Vec<Parse
             .split_whitespace()
             .last()
             .unwrap_or(left)
-            .trim_start_matches("mut ")
             .trim_end_matches('?')
             .trim();
         args.push(ParsedArg {
@@ -316,11 +315,11 @@ pub(crate) fn parse_type_first_args(params_str: &str, line: usize) -> Vec<Parsed
         let tokens: Vec<&str> = seg.split_whitespace().collect();
         let last_tok = tokens.last().copied().unwrap_or(seg);
         let type_toks = &tokens[..tokens.len().saturating_sub(1)];
-        let clean_name = last_tok
+        let stripped_ptr = last_tok
             .trim_start_matches('*')
             .trim_start_matches('&')
-            .trim_start_matches('$')
-            .trim_end_matches("[]");
+            .trim_start_matches('$');
+        let clean_name = stripped_ptr.strip_suffix("[]").unwrap_or(stripped_ptr);
         let type_str = (!type_toks.is_empty()).then(|| type_toks.join(" "));
         args.push(ParsedArg {
             name: clean_name.to_string(),

@@ -20,11 +20,11 @@ pub(crate) fn clean_comment_line(raw: &str) -> String {
         "#", "*",
     ] {
         if let Some(rest) = s.strip_prefix(prefix) {
-            s = rest.trim_end_matches("*/").trim();
+            s = rest.strip_suffix("*/").unwrap_or(rest).trim();
             break;
         }
     }
-    s.trim_end_matches("*/").trim().to_string()
+    s.strip_suffix("*/").unwrap_or(s).trim().to_string()
 }
 
 /// Checks if a trimmed source line is a comment line or block-comment continuation.
@@ -75,6 +75,106 @@ pub(crate) fn extract_comment_line(trimmed: &str, in_block_comment: &mut bool) -
     None
 }
 
+/// Parses a single `@param` / `\param` / `@property` / `@field` / `@var` / `@attr` tag line.
+///
+/// # Arguments
+///
+/// * `line` - Trimmed doc-comment line.
+///
+/// # Returns
+///
+/// `(matched_tag_prefix, optional_normalized_name_and_description)`.
+#[must_use]
+fn parse_at_doc_tag(line: &str) -> (bool, Option<(String, String)>) {
+    for tag in ["@param", r"\param", "@property", "@field", "@var", "@attr"] {
+        if let Some(rest) = line.strip_prefix(tag) {
+            let rest = rest.trim();
+            let rest = if rest.starts_with('{') {
+                rest.split_once('}').map_or(rest, |(_, r)| r.trim())
+            } else if rest.starts_with('[') {
+                rest.split_once(']').map_or(rest, |(_, r)| r.trim())
+            } else {
+                rest
+            };
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            let Some((&first_tok, tail)) = tokens.split_first() else {
+                return (true, None);
+            };
+            let (raw_name, desc_slice) =
+                if first_tok.starts_with('$') || tail.first().is_none_or(|t| !t.starts_with('$')) {
+                    (first_tok, tail)
+                } else {
+                    (tail[0], &tail[1..])
+                };
+            let name = raw_name.trim_end_matches(':').trim_end_matches('-');
+            let desc = desc_slice
+                .join(" ")
+                .trim_start_matches('-')
+                .trim_start_matches(':')
+                .trim()
+                .to_string();
+            return (true, Some((normalize_ident(name), desc)));
+        }
+    }
+    (false, None)
+}
+
+/// Parses a single non-empty doc-comment line for XML, `@param`, `ReST`, `SwiftDoc`, or Rust `# Arguments` tags.
+///
+/// # Arguments
+///
+/// * `line` - Trimmed doc-comment line.
+///
+/// # Returns
+///
+/// `(is_tag_line, optional_normalized_name_and_description)`.
+#[must_use]
+fn parse_doc_tag_line(line: &str) -> (bool, Option<(String, String)>) {
+    if let Some(after_param) = line.strip_prefix(r#"<param name=""#) {
+        if let Some((name, rest)) = after_param.split_once(r#"">"#) {
+            let desc = rest.strip_suffix("</param>").unwrap_or(rest).trim();
+            return (true, Some((normalize_ident(name), desc.to_string())));
+        }
+    }
+    let (at_matched, at_res) = parse_at_doc_tag(line);
+    if at_matched {
+        return (true, at_res);
+    }
+    if let Some((name_part, desc)) = line
+        .strip_prefix(":param ")
+        .or_else(|| line.strip_prefix(":ivar "))
+        .or_else(|| line.strip_prefix(":var "))
+        .and_then(|r| r.split_once(':'))
+    {
+        let name = name_part.split_whitespace().last().unwrap_or(name_part);
+        return (true, Some((normalize_ident(name), desc.trim().to_string())));
+    }
+    if let Some((name, desc)) = line
+        .strip_prefix("- Parameter ")
+        .or_else(|| line.strip_prefix("- parameter "))
+        .and_then(|r| r.split_once(':'))
+    {
+        return (true, Some((normalize_ident(name), desc.trim().to_string())));
+    }
+    if let Some((left, right)) = line
+        .strip_prefix("* ")
+        .or_else(|| line.strip_prefix("- "))
+        .and_then(|r| r.split_once(" - ").or_else(|| r.split_once(':')))
+    {
+        let clean_name = left.trim().trim_matches('`');
+        if clean_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return (
+                true,
+                Some((normalize_ident(clean_name), right.trim().to_string())),
+            );
+        }
+    }
+    (false, None)
+}
+
 /// Extracts parameter and field/property documentation tags from a doc-comment block.
 ///
 /// Supports `@param`, `\param`, `:param:`, `- Parameter`, `# Arguments`, `@property`, `@field`,
@@ -88,7 +188,6 @@ pub(crate) fn extract_comment_line(trimmed: &str, in_block_comment: &mut bool) -
 ///
 /// Map of normalized parameter/field name to its extracted description.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub(crate) fn extract_doc_tags(doc: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     let mut last_tag_key: Option<String> = None;
@@ -105,98 +204,14 @@ pub(crate) fn extract_doc_tags(doc: &str) -> BTreeMap<String, String> {
             last_tag_key = None;
             continue;
         }
-        // XML doc: <param name="foo">desc</param>
-        if let Some(after_param) = line.strip_prefix(r#"<param name=""#) {
-            if let Some((name, rest)) = after_param.split_once(r#"">"#) {
-                let desc = rest.trim_end_matches("</param>").trim();
-                let norm = normalize_ident(name);
-                map.insert(norm.clone(), desc.to_string());
+        let (is_tag, tag_opt) = parse_doc_tag_line(line);
+        if is_tag {
+            if let Some((norm, desc)) = tag_opt {
+                map.insert(norm.clone(), desc);
                 last_tag_key = Some(norm);
-                continue;
             }
-        }
-        // Doxygen / JSDoc / Javadoc / KDoc / PHPDoc / YARD: @param [Type] [$]name desc OR @property / @field / @attr
-        let mut matched_tag = false;
-        for tag in ["@param", r"\param", "@property", "@field", "@var", "@attr"] {
-            if let Some(rest) = line.strip_prefix(tag) {
-                matched_tag = true;
-                let rest = rest.trim();
-                let rest = if rest.starts_with('{') {
-                    rest.split_once('}').map_or(rest, |(_, r)| r.trim())
-                } else if rest.starts_with('[') {
-                    rest.split_once(']').map_or(rest, |(_, r)| r.trim())
-                } else {
-                    rest
-                };
-                let tokens: Vec<&str> = rest.split_whitespace().collect();
-                if let Some((&first_tok, tail)) = tokens.split_first() {
-                    let (raw_name, desc_slice) = if first_tok.starts_with('$')
-                        || tail.first().is_none_or(|t| !t.starts_with('$'))
-                    {
-                        (first_tok, tail)
-                    } else {
-                        (tail[0], &tail[1..])
-                    };
-                    let name = raw_name.trim_end_matches(':').trim_end_matches('-');
-                    let desc = desc_slice
-                        .join(" ")
-                        .trim_start_matches('-')
-                        .trim_start_matches(':')
-                        .trim()
-                        .to_string();
-                    let norm = normalize_ident(name);
-                    map.insert(norm.clone(), desc);
-                    last_tag_key = Some(norm);
-                }
-                break;
-            }
-        }
-        if matched_tag {
             continue;
         }
-        // Python ReST: :param name: desc or :ivar name: desc
-        if let Some((name_part, desc)) = line
-            .strip_prefix(":param ")
-            .or_else(|| line.strip_prefix(":ivar "))
-            .or_else(|| line.strip_prefix(":var "))
-            .and_then(|r| r.split_once(':'))
-        {
-            let name = name_part.split_whitespace().last().unwrap_or(name_part);
-            let norm = normalize_ident(name);
-            map.insert(norm.clone(), desc.trim().to_string());
-            last_tag_key = Some(norm);
-            continue;
-        }
-        // SwiftDoc: - Parameter name: desc
-        if let Some((name, desc)) = line
-            .strip_prefix("- Parameter ")
-            .or_else(|| line.strip_prefix("- parameter "))
-            .and_then(|r| r.split_once(':'))
-        {
-            let norm = normalize_ident(name);
-            map.insert(norm.clone(), desc.trim().to_string());
-            last_tag_key = Some(norm);
-            continue;
-        }
-        // Rust `# Arguments` or Google/Swift bullet: `* `name` - desc` or `- name: desc`
-        if let Some((left, right)) = line
-            .strip_prefix("* ")
-            .or_else(|| line.strip_prefix("- "))
-            .and_then(|r| r.split_once(" - ").or_else(|| r.split_once(':')))
-        {
-            let clean_name = left.trim().trim_matches('`');
-            if clean_name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                let norm = normalize_ident(clean_name);
-                map.insert(norm.clone(), right.trim().to_string());
-                last_tag_key = Some(norm);
-                continue;
-            }
-        }
-
-        // Continuation line for a multi-line parameter description
         if let Some(existing) = last_tag_key.as_ref().and_then(|k| map.get_mut(k)) {
             if !existing.is_empty() {
                 existing.push(' ');
@@ -226,7 +241,10 @@ pub(crate) fn join_doc_lines(lines: &[String]) -> Option<String> {
     if filtered.is_empty() {
         None
     } else {
-        Some(filtered.join("\n"))
+        Some(filtered.join(
+            "
+",
+        ))
     }
 }
 
@@ -238,10 +256,9 @@ pub(crate) fn join_doc_lines(lines: &[String]) -> Option<String> {
 /// # Arguments
 ///
 /// * `args` - Mutable slice of `ParsedArg` items.
-/// * `parent_doc` - Function-level doc comment.
-#[allow(clippy::ref_option)]
-pub(crate) fn attach_arg_docs(args: &mut [ParsedArg], parent_doc: &Option<String>) {
-    let Some(ref doc_str) = parent_doc else {
+/// * `parent_doc` - Optional function-level doc comment slice.
+pub(crate) fn attach_arg_docs(args: &mut [ParsedArg], parent_doc: Option<&str>) {
+    let Some(doc_str) = parent_doc else {
         return;
     };
     let tag_map = extract_doc_tags(doc_str);
@@ -253,7 +270,7 @@ pub(crate) fn attach_arg_docs(args: &mut [ParsedArg], parent_doc: &Option<String
         if let Some(desc) = tag_map.get(&norm) {
             arg.doc_comment = Some(desc.clone());
         } else if doc_str.to_lowercase().contains(&norm) && !norm.is_empty() {
-            arg.doc_comment = Some(doc_str.clone());
+            arg.doc_comment = Some(doc_str.to_string());
         }
     }
 }
@@ -264,10 +281,9 @@ pub(crate) fn attach_arg_docs(args: &mut [ParsedArg], parent_doc: &Option<String
 /// # Arguments
 ///
 /// * `fields` - Mutable slice of `ParsedField` items.
-/// * `struct_doc` - Struct-level doc comment.
-#[allow(clippy::ref_option)]
-pub(crate) fn attach_field_docs(fields: &mut [ParsedField], struct_doc: &Option<String>) {
-    let Some(ref doc_str) = struct_doc else {
+/// * `struct_doc` - Optional struct-level doc comment slice.
+pub(crate) fn attach_field_docs(fields: &mut [ParsedField], struct_doc: Option<&str>) {
+    let Some(doc_str) = struct_doc else {
         return;
     };
     let tag_map = extract_doc_tags(doc_str);

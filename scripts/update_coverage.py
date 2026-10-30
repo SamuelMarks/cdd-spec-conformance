@@ -54,7 +54,11 @@ def calculate_test_coverage() -> str:
         line_pct = float(totals["lines"]["percent"])
         fn_pct = float(totals["functions"]["percent"])
         reg_pct = float(totals["regions"]["percent"])
-        pct = min(line_pct, fn_pct, reg_pct)
+        metrics = [line_pct, fn_pct, reg_pct]
+        branches = totals.get("branches", {})
+        if branches.get("count", 0) > 0:
+            metrics.append(float(branches["percent"]))
+        pct = min(metrics)
         if pct >= 99.995:
             return "100.00"
         return f"{pct:.2f}"
