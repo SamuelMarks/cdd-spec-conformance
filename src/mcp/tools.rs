@@ -361,6 +361,7 @@ impl std::fmt::Display for ToolName {
 }
 
 impl FromStr for ToolName {
+    /// Error type returned when tool name parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `ToolName` from a raw string slice.
@@ -392,169 +393,189 @@ impl FromStr for ToolName {
     }
 }
 
+/// Returns the 6 core checklist and report MCP tools.
+///
+/// # Returns
+///
+/// Vector of `Tool` descriptors for checklist auditing, diffing, claims, sync, and reports.
+fn core_checklist_tools() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "check_conformance".to_string(),
+            description: "Audits a CDD repository and confirms which specification standards it implements.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the target repository directory."
+                    },
+                    "spec_id": {
+                        "type": "string",
+                        "description": "Optional specification identifier to filter check (e.g. openapi-3.2.0, mcp-1.0.0)."
+                    },
+                    "strict": {
+                        "type": "boolean",
+                        "description": "Require complete canonical schema parity and zero unreviewed features."
+                    }
+                },
+                "required": ["repo_path"]
+            }),
+        },
+        Tool {
+            name: "get_compliance_matrix".to_string(),
+            description: "Generates the unified ecosystem compliance matrix across all 13 CDD language projects.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repos_dir": {
+                        "type": "string",
+                        "description": "Parent directory containing the cdd-* repositories (defaults to parent directory)."
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "diff_checklists".to_string(),
+            description: "Diffs a target project checklist against the canonical specification table.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo_path": { "type": "string", "description": "Target repository path." },
+                    "spec_id": { "type": "string", "description": "Specification ID (e.g. openapi-3.2.0)." },
+                    "profile": { "type": "string", "description": "Profile kind (client-sdk, client-sdk-cli, servers)." }
+                },
+                "required": ["repo_path", "spec_id", "profile"]
+            }),
+        },
+        Tool {
+            name: "validate_claims".to_string(),
+            description: "Validates documented claims in COMPLIANCE.md against checklist ground truth.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo_path": { "type": "string", "description": "Target repository path." }
+                },
+                "required": ["repo_path"]
+            }),
+        },
+        Tool {
+            name: "sync_checklists".to_string(),
+            description: "Synchronizes or scaffolds checklists in a repository from canonical specification tables.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo_path": { "type": "string", "description": "Target repository path." },
+                    "spec_id": { "type": "string", "description": "Optional specification identifier." },
+                    "dry_run": { "type": "boolean", "description": "Preview changes without modifying files." }
+                },
+                "required": ["repo_path"]
+            }),
+        },
+        Tool {
+            name: "generate_report".to_string(),
+            description: "Generates a formatted conformance report (table, JSON, or Markdown) for a repository.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo_path": { "type": "string", "description": "Target repository path." },
+                    "spec_id": { "type": "string", "description": "Optional specification identifier filter." },
+                    "json": { "type": "boolean", "description": "Output JSON report." },
+                    "markdown": { "type": "boolean", "description": "Output Markdown report." }
+                },
+                "required": ["repo_path"]
+            }),
+        },
+    ]
+}
+
+/// Returns the 5 source-signature, cross-language matrix, roundtrip, and Arazzo MCP tools.
+///
+/// # Returns
+///
+/// Vector of `Tool` descriptors for source inspection and cross-language verification.
+fn runtime_verification_tools() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "inspect_language_source_signatures".to_string(),
+            description: "Shallow-parses source code across 13+ languages for structs/classes, fields, functions, args, and comments.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to source file or directory." },
+                    "lang": { "type": "string", "description": "Optional explicit language slug (e.g. rust, c, zig, cobol, fortran)." },
+                    "require_docs": { "type": "boolean", "description": "Require 100% doc comments on structs, fields, functions, and args." },
+                    "openapi_spec": { "type": "string", "description": "Optional path to OpenAPI spec to verify against." },
+                    "arazzo_spec": { "type": "string", "description": "Optional path to Arazzo 1.1.0 spec to verify against." }
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "verify_language_clients_against_rust_backend".to_string(),
+            description: "Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the ../cdd-rust reference backend.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                    "reference_backend_path": { "type": "string", "description": "Path to ../cdd-rust." },
+                    "lang": { "type": "string", "description": "Optional language filter." },
+                    "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
+                    "spec": { "type": "string", "description": "Optional specification filter." },
+                    "mode": { "type": "string", "description": "Optional server operating mode." }
+                }
+            }),
+        },
+        Tool {
+            name: "verify_language_backend_compatibility_matrix".to_string(),
+            description: "Verifies N x N cross-language server equivalence and compatibility matrix across all 13+ languages.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                    "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." }
+                }
+            }),
+        },
+        Tool {
+            name: "verify_cross_language_roundtrip".to_string(),
+            description: "Executes N-language transitive OpenAPI and source-signature roundtrip verification.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
+                    "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
+                    "spec": { "type": "string", "description": "Optional specification filter." }
+                }
+            }),
+        },
+        Tool {
+            name: "validate_arazzo_spec".to_string(),
+            description: "Validates an Arazzo 1.1.0 JSON/YAML file against normative structural rules and optional semantic equivalence.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "spec_path": { "type": "string", "description": "Path to the Arazzo 1.1.0 JSON/YAML specification file." },
+                    "expected_spec_path": { "type": "string", "description": "Optional path to expected Arazzo 1.1.0 specification for equivalence checking." },
+                    "lang": { "type": "string", "description": "Optional language slug (e.g. rust, go, python)." }
+                },
+                "required": ["spec_path"]
+            }),
+        },
+    ]
+}
+
 /// Returns the catalog of all tools exposed by `cdd-conformance`.
 ///
 /// # Returns
 ///
 /// A `ListToolsResult` containing all 11 conformance tools.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn list_tools() -> ListToolsResult {
+    let mut tools = core_checklist_tools();
+    tools.extend(runtime_verification_tools());
     ListToolsResult {
-        tools: vec![
-            Tool {
-                name: "check_conformance".to_string(),
-                description: "Audits a CDD repository and confirms which specification standards it implements.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Path to the target repository directory."
-                        },
-                        "spec_id": {
-                            "type": "string",
-                            "description": "Optional specification identifier to filter check (e.g. openapi-3.2.0, mcp-1.0.0)."
-                        },
-                        "strict": {
-                            "type": "boolean",
-                            "description": "Require complete canonical schema parity and zero unreviewed features."
-                        }
-                    },
-                    "required": ["repo_path"]
-                }),
-            },
-            Tool {
-                name: "get_compliance_matrix".to_string(),
-                description: "Generates the unified ecosystem compliance matrix across all 13 CDD language projects.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repos_dir": {
-                            "type": "string",
-                            "description": "Parent directory containing the cdd-* repositories (defaults to parent directory)."
-                        }
-                    }
-                }),
-            },
-            Tool {
-                name: "diff_checklists".to_string(),
-                description: "Diffs a target project checklist against the canonical specification table.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_path": { "type": "string", "description": "Target repository path." },
-                        "spec_id": { "type": "string", "description": "Specification ID (e.g. openapi-3.2.0)." },
-                        "profile": { "type": "string", "description": "Profile kind (client-sdk, client-sdk-cli, servers)." }
-                    },
-                    "required": ["repo_path", "spec_id", "profile"]
-                }),
-            },
-            Tool {
-                name: "validate_claims".to_string(),
-                description: "Validates documented claims in COMPLIANCE.md against checklist ground truth.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_path": { "type": "string", "description": "Target repository path." }
-                    },
-                    "required": ["repo_path"]
-                }),
-            },
-            Tool {
-                name: "sync_checklists".to_string(),
-                description: "Synchronizes or scaffolds checklists in a repository from canonical specification tables.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_path": { "type": "string", "description": "Target repository path." },
-                        "spec_id": { "type": "string", "description": "Optional specification identifier." },
-                        "dry_run": { "type": "boolean", "description": "Preview changes without modifying files." }
-                    },
-                    "required": ["repo_path"]
-                }),
-            },
-            Tool {
-                name: "generate_report".to_string(),
-                description: "Generates a formatted conformance report (table, JSON, or Markdown) for a repository.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_path": { "type": "string", "description": "Target repository path." },
-                        "spec_id": { "type": "string", "description": "Optional specification identifier filter." },
-                        "json": { "type": "boolean", "description": "Output JSON report." },
-                        "markdown": { "type": "boolean", "description": "Output Markdown report." }
-                    },
-                    "required": ["repo_path"]
-                }),
-            },
-            Tool {
-                name: "inspect_language_source_signatures".to_string(),
-                description: "Shallow-parses source code across 13+ languages for structs/classes, fields, functions, args, and comments.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to source file or directory." },
-                        "lang": { "type": "string", "description": "Optional explicit language slug (e.g. rust, c, zig, cobol, fortran)." },
-                        "require_docs": { "type": "boolean", "description": "Require 100% doc comments on structs, fields, functions, and args." },
-                        "openapi_spec": { "type": "string", "description": "Optional path to OpenAPI spec to verify against." },
-                        "arazzo_spec": { "type": "string", "description": "Optional path to Arazzo 1.1.0 spec to verify against." }
-                    },
-                    "required": ["path"]
-                }),
-            },
-            Tool {
-                name: "verify_language_clients_against_rust_backend".to_string(),
-                description: "Verifies all 13+ language Client SDKs, Client CLIs, and frontends against the ../cdd-rust reference backend.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
-                        "reference_backend_path": { "type": "string", "description": "Path to ../cdd-rust." },
-                        "lang": { "type": "string", "description": "Optional language filter." },
-                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
-                        "spec": { "type": "string", "description": "Optional specification filter." },
-                        "mode": { "type": "string", "description": "Optional server operating mode." }
-                    }
-                }),
-            },
-            Tool {
-                name: "verify_language_backend_compatibility_matrix".to_string(),
-                description: "Verifies N x N cross-language server equivalence and compatibility matrix across all 13+ languages.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
-                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." }
-                    }
-                }),
-            },
-            Tool {
-                name: "verify_cross_language_roundtrip".to_string(),
-                description: "Executes N-language transitive OpenAPI and source-signature roundtrip verification.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "repos_dir": { "type": "string", "description": "Parent directory containing cdd-* repositories." },
-                        "extra_langs": { "type": "array", "items": { "type": "string" }, "description": "Additional custom language slugs." },
-                        "spec": { "type": "string", "description": "Optional specification filter." }
-                    }
-                }),
-            },
-            Tool {
-                name: "validate_arazzo_spec".to_string(),
-                description: "Validates an Arazzo 1.1.0 JSON/YAML file against normative structural rules and optional semantic equivalence.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "spec_path": { "type": "string", "description": "Path to the Arazzo 1.1.0 JSON/YAML specification file." },
-                        "expected_spec_path": { "type": "string", "description": "Optional path to expected Arazzo 1.1.0 specification for equivalence checking." },
-                        "lang": { "type": "string", "description": "Optional language slug (e.g. rust, go, python)." }
-                    },
-                    "required": ["spec_path"]
-                }),
-            },
-        ],
+        tools,
         next_cursor: None,
     }
 }
@@ -753,7 +774,7 @@ fn handle_diff_checklists(
     let canonical = registry.get_table(args.spec_id, args.profile)?;
     let diff = compare_checklists_with_path(&target_table, &canonical, &checklist.path);
 
-    let json_str = crate::error::to_pretty_json(&diff, "diff_checklists").unwrap_or_default();
+    let json_str = crate::error::to_pretty_json(&diff, "diff_checklists");
     Ok(CallToolResult::text(json_str))
 }
 
@@ -781,7 +802,7 @@ fn handle_validate_claims(
 
     if let Some(ref comp_file) = project.compliance_file {
         let report = verify_compliance_claims(comp_file, &tables)?;
-        let res_json = crate::error::to_pretty_json(&report, "validate_claims").unwrap_or_default();
+        let res_json = crate::error::to_pretty_json(&report, "validate_claims");
         Ok(CallToolResult::text(res_json))
     } else {
         Ok(CallToolResult::text(
@@ -857,6 +878,72 @@ fn handle_validate_arazzo_spec(
         valid_spec.display()
     )))
 }
+/// Handles `inspect_language_source_signatures` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `InspectSourceArgs`.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` containing the JSON-serialized `ParsedSourceBundle`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if root validation, source inspection, or JSON serialization fails.
+fn handle_inspect_source(
+    args: &InspectSourceArgs,
+    allowed_roots: &[PathBuf],
+) -> Result<CallToolResult, ConformanceError> {
+    let valid_path = validate_path_within_roots(&args.path, allowed_roots)?;
+    let spec_path = args.arazzo_spec.as_deref().or(args.openapi_spec.as_deref());
+    let bundle = inspect_source_signatures(
+        &valid_path,
+        args.lang.as_deref(),
+        args.require_docs,
+        spec_path,
+    )?;
+    let json_str = crate::error::to_pretty_json(&bundle, "inspect_language_source_signatures");
+    Ok(CallToolResult::text(json_str))
+}
+
+/// Handles `verify_language_clients_against_rust_backend` tool execution.
+///
+/// # Arguments
+///
+/// * `args` - Strongly typed `VerifyClientsArgs`.
+/// * `allowed_roots` - Allowed filesystem roots.
+///
+/// # Returns
+///
+/// `CallToolResult` containing the JSON-serialized `ClientVerificationReport`.
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if root validation, client verification, or JSON serialization fails.
+fn handle_verify_clients(
+    args: VerifyClientsArgs,
+    allowed_roots: &[PathBuf],
+) -> Result<CallToolResult, ConformanceError> {
+    let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
+    let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
+    let ref_backend = args
+        .reference_backend_path
+        .unwrap_or_else(|| valid_parent.join("cdd-rust"));
+    let report = verify_clients_against_rust_backend(
+        &valid_parent,
+        &ref_backend,
+        args.lang.as_deref(),
+        &args.extra_langs,
+        args.spec,
+        args.mode,
+    )?;
+    let json_str =
+        crate::error::to_pretty_json(&report, "verify_language_clients_against_rust_backend");
+    Ok(CallToolResult::text(json_str))
+}
+
 /// Executes a tool call request with root boundary validation.
 ///
 /// # Arguments
@@ -869,7 +956,6 @@ fn handle_validate_arazzo_spec(
 /// # Errors
 ///
 /// Returns `ConformanceError` if parameters are invalid, outside allowed roots, or execution fails.
-#[allow(clippy::too_many_lines)]
 pub fn execute_tool_with_roots(
     name: &str,
     arguments: Option<&serde_json::Value>,
@@ -914,40 +1000,11 @@ pub fn execute_tool_with_roots(
         }
         ToolName::InspectLanguageSourceSignatures => {
             let args: InspectSourceArgs = parse_tool_args(name, arguments)?;
-            let valid_path = validate_path_within_roots(&args.path, allowed_roots)?;
-            let spec_path = args.arazzo_spec.as_deref().or(args.openapi_spec.as_deref());
-            let bundle = inspect_source_signatures(
-                &valid_path,
-                args.lang.as_deref(),
-                args.require_docs,
-                spec_path,
-            )?;
-            let json_str =
-                crate::error::to_pretty_json(&bundle, "inspect_language_source_signatures")
-                    .unwrap_or_default();
-            Ok(CallToolResult::text(json_str))
+            handle_inspect_source(&args, allowed_roots)
         }
         ToolName::VerifyLanguageClientsAgainstRustBackend => {
             let args: VerifyClientsArgs = parse_optional_tool_args(name, arguments)?;
-            let parent = args.repos_dir.unwrap_or_else(|| PathBuf::from(".."));
-            let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
-            let ref_backend = args
-                .reference_backend_path
-                .unwrap_or_else(|| valid_parent.join("cdd-rust"));
-            let report = verify_clients_against_rust_backend(
-                &valid_parent,
-                &ref_backend,
-                args.lang.as_deref(),
-                &args.extra_langs,
-                args.spec,
-                args.mode,
-            )?;
-            let json_str = crate::error::to_pretty_json(
-                &report,
-                "verify_language_clients_against_rust_backend",
-            )
-            .unwrap_or_default();
-            Ok(CallToolResult::text(json_str))
+            handle_verify_clients(args, allowed_roots)
         }
         ToolName::VerifyLanguageBackendCompatibilityMatrix => {
             let args: VerifyBackendsArgs = parse_optional_tool_args(name, arguments)?;
@@ -957,8 +1014,7 @@ pub fn execute_tool_with_roots(
             let json_str = crate::error::to_pretty_json(
                 &report,
                 "verify_language_backend_compatibility_matrix",
-            )
-            .unwrap_or_default();
+            );
             Ok(CallToolResult::text(json_str))
         }
         ToolName::VerifyCrossLanguageRoundtrip => {
@@ -967,8 +1023,7 @@ pub fn execute_tool_with_roots(
             let valid_parent = validate_path_within_roots(&parent, allowed_roots)?;
             let report =
                 verify_cross_language_roundtrip_chain(&valid_parent, &args.extra_langs, args.spec)?;
-            let json_str = crate::error::to_pretty_json(&report, "verify_cross_language_roundtrip")
-                .unwrap_or_default();
+            let json_str = crate::error::to_pretty_json(&report, "verify_cross_language_roundtrip");
             Ok(CallToolResult::text(json_str))
         }
         ToolName::ValidateArazzoSpec => {
@@ -1008,7 +1063,10 @@ mod tests {
         assert!(tools.next_cursor.is_none());
         for t in &tools.tools {
             let parsed = ToolName::from_str(&t.name).ok();
-            assert!(parsed.is_some_and(|tn| tn.as_str() == t.name && tn.to_string() == t.name));
+            assert_eq!(
+                parsed.map(|tn| (tn.as_str().to_string(), tn.to_string())),
+                Some((t.name.clone(), t.name.clone()))
+            );
         }
         assert!(tools.tools.iter().any(|t| t.name == "check_conformance"));
         assert!(tools
@@ -1025,8 +1083,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn test_execute_new_verification_mcp_tools() {
+    fn test_execute_inspect_and_verify_clients_mcp_tools() {
         let registry = CanonicalRegistry::new();
         assert!(execute_tool("inspect_language_source_signatures", None, &registry).is_err());
         assert!(execute_tool(
@@ -1097,7 +1154,11 @@ mod tests {
             &registry
         )
         .is_err());
+    }
 
+    #[test]
+    fn test_execute_backend_matrix_and_roundtrip_mcp_tools() {
+        let registry = CanonicalRegistry::new();
         assert!(execute_tool(
             "verify_language_backend_compatibility_matrix",
             None,
@@ -1159,8 +1220,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn test_execute_unknown_tool() {
+    fn test_execute_sync_and_report_mcp_tools() {
         let registry = CanonicalRegistry::new();
         let res = execute_tool("unknown_tool", None, &registry);
         assert!(res.is_err());
@@ -1209,6 +1269,16 @@ mod tests {
             &registry
         )
         .is_err());
+        let _ = std::fs::remove_dir_all(&bad_dir);
+    }
+
+    #[test]
+    fn test_execute_validate_arazzo_mcp_tool() {
+        let registry = CanonicalRegistry::new();
+        let bad_dir = std::env::temp_dir().join(format!("cdd_tools_t4b_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&bad_dir);
+        let _ = std::fs::write(bad_dir.join(".cdd-conformance.yaml"), b": invalid :");
+        let bad_dir_str = bad_dir.to_str().unwrap_or(".");
 
         let arazzo_file = bad_dir.join("wf.arazzo.json");
         let arazzo_doc = crate::matrix_runtime::canonical_conformance_arazzo_doc();
@@ -1218,94 +1288,19 @@ mod tests {
         );
         let arazzo_str = arazzo_file.to_str().unwrap_or(".");
         assert!(execute_tool("validate_arazzo_spec", None, &registry).is_err());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-                "expected_spec_path": arazzo_str,
-                "lang": "rust"
-            })),
-            &registry
-        )
-        .is_ok());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-            })),
-            &registry
-        )
-        .is_ok());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-                "lang": "123bad"
-            })),
-            &registry
-        )
-        .is_err());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": "nonexistent_wf.yaml"
-            })),
-            &registry
-        )
-        .is_err());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-                "expected_spec_path": "nonexistent_exp.yaml"
-            })),
-            &registry
-        )
-        .is_err());
+        for ok_args in [
+            serde_json::json!({"spec_path": arazzo_str, "expected_spec_path": arazzo_str, "lang": "rust"}),
+            serde_json::json!({"spec_path": arazzo_str}),
+        ] {
+            assert!(execute_tool("validate_arazzo_spec", Some(&ok_args), &registry).is_ok());
+        }
+
         let bad_yaml_file = bad_dir.join(".cdd-conformance.yaml");
         let bad_yaml_str = bad_yaml_file.to_str().unwrap_or(".");
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": bad_yaml_str
-            })),
-            &registry
-        )
-        .is_err());
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-                "expected_spec_path": bad_yaml_str
-            })),
-            &registry
-        )
-        .is_err());
-
-        // Directory passed as spec_path triggers std::fs::read_to_string Io error after canonicalize succeeds
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": bad_dir_str
-            })),
-            &registry
-        )
-        .is_err());
-
-        // Valid YAML but invalid Arazzo 1.1.0 schema
         let invalid_arazzo_file = bad_dir.join("invalid.arazzo.json");
         let _ = std::fs::write(&invalid_arazzo_file, r#"{"arazzo":"1.0.0"}"#);
         let invalid_arazzo_str = invalid_arazzo_file.to_str().unwrap_or(".");
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": invalid_arazzo_str
-            })),
-            &registry
-        )
-        .is_err());
 
-        // Valid Arazzo 1.1.0 but expected_spec_path differs
         let mut drifted_doc = arazzo_doc;
         drifted_doc["info"]["title"] = serde_json::json!("Drifted Title");
         let drifted_file = bad_dir.join("drifted.arazzo.json");
@@ -1314,15 +1309,19 @@ mod tests {
             serde_json::to_string_pretty(&drifted_doc).unwrap_or_default(),
         );
         let drifted_str = drifted_file.to_str().unwrap_or(".");
-        assert!(execute_tool(
-            "validate_arazzo_spec",
-            Some(&serde_json::json!({
-                "spec_path": arazzo_str,
-                "expected_spec_path": drifted_str
-            })),
-            &registry
-        )
-        .is_err());
+
+        for err_args in [
+            serde_json::json!({"spec_path": arazzo_str, "lang": "123bad"}),
+            serde_json::json!({"spec_path": "nonexistent_wf.yaml"}),
+            serde_json::json!({"spec_path": arazzo_str, "expected_spec_path": "nonexistent_exp.yaml"}),
+            serde_json::json!({"spec_path": bad_yaml_str}),
+            serde_json::json!({"spec_path": arazzo_str, "expected_spec_path": bad_yaml_str}),
+            serde_json::json!({"spec_path": bad_dir_str}),
+            serde_json::json!({"spec_path": invalid_arazzo_str}),
+            serde_json::json!({"spec_path": arazzo_str, "expected_spec_path": drifted_str}),
+        ] {
+            assert!(execute_tool("validate_arazzo_spec", Some(&err_args), &registry).is_err());
+        }
 
         let _ = std::fs::remove_dir_all(&bad_dir);
     }

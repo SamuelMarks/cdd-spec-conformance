@@ -46,6 +46,7 @@ impl fmt::Display for PromptName {
 }
 
 impl FromStr for PromptName {
+    /// Error type returned when prompt name parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `PromptName` from a wire string slice.
@@ -295,7 +296,10 @@ mod tests {
         assert!(list.next_cursor.is_none());
         for p in &list.prompts {
             let parsed = PromptName::from_str(&p.name).ok();
-            assert!(parsed.is_some_and(|pn| pn.as_str() == p.name && pn.to_string() == p.name));
+            assert_eq!(
+                parsed.map(|pn| (pn.as_str().to_string(), pn.to_string())),
+                Some((p.name.clone(), p.name.clone()))
+            );
         }
 
         let mut args = HashMap::new();

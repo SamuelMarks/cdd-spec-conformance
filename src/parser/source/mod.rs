@@ -90,7 +90,7 @@ pub fn parse_source_path_with_options(
 
     let mut files = Vec::new();
     if path.is_dir() {
-        collect_source_files(path, language, custom_syntax, include_tests, &mut files);
+        collect_source_files(path, language, custom_syntax, include_tests, &mut files)?;
         files.sort();
     } else {
         files.push(path.to_path_buf());
@@ -176,19 +176,23 @@ fn collect_source_files(
     custom_syntax: Option<&SyntaxProfileConfig>,
     include_tests: bool,
     out: &mut Vec<PathBuf>,
-) {
-    let entries = std::fs::read_dir(dir);
-    for entry in entries.into_iter().flatten().flatten() {
+) -> Result<(), ConformanceError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| ConformanceError::Io {
+        source,
+        path: dir.to_path_buf(),
+    })?;
+    for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !is_ignored_source_dir(name, include_tests) {
-                collect_source_files(&p, language, custom_syntax, include_tests, out);
+                collect_source_files(&p, language, custom_syntax, include_tests, out)?;
             }
         } else if matches_language_extension(&p, language, custom_syntax) {
             out.push(p);
         }
     }
+    Ok(())
 }
 
 /// Checks whether a file path has an extension belonging to `language` or `custom_syntax`.
@@ -261,12 +265,6 @@ pub fn parse_source_str(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::similar_names,
-    clippy::needless_raw_string_hashes,
-    clippy::too_many_lines,
-    clippy::cognitive_complexity
-)]
 mod tests {
     use super::*;
     use crate::model::ProfileKind;
@@ -277,9 +275,8 @@ mod tests {
     };
 
     #[test]
-    fn test_parse_all_13_core_languages_and_verify_docs() {
-        // 1. C
-        let c_src = r#"
+    fn test_parse_systems_and_jvm_languages_and_verify_docs() {
+        let c_src = "
 /**
  * Pet model in C89.
  */
@@ -294,7 +291,7 @@ typedef struct Pet {
  * @param pet_id The target pet ID.
  */
 int get_pet(int pet_id);
-"#;
+";
         let c_bundle = parse_source_str(c_src, Path::new("pet.h"), &LanguageId::C, None);
         assert_eq!(c_bundle.structs.len(), 1);
         assert_eq!(c_bundle.structs[0].name, "Pet");
@@ -304,8 +301,7 @@ int get_pet(int pet_id);
         assert_eq!(c_bundle.functions[0].args[0].name, "pet_id");
         assert!(c_bundle.verify_100_percent_docs(&LanguageId::C).is_ok());
 
-        // 2. C++
-        let cpp_src = r#"
+        let cpp_src = "
 /// Pet class in C++.
 class Pet {
 public:
@@ -319,15 +315,14 @@ public:
      */
     Pet getPet(int petId);
 };
-"#;
+";
         let cpp_bundle = parse_source_str(cpp_src, Path::new("pet.hpp"), &LanguageId::Cpp, None);
         assert_eq!(cpp_bundle.structs.len(), 1);
         assert_eq!(cpp_bundle.structs[0].fields.len(), 2);
         assert_eq!(cpp_bundle.structs[0].methods.len(), 1);
         assert!(cpp_bundle.verify_100_percent_docs(&LanguageId::Cpp).is_ok());
 
-        // 3. C#
-        let cs_src = r#"
+        let csharp_src = r#"
 /// <summary>Pet model in C#.</summary>
 public class Pet {
     /// <summary>Pet identifier.</summary>
@@ -339,15 +334,15 @@ public class Pet {
     public Pet GetPet(int petId) {}
 }
 "#;
-        let cs_bundle = parse_source_str(cs_src, Path::new("Pet.cs"), &LanguageId::CSharp, None);
-        assert_eq!(cs_bundle.structs.len(), 1);
-        assert_eq!(cs_bundle.structs[0].fields.len(), 2);
-        assert_eq!(cs_bundle.structs[0].methods.len(), 1);
-        assert!(cs_bundle
+        let csharp_bundle =
+            parse_source_str(csharp_src, Path::new("Pet.cs"), &LanguageId::CSharp, None);
+        assert_eq!(csharp_bundle.structs.len(), 1);
+        assert_eq!(csharp_bundle.structs[0].fields.len(), 2);
+        assert_eq!(csharp_bundle.structs[0].methods.len(), 1);
+        assert!(csharp_bundle
             .verify_100_percent_docs(&LanguageId::CSharp)
             .is_ok());
 
-        // 4. Go
         let go_src = r#"
 // Pet represents a pet in the store.
 type Pet struct {
@@ -367,8 +362,7 @@ func (c *Pet) GetPet(petID int64) (*Pet, error) {
         assert_eq!(go_bundle.structs[0].methods.len(), 1);
         assert!(go_bundle.verify_100_percent_docs(&LanguageId::Go).is_ok());
 
-        // 5. Java
-        let java_src = r#"
+        let java_src = "
 /**
  * Pet record in Java.
  */
@@ -379,7 +373,7 @@ public record Pet(long id, String name) {
      */
     public Pet getPet(long petId) {}
 }
-"#;
+";
         let java_bundle =
             parse_source_str(java_src, Path::new("Pet.java"), &LanguageId::Java, None);
         assert_eq!(java_bundle.structs.len(), 1);
@@ -389,7 +383,6 @@ public record Pet(long id, String name) {
             .verify_100_percent_docs(&LanguageId::Java)
             .is_ok());
 
-        // 6. Kotlin
         let kt_src = r#"
 /**
  * Pet data class in Kotlin.
@@ -413,9 +406,11 @@ data class Pet(val id: Long, val name: String) {
         assert!(kt_bundle
             .verify_100_percent_docs(&LanguageId::Kotlin)
             .is_ok());
+    }
 
-        // 7. PHP
-        let php_src = r#"
+    #[test]
+    fn test_parse_dynamic_and_web_languages_and_verify_docs() {
+        let php_src = "
 <?php
 /**
  * Pet class in PHP.
@@ -431,14 +426,13 @@ class Pet {
      */
     public function getPet(int $petId): Pet {}
 }
-"#;
+";
         let php_bundle = parse_source_str(php_src, Path::new("Pet.php"), &LanguageId::Php, None);
         assert_eq!(php_bundle.structs.len(), 1);
         assert_eq!(php_bundle.structs[0].fields.len(), 2);
         assert_eq!(php_bundle.structs[0].methods.len(), 1);
         assert!(php_bundle.verify_100_percent_docs(&LanguageId::Php).is_ok());
 
-        // 8. Python
         let py_src = r#"
 class Pet:
     """
@@ -464,8 +458,7 @@ class Pet:
             .verify_100_percent_docs(&LanguageId::Python)
             .is_ok());
 
-        // 9. Ruby
-        let rb_src = r#"
+        let rb_src = "
 # Pet model in Ruby.
 class Pet
   # Pet identifier and name.
@@ -476,15 +469,14 @@ class Pet
   def get_pet(pet_id)
   end
 end
-"#;
+";
         let rb_bundle = parse_source_str(rb_src, Path::new("pet.rb"), &LanguageId::Ruby, None);
         assert_eq!(rb_bundle.structs.len(), 1);
         assert_eq!(rb_bundle.structs[0].fields.len(), 2);
         assert_eq!(rb_bundle.structs[0].methods.len(), 1);
         assert!(rb_bundle.verify_100_percent_docs(&LanguageId::Ruby).is_ok());
 
-        // 10. Rust
-        let rs_src = r#"
+        let rust_src = "
 /// Pet struct in Rust.
 pub struct Pet {
     /// Pet ID.
@@ -501,14 +493,18 @@ impl Pet {
     /// * `pet_id` - Target pet ID.
     pub fn get_pet(&self, pet_id: i64) -> Self {}
 }
-"#;
-        let rs_bundle = parse_source_str(rs_src, Path::new("pet.rs"), &LanguageId::Rust, None);
-        assert_eq!(rs_bundle.structs.len(), 1);
-        assert_eq!(rs_bundle.structs[0].fields.len(), 2);
-        assert_eq!(rs_bundle.structs[0].methods.len(), 1);
-        assert!(rs_bundle.verify_100_percent_docs(&LanguageId::Rust).is_ok());
+";
+        let rust_bundle = parse_source_str(rust_src, Path::new("pet.rs"), &LanguageId::Rust, None);
+        assert_eq!(rust_bundle.structs.len(), 1);
+        assert_eq!(rust_bundle.structs[0].fields.len(), 2);
+        assert_eq!(rust_bundle.structs[0].methods.len(), 1);
+        assert!(rust_bundle
+            .verify_100_percent_docs(&LanguageId::Rust)
+            .is_ok());
+    }
 
-        // 11. POSIX Shell
+    #[test]
+    fn test_parse_shell_swift_ts_and_verify_docs() {
         let sh_src = r#"
 #!/bin/sh
 # @struct Pet A pet record in POSIX shell
@@ -527,8 +523,7 @@ get_pet() {
         assert_eq!(sh_bundle.functions.len(), 1);
         assert!(sh_bundle.verify_100_percent_docs(&LanguageId::Sh).is_ok());
 
-        // 12. Swift
-        let swift_src = r#"
+        let swift_src = "
 /// Pet model in Swift.
 public struct Pet {
     /// Pet ID.
@@ -540,7 +535,7 @@ public struct Pet {
     /// - Parameter petId: Target pet ID.
     public func getPet(by petId: Int64) async throws -> Pet {}
 }
-"#;
+";
         let swift_bundle =
             parse_source_str(swift_src, Path::new("Pet.swift"), &LanguageId::Swift, None);
         assert_eq!(swift_bundle.structs.len(), 1);
@@ -550,8 +545,7 @@ public struct Pet {
             .verify_100_percent_docs(&LanguageId::Swift)
             .is_ok());
 
-        // 13. TypeScript
-        let ts_src = r#"
+        let ts_src = "
 /**
  * Pet interface in TypeScript.
  */
@@ -566,7 +560,7 @@ export interface Pet {
      */
     getPet(petId: number): Promise<Pet>;
 }
-"#;
+";
         let ts_bundle =
             parse_source_str(ts_src, Path::new("pet.ts"), &LanguageId::TypeScript, None);
         assert_eq!(ts_bundle.structs.len(), 1);
@@ -580,7 +574,7 @@ export interface Pet {
     #[test]
     fn test_parse_extension_languages_cobol_fortran_zig_and_custom() {
         let zig_lang: LanguageId = "zig".parse().unwrap_or(LanguageId::Rust);
-        let zig_src = r#"
+        let zig_src = "
 /// Pet struct in Zig.
 pub const Pet = struct {
     /// Pet ID.
@@ -592,7 +586,7 @@ pub const Pet = struct {
 /// Fetches a pet by ID.
 /// @param pet_id Target pet ID.
 pub fn getPet(pet_id: i64) Pet {}
-"#;
+";
         let zig_bundle = parse_source_str(zig_src, Path::new("pet.zig"), &zig_lang, None);
         assert_eq!(zig_bundle.structs.len(), 1);
         assert_eq!(zig_bundle.structs[0].fields.len(), 2);
@@ -600,7 +594,7 @@ pub fn getPet(pet_id: i64) Pet {}
         assert!(zig_bundle.verify_100_percent_docs(&zig_lang).is_ok());
 
         let cobol_lang: LanguageId = "cobol".parse().unwrap_or(LanguageId::Rust);
-        let cobol_src = r#"
+        let cobol_src = "
 *> Pet record in COBOL.
 01 PET.
    *> Pet ID.
@@ -611,7 +605,7 @@ pub fn getPet(pet_id: i64) Pet {}
 *> @param PET-ID Target pet ID.
 PROGRAM-ID. GET-PET.
 PROCEDURE DIVISION USING PET-ID.
-"#;
+";
         let cobol_bundle = parse_source_str(cobol_src, Path::new("pet.cob"), &cobol_lang, None);
         assert_eq!(cobol_bundle.structs.len(), 1);
         assert_eq!(cobol_bundle.structs[0].fields.len(), 2);
@@ -620,7 +614,7 @@ PROCEDURE DIVISION USING PET-ID.
         assert!(cobol_bundle.verify_100_percent_docs(&cobol_lang).is_ok());
 
         let fortran_lang: LanguageId = "fortran".parse().unwrap_or(LanguageId::Rust);
-        let fortran_src = r#"
+        let fortran_src = "
 !> Pet derived type in Fortran.
 type :: Pet
     !> Pet ID.
@@ -632,7 +626,7 @@ end type Pet
 !> Fetches a pet by ID.
 !> @param pet_id Target pet ID.
 subroutine get_pet(pet_id)
-"#;
+";
         let fortran_bundle =
             parse_source_str(fortran_src, Path::new("pet.f90"), &fortran_lang, None);
         assert_eq!(fortran_bundle.structs.len(), 1);
@@ -652,7 +646,7 @@ subroutine get_pet(pet_id)
             arg_pattern: None,
             param_doc_pattern: None,
         };
-        let ada_src = r#"
+        let ada_src = "
 -- Pet record in Ada.
 record Pet
     -- Pet ID.
@@ -663,7 +657,7 @@ end
 -- Get pet procedure.
 -- @param pet_id Target ID.
 procedure get_pet(pet_id: Integer)
-"#;
+";
         let ada_bundle =
             parse_source_str(ada_src, Path::new("pet.adb"), &ada_lang, Some(&custom_syn));
         assert_eq!(ada_bundle.structs.len(), 1);
@@ -699,7 +693,7 @@ procedure get_pet(pet_id: Integer)
             }
         });
 
-        let rs_src = r#"
+        let rs_src = "
 /// Pet struct.
 pub struct Pet {
     /// ID.
@@ -710,7 +704,7 @@ pub struct Pet {
 /// Fetches pet.
 /// * `pet_id` - ID.
 pub fn get_pet(pet_id: i64) -> Pet {}
-"#;
+";
         let bundle = parse_source_str(rs_src, Path::new("lib.rs"), &LanguageId::Rust, None);
         assert!(bundle
             .verify_against_openapi(&openapi, &LanguageId::Rust)
@@ -724,106 +718,27 @@ pub fn get_pet(pet_id: i64) -> Pet {}
             .is_err());
         assert_ne!(empty_bundle.reconstruct_openapi_doc(&openapi), openapi);
 
-        // Missing field
-        let missing_field_src = "/// Pet.
-pub struct Pet { /// ID.
-pub id: i64 }
-";
-        let mf_bundle = parse_source_str(
-            missing_field_src,
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(mf_bundle
-            .verify_against_openapi(&openapi, &LanguageId::Rust)
-            .is_err());
-        let _ = mf_bundle.reconstruct_openapi_doc(&openapi);
+        for bad_openapi_src in [
+            "/// Pet.\npub struct Pet { /// ID.\npub id: i64 }\n",
+            "/// Pet.\npub struct Pet {\n/// ID.\npub id: i64,\n/// Name.\npub name: String,\n}\n",
+            "/// Pet.\npub struct Pet {\n/// ID.\npub id: i64,\n/// Name.\npub name: String,\n}\n/// Get.\npub fn get_pet() {}\n",
+        ] {
+            let b = parse_source_str(bad_openapi_src, Path::new("lib.rs"), &LanguageId::Rust, None);
+            assert!(b
+                .verify_against_openapi(&openapi, &LanguageId::Rust)
+                .is_err());
+            let _ = b.reconstruct_openapi_doc(&openapi);
+        }
 
-        // Missing function
-        let missing_fn_src = "/// Pet.
-pub struct Pet {
-/// ID.
-pub id: i64,
-/// Name.
-pub name: String,
-}
-";
-        let mfn_bundle =
-            parse_source_str(missing_fn_src, Path::new("lib.rs"), &LanguageId::Rust, None);
-        assert!(mfn_bundle
-            .verify_against_openapi(&openapi, &LanguageId::Rust)
-            .is_err());
-        let _ = mfn_bundle.reconstruct_openapi_doc(&openapi);
-
-        // Missing arg
-        let missing_arg_src = "/// Pet.
-pub struct Pet {
-/// ID.
-pub id: i64,
-/// Name.
-pub name: String,
-}
-/// Get.
-pub fn get_pet() {}
-";
-        let ma_bundle = parse_source_str(
-            missing_arg_src,
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(ma_bundle
-            .verify_against_openapi(&openapi, &LanguageId::Rust)
-            .is_err());
-        assert_ne!(ma_bundle.reconstruct_openapi_doc(&openapi), openapi);
-
-        // Undocumented struct, field, function, arg
-        let undoc_struct = parse_source_str(
-            "pub struct Pet {}
-",
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(undoc_struct
-            .verify_100_percent_docs(&LanguageId::Rust)
-            .is_err());
-
-        let undoc_field = parse_source_str(
-            "/// Pet.
-pub struct Pet {
-pub id: i64,
-}
-",
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(undoc_field
-            .verify_100_percent_docs(&LanguageId::Rust)
-            .is_err());
-
-        let undoc_fn = parse_source_str(
-            "pub fn foo() {}
-",
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(undoc_fn.verify_100_percent_docs(&LanguageId::Rust).is_err());
-
-        let undoc_arg = parse_source_str(
-            "/// Foo.
-pub fn foo(bar: i32) {}
-",
-            Path::new("lib.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(undoc_arg
-            .verify_100_percent_docs(&LanguageId::Rust)
-            .is_err());
+        for undoc_src in [
+            "pub struct Pet {}\n",
+            "/// Pet.\npub struct Pet {\npub id: i64,\n}\n",
+            "pub fn foo() {}\n",
+            "/// Foo.\npub fn foo(bar: i32) {}\n",
+        ] {
+            let b = parse_source_str(undoc_src, Path::new("lib.rs"), &LanguageId::Rust, None);
+            assert!(b.verify_100_percent_docs(&LanguageId::Rust).is_err());
+        }
     }
 
     #[test]
@@ -859,6 +774,16 @@ pub fn ping() {}
         assert_eq!(single.structs.len(), 1);
 
         assert!(parse_source_path(&dir.join("missing.rs"), &LanguageId::Rust, None).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let unread_parent = dir.join("unread_parent");
+            let unread_sub = unread_parent.join("unreadable_sub");
+            let _ = std::fs::create_dir_all(&unread_sub);
+            let _ = std::fs::set_permissions(&unread_sub, std::fs::Permissions::from_mode(0o000));
+            assert!(parse_source_path(&unread_parent, &LanguageId::Rust, None).is_err());
+            let _ = std::fs::set_permissions(&unread_sub, std::fs::Permissions::from_mode(0o755));
+        }
 
         for (p, expected) in [
             ("a.c", Some(LanguageId::C)),
@@ -886,8 +811,7 @@ pub fn ping() {}
     }
 
     #[test]
-    fn test_all_remaining_shallow_parser_edge_cases() {
-        // Test verify_100_percent_docs when method is undocumented
+    fn test_shallow_parser_systems_and_jvm_edge_cases() {
         let undoc_method_src = "/// Pet.
 pub struct Pet {
 /// ID.
@@ -905,7 +829,6 @@ pub fn bad_method(&self) {}
         );
         assert!(b_um.verify_100_percent_docs(&LanguageId::Rust).is_err());
 
-        // Test verify_against_openapi with non-object path item and Swagger 2.0 definitions
         let swagger_doc = serde_json::json!({
             "swagger": "2.0",
             "definitions": {
@@ -936,8 +859,7 @@ pub fn get_pet() {}
             .is_ok());
         let _ = b_sw.reconstruct_openapi_doc(&swagger_doc);
 
-        // Multi-line C block comment, anonymous typedef struct, and free C function
-        let c_edge = r#"
+        let c_edge = "
 #include <stdio.h>
 /*
  * Multi-line comment
@@ -949,12 +871,11 @@ typedef struct {
 } AnonPet;
 int ping_void(void);
 int untyped_c(x);
-"#;
+";
         let b_c = parse_source_str(c_edge, Path::new("a.h"), &LanguageId::C, None);
         assert_eq!(b_c.structs[0].name, "AnonPet");
         assert_eq!(b_c.functions.len(), 2);
 
-        // C++ header with .h extension check
         assert!(matches_language_extension(
             Path::new("foo.h"),
             &LanguageId::Cpp,
@@ -966,8 +887,7 @@ int untyped_c(x);
             None
         ));
 
-        // Rust unit struct & impl for unknown struct & nested generic params & free fn & #[cfg(test)]
-        let rs_edge = r#"
+        let rs_edge = "
 #[derive(Debug)]
 /// Unit struct.
 pub struct Marker;
@@ -981,13 +901,15 @@ pub fn free_rust_fn() {}
 mod tests {
     pub fn ignored_in_test_cfg() {}
 }
-"#;
+";
         let b_rse = parse_source_str(rs_edge, Path::new("e.rs"), &LanguageId::Rust, None);
         assert_eq!(b_rse.structs.len(), 1);
         assert_eq!(b_rse.functions.len(), 2);
+    }
 
-        // C# / Java class with constructor (both typed and untyped), multiple classes, and field
-        let java_edge = r#"
+    #[test]
+    fn test_shallow_parser_jvm_and_go_edge_cases() {
+        let java_edge = "
 package com.example;
 import java.util.*;
 public final int topJava = 1;
@@ -1003,24 +925,23 @@ public class Second {
     /** Field b. */
     public String b;
 }
-"#;
-        let b_je = parse_source_str(java_edge, Path::new("First.java"), &LanguageId::Java, None);
-        assert_eq!(b_je.structs.len(), 2);
+";
+        let java_parsed =
+            parse_source_str(java_edge, Path::new("First.java"), &LanguageId::Java, None);
+        assert_eq!(java_parsed.structs.len(), 2);
 
-        // Go free function and method on unknown receiver
-        let go_edge = r#"
+        let go_edge = "
 // FreeFunc docs.
 func FreeFunc(a int) int {
 }
 // OrphanMethod docs.
 func (u *Unknown) OrphanMethod() {
 }
-"#;
-        let b_ge = parse_source_str(go_edge, Path::new("e.go"), &LanguageId::Go, None);
-        assert_eq!(b_ge.functions.len(), 2);
+";
+        let go_parsed = parse_source_str(go_edge, Path::new("e.go"), &LanguageId::Go, None);
+        assert_eq!(go_parsed.functions.len(), 2);
 
-        // Kotlin multiple classes (with and without ctor parens, val and var, non-field line) and top-level function
-        let kt_edge = r#"
+        let kt_edge = "
 package com.example
 import kotlin.io.*
 const val TOP_KT = 1
@@ -1033,13 +954,15 @@ class Second {
     var z: Int = 1
     init {}
 }
-"#;
-        let b_ke = parse_source_str(kt_edge, Path::new("e.kt"), &LanguageId::Kotlin, None);
-        assert_eq!(b_ke.structs.len(), 2);
-        assert_eq!(b_ke.functions.len(), 1);
+";
+        let kotlin_parsed = parse_source_str(kt_edge, Path::new("e.kt"), &LanguageId::Kotlin, None);
+        assert_eq!(kotlin_parsed.structs.len(), 2);
+        assert_eq!(kotlin_parsed.functions.len(), 1);
+    }
 
-        // PHP multiple classes and top-level function
-        let php_edge = r#"
+    #[test]
+    fn test_shallow_parser_dynamic_and_lexer_edge_cases() {
+        let php_edge = "
 <?php
 namespace App;
 use StdClass;
@@ -1052,13 +975,12 @@ class First {
 }
 /** Second class. */
 class Second {}
-"#;
-        let b_pe = parse_source_str(php_edge, Path::new("e.php"), &LanguageId::Php, None);
-        assert_eq!(b_pe.structs.len(), 2);
-        assert_eq!(b_pe.functions.len(), 1);
+";
+        let php_parsed = parse_source_str(php_edge, Path::new("e.php"), &LanguageId::Php, None);
+        assert_eq!(php_parsed.structs.len(), 2);
+        assert_eq!(php_parsed.functions.len(), 1);
 
-        // Ruby multiple classes, initialize, parameterless def, top-level def
-        let rb_edge = r#"
+        let rb_edge = "
 def top_rb(x)
 end
 class First
@@ -1069,13 +991,12 @@ class Second
   def no_parens
   end
 end
-"#;
-        let b_rbe = parse_source_str(rb_edge, Path::new("e.rb"), &LanguageId::Ruby, None);
-        assert_eq!(b_rbe.structs.len(), 2);
-        assert_eq!(b_rbe.functions.len(), 1);
+";
+        let ruby_parsed = parse_source_str(rb_edge, Path::new("e.rb"), &LanguageId::Ruby, None);
+        assert_eq!(ruby_parsed.structs.len(), 2);
+        assert_eq!(ruby_parsed.functions.len(), 1);
 
-        // Swift multiple structs and top-level func
-        let sw_edge = r#"
+        let swift_edge = "
 import Foundation
 let topSwiftConst = 1
 func topSwift(x: Int) -> Int {}
@@ -1083,10 +1004,11 @@ struct First {
     let x: Int
 }
 struct Second {}
-"#;
-        let b_swe = parse_source_str(sw_edge, Path::new("e.swift"), &LanguageId::Swift, None);
-        assert_eq!(b_swe.structs.len(), 2);
-        assert_eq!(b_swe.functions.len(), 1);
+";
+        let swift_parsed =
+            parse_source_str(swift_edge, Path::new("e.swift"), &LanguageId::Swift, None);
+        assert_eq!(swift_parsed.structs.len(), 2);
+        assert_eq!(swift_parsed.functions.len(), 1);
 
         let py_edge = r#"class First:
     """Single line."""
@@ -1101,11 +1023,11 @@ class Unclosed:
     """Unclosed
     still
 "#;
-        let b_pye = parse_source_str(py_edge, Path::new("e.py"), &LanguageId::Python, None);
-        assert_eq!(b_pye.structs.len(), 3);
-        assert_eq!(b_pye.functions.len(), 1);
+        let python_parsed = parse_source_str(py_edge, Path::new("e.py"), &LanguageId::Python, None);
+        assert_eq!(python_parsed.structs.len(), 3);
+        assert_eq!(python_parsed.functions.len(), 1);
 
-        let sh_edge = r#"set -e
+        let shell_edge = "set -e
 # @struct S1 First
 # @struct S2 Second
 function f1 {
@@ -1113,13 +1035,15 @@ function f1 {
     echo ok
 function f2 {
     b=$1
-"#;
-        let b_she = parse_source_str(sh_edge, Path::new("e.sh"), &LanguageId::Sh, None);
-        assert_eq!(b_she.structs.len(), 2);
-        assert_eq!(b_she.functions.len(), 2);
+";
+        let shell_parsed = parse_source_str(shell_edge, Path::new("e.sh"), &LanguageId::Sh, None);
+        assert_eq!(shell_parsed.structs.len(), 2);
+        assert_eq!(shell_parsed.functions.len(), 2);
+    }
 
-        // TypeScript type alias without brace, multiple interfaces, constructor, top-level function, unclosed class
-        let ts_edge = r#"
+    #[test]
+    fn test_shallow_parser_ts_and_lexer_helpers() {
+        let ts_edge = "
 import { Foo } from './foo';
 export type Alias = string;
 export function topTs(x: number): number {}
@@ -1132,7 +1056,7 @@ export class First {
     m(a: string): void {}
 export class Second {
     x: number;
-"#;
+";
         let b_tse = parse_source_str(ts_edge, Path::new("e.ts"), &LanguageId::TypeScript, None);
         assert_eq!(b_tse.structs.len(), 2);
         assert_eq!(b_tse.functions.len(), 1);
@@ -1151,7 +1075,6 @@ export class Second {
         assert!(parse_c_like_function_header("no_parens").is_none());
         assert!(parse_c_like_function_header("int foo(unclosed").is_none());
 
-        // Test @param {Type} without description, @param Type $var without description, and multi-line @param continuation
         let tags = extract_doc_tags(
             "@param {string} foo
 @param int $bar
@@ -1166,14 +1089,13 @@ export class Second {
             Some("First line continuation line")
         );
 
-        // Test split_code_and_inline_comment ignoring comment markers inside string literals
         let (code_url, cmt_url) = split_code_and_inline_comment(
             r#"let url = "https://example.com#frag"; // real inline doc"#,
         );
         assert!(code_url.contains("https://example.com#frag"));
         assert_eq!(cmt_url.as_deref(), Some("real inline doc"));
         let (code_sq, cmt_sq) =
-            split_code_and_inline_comment(r#"char c = '#'; char esc = 'x'; // sq doc"#);
+            split_code_and_inline_comment("char c = '#'; char esc = 'x'; // sq doc");
         assert!(code_sq.contains("'#'"));
         assert_eq!(cmt_sq.as_deref(), Some("sq doc"));
         let esc_sq = format!("char esc = '{}'; // esc doc", r"\'");
@@ -1181,8 +1103,10 @@ export class Second {
             split_code_and_inline_comment(&esc_sq).1.as_deref(),
             Some("esc doc")
         );
+    }
 
-        // Python docstring with text on opening line, EOF after class, and inline field doc
+    #[test]
+    fn test_shallow_parser_custom_and_directory_edge_cases() {
         let py_more = r#"class InlineDoc:
     """Opening line text
     closing line"""
@@ -1192,7 +1116,6 @@ class EmptyAtEof:
         let b_pym = parse_source_str(py_more, Path::new("m.py"), &LanguageId::Python, None);
         assert_eq!(b_pym.structs.len(), 2);
 
-        // Ruby inline comment on attr_accessor
         let rb_more = "class InlineRb
   attr_accessor :foo # inline attr doc
 end
@@ -1203,7 +1126,6 @@ end
             Some("inline attr doc")
         );
 
-        // Shell @struct without inline description and trailing struct at EOF
         let sh_more = "# Leading struct doc
 # @struct OnlyName
 ";
@@ -1243,8 +1165,8 @@ function compute_val(x)
     pub fn inner(x: i32) i32 {}
 };
 ";
-        let b_ze = parse_source_str(zig_edge, Path::new("e.zig"), &zig_lang, None);
-        assert_eq!(b_ze.structs[0].methods.len(), 1);
+        let zig_parsed = parse_source_str(zig_edge, Path::new("e.zig"), &zig_lang, None);
+        assert_eq!(zig_parsed.structs[0].methods.len(), 1);
 
         // COBOL multiple 01 records and trailing active record
         let cobol_lang: LanguageId = "cobol".parse().unwrap_or(LanguageId::Rust);
@@ -1253,8 +1175,8 @@ function compute_val(x)
 01 REC-B.
    05 F2 PIC 9.
 ";
-        let b_ce = parse_source_str(cob_edge, Path::new("e.cob"), &cobol_lang, None);
-        assert_eq!(b_ce.structs.len(), 2);
+        let cobol_parsed = parse_source_str(cob_edge, Path::new("e.cob"), &cobol_lang, None);
+        assert_eq!(cobol_parsed.structs.len(), 2);
 
         // Custom syntax profile with file_extensions matching in directory scan
         let dir = std::env::temp_dir().join(format!("cdd_src_t2_{}", std::process::id()));
@@ -1281,116 +1203,87 @@ end
         let b_ada_dir = parse_source_path(&dir, &ada_lang, Some(&syn)).unwrap_or_default();
         assert_eq!(b_ada_dir.structs.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+        let ada_extra = "record A\n  plain_line\nend\ntop_stmt\n";
+        let _ = parse_source_str(ada_extra, Path::new("a.adb"), &ada_lang, Some(&syn));
+    }
 
-        // Test trailing comma in split_top_level_params and non-field lines inside structs
+    #[test]
+    fn test_shallow_parser_non_field_and_orphan_lines() {
+        let zig_lang: LanguageId = "zig".parse().unwrap_or(LanguageId::Rust);
+        let cobol_lang: LanguageId = "cobol".parse().unwrap_or(LanguageId::Rust);
+        let fortran_lang: LanguageId = "fortran".parse().unwrap_or(LanguageId::Rust);
         let _ = split_top_level_params("a,,b,");
         let _ = extract_doc_tags(r#"<param name="unclosed"#);
 
-        let c_extra = "struct S {
-    unrelated
-};
-int x = 1;
-MACRO_CALL();
-";
-        let _ = parse_source_str(c_extra, Path::new("x.c"), &LanguageId::C, None);
+        for (src, file, lang) in [
+            (
+                "struct S {\n    unrelated\n};\nint x = 1;\nMACRO_CALL();\n",
+                "x.c",
+                LanguageId::C,
+            ),
+            (
+                "pub struct Tup {\n    pub i32,\n}\n",
+                "tup.rs",
+                LanguageId::Rust,
+            ),
+            ("class K {\n    val x = 1\n}\n", "k.kt", LanguageId::Kotlin),
+            (
+                "class R\n  attr_accessor :a,\nend\n",
+                "r.rb",
+                LanguageId::Ruby,
+            ),
+            (
+                "struct Sw {\n    let x = 1\n}\n",
+                "s.swift",
+                LanguageId::Swift,
+            ),
+            (
+                "class J {\n    return;\n    int;\n}\n",
+                "J.java",
+                LanguageId::Java,
+            ),
+            (
+                "type G struct {\n    onlyone\n}\nfunc (r Recv) NoBody\n",
+                "g.go",
+                LanguageId::Go,
+            ),
+            (
+                "<?php\nclass P {\n    $not_vis = 1;\n}\n",
+                "p.php",
+                LanguageId::Php,
+            ),
+            (
+                "# @field orphan\nf() {\n    echo hi\n}\n",
+                "s.sh",
+                LanguageId::Sh,
+            ),
+            (
+                "export class T {\n    plain_line\n}\n",
+                "t.ts",
+                LanguageId::TypeScript,
+            ),
+            (
+                "const x = 1;\npub const Z = struct {\n    plain_line\n};\n",
+                "z.zig",
+                zig_lang,
+            ),
+            (
+                "05 ORPHAN PIC X.\nPROCEDURE DIVISION USING ARG1.\nMOVE 1 TO X.\n",
+                "c.cob",
+                cobol_lang,
+            ),
+            (
+                "type :: F\n    plain_line\nend type F\ninteger :: top_var\nsubroutine bad_sub\n",
+                "f.f90",
+                fortran_lang,
+            ),
+        ] {
+            let _ = parse_source_str(src, Path::new(file), &lang, None);
+        }
+    }
 
-        let rs_untyped_field = "pub struct Tup {
-    pub i32,
-}
-";
-        let _ = parse_source_str(
-            rs_untyped_field,
-            Path::new("tup.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-
-        let kt_inferred = "class K {
-    val x = 1
-}
-";
-        let _ = parse_source_str(kt_inferred, Path::new("k.kt"), &LanguageId::Kotlin, None);
-
-        let rb_trailing_comma = "class R
-  attr_accessor :a,
-end
-";
-        let _ = parse_source_str(
-            rb_trailing_comma,
-            Path::new("r.rb"),
-            &LanguageId::Ruby,
-            None,
-        );
-
-        let sw_inferred = "struct Sw {
-    let x = 1
-}
-";
-        let _ = parse_source_str(sw_inferred, Path::new("s.swift"), &LanguageId::Swift, None);
-
-        let java_extra = "class J {
-    return;
-    int;
-}
-";
-        let _ = parse_source_str(java_extra, Path::new("J.java"), &LanguageId::Java, None);
-
-        let go_extra = "type G struct {
-    onlyone
-}
-func (r Recv) NoBody
-";
-        let _ = parse_source_str(go_extra, Path::new("g.go"), &LanguageId::Go, None);
-
-        let php_extra = "<?php
-class P {
-    $not_vis = 1;
-}
-";
-        let _ = parse_source_str(php_extra, Path::new("p.php"), &LanguageId::Php, None);
-
-        let sh_extra = "# @field orphan
-f() {
-    echo hi
-}
-";
-        let _ = parse_source_str(sh_extra, Path::new("s.sh"), &LanguageId::Sh, None);
-
-        let ts_extra = "export class T {
-    plain_line
-}
-";
-        let _ = parse_source_str(ts_extra, Path::new("t.ts"), &LanguageId::TypeScript, None);
-
-        let zig_extra = "const x = 1;
-pub const Z = struct {
-    plain_line
-};
-";
-        let _ = parse_source_str(zig_extra, Path::new("z.zig"), &zig_lang, None);
-
-        let cob_extra = "05 ORPHAN PIC X.
-PROCEDURE DIVISION USING ARG1.
-MOVE 1 TO X.
-";
-        let _ = parse_source_str(cob_extra, Path::new("c.cob"), &cobol_lang, None);
-
-        let f_extra = "type :: F
-    plain_line
-end type F
-integer :: top_var
-subroutine bad_sub
-";
-        let _ = parse_source_str(f_extra, Path::new("f.f90"), &fortran_lang, None);
-
-        let ada_extra = "record A
-  plain_line
-end
-top_stmt
-";
-        let _ = parse_source_str(ada_extra, Path::new("a.adb"), &ada_lang, Some(&syn));
-
-        // Go interface method, Rust impl<T>, Python multi-line async def, and include_tests directory filtering
+    #[test]
+    fn test_shallow_parser_go_iface_generic_impl_and_dir_filters() {
         let go_iface = "// Client interface.
 type Client interface {
     // Fetch item.
@@ -1443,21 +1336,15 @@ def broken_def(
         let _ = std::fs::create_dir_all(test_filter_dir.join("CMakeFiles"));
         let _ = std::fs::write(
             test_filter_dir.join("src").join("lib.rs"),
-            b"/// Lib.
-pub fn lib_fn() {}
-",
+            b"/// Lib.\npub fn lib_fn() {}\n",
         );
         let _ = std::fs::write(
             test_filter_dir.join("tests").join("test.rs"),
-            b"/// Test.
-pub fn test_fn() {}
-",
+            b"/// Test.\npub fn test_fn() {}\n",
         );
         let _ = std::fs::write(
             test_filter_dir.join("CMakeFiles").join("cmake.rs"),
-            b"/// Cmake.
-pub fn cmake_fn() {}
-",
+            b"/// Cmake.\npub fn cmake_fn() {}\n",
         );
         let without_tests =
             parse_source_path_with_options(&test_filter_dir, &LanguageId::Rust, None, false)
@@ -1468,44 +1355,30 @@ pub fn cmake_fn() {}
                 .unwrap_or_default();
         assert_eq!(with_tests.functions.len(), 2);
         let _ = std::fs::remove_dir_all(&test_filter_dir);
+    }
 
-        // Test verify_against_arazzo and verify_against_spec_doc
+    #[test]
+    fn test_arazzo_source_verification() {
+        let swagger_doc = serde_json::json!({
+            "swagger": "2.0",
+            "definitions": { "Pet": { "type": "object", "properties": { "id": { "type": "integer" } } } }
+        });
         let arazzo_doc = serde_json::json!({
             "arazzo": "1.1.0",
             "components": {
-                "inputs": {
-                    "PurchaseInput": {
-                        "type": "object",
-                        "properties": {
-                            "petId": { "type": "integer" }
-                        }
-                    }
-                }
+                "inputs": { "PurchaseInput": { "type": "object", "properties": { "petId": { "type": "integer" } } } }
             },
             "workflows": [
                 { "summary": "missing workflowId skipped" },
                 {
                     "workflowId": "purchasePetWorkflow",
-                    "inputs": {
-                        "type": "object",
-                        "properties": {
-                            "couponCode": { "type": "string" }
-                        }
-                    },
+                    "inputs": { "type": "object", "properties": { "couponCode": { "type": "string" } } },
                     "steps": []
                 }
             ]
         });
 
-        let arazzo_rs_fn = "/// Input.
-pub struct PurchaseInput {
-    /// Pet ID.
-    pub pet_id: i64,
-}
-/// Run workflow.
-/// * `coupon_code` - Coupon.
-pub fn purchase_pet_workflow(coupon_code: String) {}
-";
+        let arazzo_rs_fn = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Run workflow.\n/// * `coupon_code` - Coupon.\npub fn purchase_pet_workflow(coupon_code: String) {}\n";
         let bundle_arazzo_fn =
             parse_source_str(arazzo_rs_fn, Path::new("wf.rs"), &LanguageId::Rust, None);
         assert!(bundle_arazzo_fn
@@ -1519,18 +1392,7 @@ pub fn purchase_pet_workflow(coupon_code: String) {}
             .is_err());
         let _ = bundle_arazzo_fn.reconstruct_arazzo_doc(&arazzo_doc);
 
-        // Workflow represented as a struct instead of a function
-        let arazzo_rs_struct = "/// Input.
-pub struct PurchaseInput {
-    /// Pet ID.
-    pub pet_id: i64,
-}
-/// Workflow struct.
-pub struct PurchasePetWorkflow {
-    /// Coupon.
-    pub coupon_code: String,
-}
-";
+        let arazzo_rs_struct = "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Workflow struct.\npub struct PurchasePetWorkflow {\n    /// Coupon.\n    pub coupon_code: String,\n}\n";
         let bundle_arazzo_st = parse_source_str(
             arazzo_rs_struct,
             Path::new("wf_st.rs"),
@@ -1542,107 +1404,38 @@ pub struct PurchasePetWorkflow {
             .is_ok());
         let _ = bundle_arazzo_st.reconstruct_arazzo_doc(&arazzo_doc);
 
-        // Missing components.inputs struct
         let empty_bundle = ParsedSourceBundle::default();
         assert!(empty_bundle
             .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
             .is_err());
         let _ = empty_bundle.reconstruct_arazzo_doc(&arazzo_doc);
 
-        // Missing components.inputs property field
-        let missing_input_field = "/// Input.
-pub struct PurchaseInput {
-    /// Wrong.
-    pub other: i64,
-}
-";
-        let b_mif = parse_source_str(
-            missing_input_field,
-            Path::new("wf.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(b_mif
-            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
-            .is_err());
-        let _ = b_mif.reconstruct_arazzo_doc(&arazzo_doc);
+        for bad_arazzo_rs in [
+            "/// Input.\npub struct PurchaseInput {\n    /// Wrong.\n    pub other: i64,\n}\n",
+            "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n",
+            "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Wf.\npub fn purchase_pet_workflow() {}\n",
+            "/// Input.\npub struct PurchaseInput {\n    /// Pet ID.\n    pub pet_id: i64,\n}\n/// Wf.\npub struct PurchasePetWorkflow {\n    /// Wrong.\n    pub other: String,\n}\n",
+        ] {
+            let b = parse_source_str(bad_arazzo_rs, Path::new("wf.rs"), &LanguageId::Rust, None);
+            assert!(b
+                .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
+                .is_err());
+            let _ = b.reconstruct_arazzo_doc(&arazzo_doc);
+        }
 
-        // Missing workflow function/struct
-        let missing_wf = "/// Input.
-pub struct PurchaseInput {
-    /// Pet ID.
-    pub pet_id: i64,
-}
-";
-        let b_mwf = parse_source_str(missing_wf, Path::new("wf.rs"), &LanguageId::Rust, None);
-        assert!(b_mwf
-            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
-            .is_err());
-        let _ = b_mwf.reconstruct_arazzo_doc(&arazzo_doc);
-
-        // Missing workflow function arg
-        let missing_wf_arg = "/// Input.
-pub struct PurchaseInput {
-    /// Pet ID.
-    pub pet_id: i64,
-}
-/// Wf.
-pub fn purchase_pet_workflow() {}
-";
-        let b_mwa = parse_source_str(missing_wf_arg, Path::new("wf.rs"), &LanguageId::Rust, None);
-        assert!(b_mwa
-            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
-            .is_err());
-        let _ = b_mwa.reconstruct_arazzo_doc(&arazzo_doc);
-
-        // Missing workflow struct field
-        let missing_wf_st_field = "/// Input.
-pub struct PurchaseInput {
-    /// Pet ID.
-    pub pet_id: i64,
-}
-/// Wf.
-pub struct PurchasePetWorkflow {
-    /// Wrong.
-    pub other: String,
-}
-";
-        let b_mwsf = parse_source_str(
-            missing_wf_st_field,
-            Path::new("wf.rs"),
-            &LanguageId::Rust,
-            None,
-        );
-        assert!(b_mwsf
-            .verify_against_arazzo(&arazzo_doc, &LanguageId::Rust)
-            .is_err());
-        let _ = b_mwsf.reconstruct_arazzo_doc(&arazzo_doc);
-
-        // Profile-aware Arazzo source verification
-        assert!(bundle_arazzo_st
-            .verify_against_arazzo_profile(
-                &arazzo_doc,
-                ProfileKind::ClientSdk,
-                None,
-                &LanguageId::Rust
-            )
-            .is_ok());
-        assert!(bundle_arazzo_st
-            .verify_against_arazzo_profile(
-                &arazzo_doc,
-                ProfileKind::ClientCli,
-                None,
-                &LanguageId::Rust
-            )
-            .is_ok());
-        assert!(bundle_arazzo_fn
-            .verify_against_arazzo_profile(
-                &arazzo_doc,
-                ProfileKind::ClientCli,
-                Some(&bundle_arazzo_fn),
-                &LanguageId::Rust
-            )
-            .is_ok());
+        for (prof, sdk_opt, expect_ok) in [
+            (ProfileKind::ClientSdk, None, true),
+            (ProfileKind::ClientCli, None, true),
+            (ProfileKind::ClientCli, Some(&bundle_arazzo_fn), true),
+            (ProfileKind::ClientCli, Some(&empty_bundle), false),
+        ] {
+            assert_eq!(
+                bundle_arazzo_fn
+                    .verify_against_arazzo_profile(&arazzo_doc, prof, sdk_opt, &LanguageId::Rust)
+                    .is_ok(),
+                expect_ok
+            );
+        }
         let mut sdk_with_extra = bundle_arazzo_fn.clone();
         sdk_with_extra.functions.push(ParsedFunction {
             name: "unmirrored_sdk_helper".to_string(),
@@ -1659,14 +1452,6 @@ pub struct PurchasePetWorkflow {
                 &LanguageId::Rust
             )
             .is_err());
-        assert!(bundle_arazzo_st
-            .verify_against_arazzo_profile(
-                &arazzo_doc,
-                ProfileKind::ClientCli,
-                Some(&empty_bundle),
-                &LanguageId::Rust
-            )
-            .is_err());
         assert!(empty_bundle
             .verify_against_arazzo_profile(
                 &arazzo_doc,
@@ -1675,8 +1460,10 @@ pub struct PurchasePetWorkflow {
                 &LanguageId::Rust
             )
             .is_err());
+    }
 
-        // Multi-line function header with nested `fn(i32) -> bool` parameter and inline comment inside header
+    #[test]
+    fn test_multiline_headers_and_cfg_test_skipping() {
         let multiline_rust = format!(
             "/// Multi-line fn.\n/// * `cb` - Callback.\n/// * `limit` - Max items.\n/// * `offset` - Offset.\npub fn list_pets(\n    cb: fn({}) -> bool,\n    // comment inside header\n    limit: i32,\n    offset: i32,\n) -> String {{\n    if (limit > 0) {{\n    }}\n    let ch = '{}';\n    let s = \"{}\";\n    format!(\"{{ch}}{{s}}\")\n}}\n",
             "i32",
@@ -1689,7 +1476,6 @@ pub struct PurchasePetWorkflow {
         assert_eq!(ml_bundle.functions[0].args.len(), 3);
         assert!(ml_bundle.verify_100_percent_docs(&LanguageId::Rust).is_ok());
 
-        // Multi-line C header and lowercase struct server_state
         let multiline_c = "/**
  * Server state.
  */
@@ -1714,7 +1500,6 @@ int add_numbers(
         assert_eq!(ml_c_bundle.functions[0].args.len(), 2);
         assert!(ml_c_bundle.verify_100_percent_docs(&LanguageId::C).is_ok());
 
-        // Rust #[cfg(test)] single-line and multi-line fn skipping followed by production function
         let cfg_test_rs = "
 #[cfg(test)]
 use std::collections::HashMap;
@@ -1727,8 +1512,8 @@ fn test_helper() {
 #[cfg(test)]
 const TEST_ONLY: usize = 1;
 /// Production function after cfg(test).
-#[allow(
-    dead_code
+#[derive(
+    Debug
 )]
 pub unsafe fn after_cfg_test() {}
 #[cfg(test)]

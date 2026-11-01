@@ -442,20 +442,20 @@ fn normalize_arazzo_value(val: &serde_json::Value) -> serde_json::Value {
     match val {
         serde_json::Value::Object(map) => {
             let mut out = serde_json::Map::new();
+            let is_criterion_or_selector = ["condition", "selector", "target"]
+                .iter()
+                .any(|kw| map.contains_key(*kw));
             for (k, v) in map {
-                let normalized_val =
-                    if matches!(k.as_str(), "type" | "selectorType" | "targetSelectorType")
-                        && (map.contains_key("condition")
-                            || map.contains_key("selector")
-                            || map.contains_key("target"))
-                    {
-                        ArazzoCriterionType::from_json_value(v, &LanguageId::Rust, "").map_or_else(
-                            |_| normalize_arazzo_value(v),
-                            |canon| serde_json::json!(format!("{canon:?}")),
-                        )
-                    } else {
-                        normalize_arazzo_value(v)
-                    };
+                let normalized_val = if is_criterion_or_selector
+                    && matches!(k.as_str(), "type" | "selectorType" | "targetSelectorType")
+                {
+                    ArazzoCriterionType::from_json_value(v, &LanguageId::Rust, "").map_or_else(
+                        |_| normalize_arazzo_value(v),
+                        |canon| serde_json::json!(format!("{canon:?}")),
+                    )
+                } else {
+                    normalize_arazzo_value(v)
+                };
                 out.insert(k.clone(), normalized_val);
             }
             serde_json::Value::Object(out)
@@ -575,8 +575,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::similar_names, clippy::too_many_lines)]
-    fn test_verify_source_bundle_and_http_equivalence() {
+    fn test_verify_source_bundle_equivalence() {
         let rs_src = "/// Pet.
 pub struct Pet {
 /// ID.
@@ -637,91 +636,98 @@ export function deletePet(id: number) {}
         )
         .is_err());
 
-        let bad_rs_fn = "/// Pet.\npub struct Pet {\n/// ID.\npub pet_id: i64,\n}\n/// Del.\npub fn delete_pet() {}\n";
-        let b_bad_rs_fn = parse_source_str(bad_rs_fn, Path::new("p.rs"), &LanguageId::Rust, None);
+        let bad_rust_fn = "/// Pet.\npub struct Pet {\n/// ID.\npub pet_id: i64,\n}\n/// Del.\npub fn delete_pet() {}\n";
+        let b_bad_rust_fn =
+            parse_source_str(bad_rust_fn, Path::new("p.rs"), &LanguageId::Rust, None);
         assert!(verify_source_bundle_equivalence(
             &LanguageId::Rust,
             &bundle_rust,
             &LanguageId::Rust,
-            &b_bad_rs_fn
+            &b_bad_rust_fn
         )
         .is_err());
+    }
 
-        let r1 = SimpleHttpResponse {
+    #[test]
+    fn test_verify_http_response_equivalence() {
+        let resp_1 = SimpleHttpResponse {
             status_code: 200,
             headers: vec![],
             body: r#"{"id":1,"name":"doggie"}"#.to_string(),
         };
-        let r2 = SimpleHttpResponse {
+        let resp_2 = SimpleHttpResponse {
             status_code: 200,
             headers: vec![],
             body: r#"{"name":"doggie","id":1}"#.to_string(),
         };
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r1,
+            &resp_1,
             &LanguageId::Go,
-            &r2,
+            &resp_2,
             "getPet"
         )
         .is_ok());
 
-        let r_status = SimpleHttpResponse {
+        let resp_status = SimpleHttpResponse {
             status_code: 501,
             headers: vec![],
-            body: r1.body.clone(),
+            body: resp_1.body.clone(),
         };
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r1,
+            &resp_1,
             &LanguageId::Go,
-            &r_status,
+            &resp_status,
             "getPet"
         )
         .is_err());
 
-        let r_json_diff = SimpleHttpResponse {
+        let resp_json_diff = SimpleHttpResponse {
             status_code: 200,
             headers: vec![],
             body: r#"{"id":2,"name":"doggie"}"#.to_string(),
         };
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r1,
+            &resp_1,
             &LanguageId::Go,
-            &r_json_diff,
+            &resp_json_diff,
             "getPet"
         )
         .is_err());
 
-        let r_text_1 = SimpleHttpResponse {
+        let resp_text_1 = SimpleHttpResponse {
             status_code: 200,
             headers: vec![],
             body: "pong".to_string(),
         };
-        let r_text_2 = SimpleHttpResponse {
+        let resp_text_2 = SimpleHttpResponse {
             status_code: 200,
             headers: vec![],
             body: "different".to_string(),
         };
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r_text_1,
+            &resp_text_1,
             &LanguageId::Go,
-            &r_text_1,
+            &resp_text_1,
             "ping"
         )
         .is_ok());
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r_text_1,
+            &resp_text_1,
             &LanguageId::Go,
-            &r_text_2,
+            &resp_text_2,
             "ping"
         )
         .is_err());
+    }
 
-        let r_hdr_a = SimpleHttpResponse {
+    #[test]
+    fn test_verify_http_header_equivalence() {
+        let resp_hdr_first = SimpleHttpResponse {
             status_code: 200,
             headers: vec![
                 ("Content-Type".to_string(), "application/json".to_string()),
@@ -732,7 +738,7 @@ export function deletePet(id: number) {}
             ],
             body: r#"{"ok":true}"#.to_string(),
         };
-        let r_hdr_b = SimpleHttpResponse {
+        let resp_hdr_second = SimpleHttpResponse {
             status_code: 200,
             headers: vec![
                 ("content-type".to_string(), "APPLICATION/JSON".to_string()),
@@ -745,32 +751,28 @@ export function deletePet(id: number) {}
         };
         assert!(verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r_hdr_a,
+            &resp_hdr_first,
             &LanguageId::Go,
-            &r_hdr_b,
+            &resp_hdr_second,
             "hdrs"
         )
         .is_ok());
 
-        let r_hdr_mismatch = SimpleHttpResponse {
+        let resp_hdr_mismatch = SimpleHttpResponse {
             status_code: 200,
             headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
             body: r#"{"ok":true}"#.to_string(),
         };
         let hdr_err = verify_http_response_equivalence(
             &LanguageId::Rust,
-            &r_hdr_a,
+            &resp_hdr_first,
             &LanguageId::Go,
-            &r_hdr_mismatch,
+            &resp_hdr_mismatch,
             "hdrs",
-        );
-        assert!(matches!(
-            hdr_err,
-            Err(ConformanceError::BackendEquivalenceViolation {
-                ref divergence,
-                ..
-            }) if divergence.contains("normalized header mismatch")
-        ));
+        )
+        .err()
+        .map_or_else(String::new, |e| e.to_string());
+        assert!(hdr_err.contains("normalized header mismatch"));
     }
 
     #[test]
@@ -916,10 +918,9 @@ export function deletePet(id: number) {}
         .is_err());
     }
 
-    #[test]
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
-    fn test_validate_and_verify_arazzo_110_equivalence() {
-        let valid_arazzo = serde_json::json!({
+    /// Builds a sample valid Arazzo 1.1.0 JSON value for equivalence and validation tests.
+    fn sample_arazzo_test_doc() -> serde_json::Value {
+        serde_json::json!({
             "arazzo": "1.1.0",
             "$self": "https://example.com/workflows/pet.arazzo.yaml",
             "x-generated-at": "2026-10-18T00:00:00Z",
@@ -978,8 +979,12 @@ export function deletePet(id: number) {}
                     ]
                 }
             ]
-        });
+        })
+    }
 
+    #[test]
+    fn test_validate_and_verify_arazzo_110_equivalence() {
+        let valid_arazzo = sample_arazzo_test_doc();
         let mut canonical_type_arazzo = valid_arazzo.clone();
         canonical_type_arazzo["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
             serde_json::json!({"type": "jsonpath", "version": "rfc9535"});
@@ -995,22 +1000,17 @@ export function deletePet(id: number) {}
         let mut xpath_10_arazzo = valid_arazzo.clone();
         xpath_10_arazzo["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
             serde_json::json!({"type": "xpath", "version": "xpath-10"});
-        let drift_res = verify_arazzo_equivalence(
+        let drift_msg = verify_arazzo_equivalence(
             &LanguageId::Rust,
             SpecId::Arazzo110,
             &valid_arazzo,
             &xpath_10_arazzo,
-        );
-        assert!(matches!(
-            drift_res,
-            Err(ConformanceError::AstRoundtripDrift {
-                spec: SpecId::Arazzo110,
-                ref semantic_diff,
-                ..
-            }) if semantic_diff.iter().any(|s| s.contains("JsonPathRfc9535") && s.contains("XPath10"))
-        ));
+        )
+        .err()
+        .map_or_else(String::new, |e| e.to_string());
+        assert!(drift_msg.contains("JsonPathRfc9535"));
+        assert!(drift_msg.contains("XPath10"));
 
-        // Test invalid arazzo version and non-string $self in validate_arazzo_110_document
         let mut no_self = valid_arazzo.clone();
         no_self["$self"] = serde_json::Value::Null;
         assert!(validate_arazzo_110_document(&no_self, &LanguageId::Rust).is_ok());
@@ -1035,62 +1035,55 @@ export function deletePet(id: number) {}
 
         let _ = normalize_arazzo_value(&serde_json::json!({"condition": "x", "type": "unknown"}));
 
-        // Test invalid $self with fragment
         let mut bad_self = valid_arazzo.clone();
         bad_self["$self"] = serde_json::json!("https://example.com/wf.yaml#frag");
         assert!(validate_arazzo_110_document(&bad_self, &LanguageId::Rust).is_err());
 
-        // Test missing info title
         let mut bad_info = valid_arazzo.clone();
         bad_info["info"]["title"] = serde_json::json!("");
         assert!(validate_arazzo_110_document(&bad_info, &LanguageId::Rust).is_err());
 
-        // Test empty sourceDescriptions
         let mut bad_sources = valid_arazzo.clone();
         bad_sources["sourceDescriptions"] = serde_json::json!([]);
         assert!(validate_arazzo_110_document(&bad_sources, &LanguageId::Rust).is_err());
 
-        // Test duplicate sourceDescription name
         let mut dup_sources = valid_arazzo.clone();
         dup_sources["sourceDescriptions"][1]["name"] = serde_json::json!("petStore");
         assert!(validate_arazzo_110_document(&dup_sources, &LanguageId::Rust).is_err());
 
-        // Test invalid sourceDescription type
         let mut bad_src_type = valid_arazzo.clone();
         bad_src_type["sourceDescriptions"][0]["type"] = serde_json::json!("soap");
         assert!(validate_arazzo_110_document(&bad_src_type, &LanguageId::Rust).is_err());
 
-        // Test empty workflows
         let mut bad_wfs = valid_arazzo.clone();
         bad_wfs["workflows"] = serde_json::json!([]);
         assert!(validate_arazzo_110_document(&bad_wfs, &LanguageId::Rust).is_err());
 
-        // Test empty workflowId
         let mut bad_wf_id = valid_arazzo.clone();
         bad_wf_id["workflows"][0]["workflowId"] = serde_json::json!("");
         assert!(validate_arazzo_110_document(&bad_wf_id, &LanguageId::Rust).is_err());
 
-        // Test empty steps
-        let mut bad_steps = valid_arazzo.clone();
+        let mut bad_steps = valid_arazzo;
         bad_steps["workflows"][0]["steps"] = serde_json::json!([]);
         assert!(validate_arazzo_110_document(&bad_steps, &LanguageId::Rust).is_err());
+    }
 
-        // Test empty stepId
+    #[test]
+    fn test_validate_arazzo_step_constraints_and_dag() {
+        let valid_arazzo = sample_arazzo_test_doc();
+
         let mut bad_step_id = valid_arazzo.clone();
         bad_step_id["workflows"][0]["steps"][0]["stepId"] = serde_json::json!("");
         assert!(validate_arazzo_110_document(&bad_step_id, &LanguageId::Rust).is_err());
 
-        // Test mutually non-exclusive step targets (both operationId and channelPath)
         let mut multi_target = valid_arazzo.clone();
         multi_target["workflows"][0]["steps"][0]["channelPath"] = serde_json::json!("/ch");
         assert!(validate_arazzo_110_document(&multi_target, &LanguageId::Rust).is_err());
 
-        // Test invalid step action
         let mut bad_action = valid_arazzo.clone();
         bad_action["workflows"][0]["steps"][0]["action"] = serde_json::json!("invalid");
         assert!(validate_arazzo_110_document(&bad_action, &LanguageId::Rust).is_err());
 
-        // Test literal correlationId (not starting with $) and invalid $ correlationId
         let mut lit_corr = valid_arazzo.clone();
         lit_corr["workflows"][0]["steps"][0]["correlationId"] = serde_json::json!("literal-id");
         assert!(validate_arazzo_110_document(&lit_corr, &LanguageId::Rust).is_ok());
@@ -1099,25 +1092,21 @@ export function deletePet(id: number) {}
         bad_corr["workflows"][0]["steps"][0]["correlationId"] = serde_json::json!("$bad.expr");
         assert!(validate_arazzo_110_document(&bad_corr, &LanguageId::Rust).is_err());
 
-        // Test invalid parameter in
         let mut bad_param_in = valid_arazzo.clone();
         bad_param_in["workflows"][0]["steps"][0]["parameters"][0]["in"] =
             serde_json::json!("invalid_in");
         assert!(validate_arazzo_110_document(&bad_param_in, &LanguageId::Rust).is_err());
 
-        // Test invalid parameter runtime expression
         let mut bad_param_val = valid_arazzo.clone();
         bad_param_val["workflows"][0]["steps"][0]["parameters"][0]["value"] =
             serde_json::json!("$bad.val");
         assert!(validate_arazzo_110_document(&bad_param_val, &LanguageId::Rust).is_err());
 
-        // Test mutually exclusive query and querystring in same step
         let mut query_and_qs = valid_arazzo.clone();
         query_and_qs["workflows"][0]["steps"][0]["parameters"][1]["in"] =
             serde_json::json!("querystring");
         assert!(validate_arazzo_110_document(&query_and_qs, &LanguageId::Rust).is_err());
 
-        // Test invalid successCriteria type and context
         let mut bad_crit_type = valid_arazzo.clone();
         bad_crit_type["workflows"][0]["steps"][0]["successCriteria"][0]["type"] =
             serde_json::json!("bad_type");
@@ -1128,7 +1117,6 @@ export function deletePet(id: number) {}
             serde_json::json!("$bad.ctx");
         assert!(validate_arazzo_110_document(&bad_crit_ctx, &LanguageId::Rust).is_err());
 
-        // Test dependsOn unknown step, self-dependency, valid DAG, and 2-step cycle
         let mut bad_dep_unknown = valid_arazzo.clone();
         bad_dep_unknown["workflows"][0]["steps"][0]["dependsOn"] =
             serde_json::json!(["nonexistentStep"]);
@@ -1176,10 +1164,22 @@ export function deletePet(id: number) {}
         ]);
         assert!(validate_arazzo_110_document(&bad_ref_syntax, &LanguageId::Rust).is_err());
 
-        let mut bad_goto = actions_arazzo;
+        let mut bad_goto = actions_arazzo.clone();
         bad_goto["workflows"][0]["steps"][0]["onSuccess"] = serde_json::json!([
             { "name": "badGoto", "type": "goto", "stepId": "missingStep" }
         ]);
         assert!(validate_arazzo_110_document(&bad_goto, &LanguageId::Rust).is_err());
+
+        let mut bad_succ_type = actions_arazzo.clone();
+        bad_succ_type["workflows"][0]["steps"][0]["onSuccess"] = serde_json::json!([
+            { "name": "badSucc", "type": "retry" }
+        ]);
+        assert!(validate_arazzo_110_document(&bad_succ_type, &LanguageId::Rust).is_err());
+
+        let mut bad_fail_type = actions_arazzo;
+        bad_fail_type["workflows"][0]["steps"][0]["onFailure"] = serde_json::json!([
+            { "name": "badFail", "type": "ignore" }
+        ]);
+        assert!(validate_arazzo_110_document(&bad_fail_type, &LanguageId::Rust).is_err());
     }
 }

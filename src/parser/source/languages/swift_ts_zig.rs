@@ -1,8 +1,7 @@
 //! Shallow Swift, TypeScript, and Zig source-code and doc-comment extractors.
 
 use crate::parser::source::comments::{
-    attach_arg_docs, clean_comment_line, extract_comment_line, join_doc_lines,
-    split_code_and_inline_comment,
+    attach_arg_docs, join_doc_lines, split_code_and_inline_comment, SourceLineScanner,
 };
 use crate::parser::source::lexer_helpers::{
     find_type_keyword, finish_struct, match_fn_decl, parse_colon_style_args, split_first_paren,
@@ -19,8 +18,7 @@ use crate::parser::source::model::{
 /// * `source` - Raw Swift source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
     let mut brace_depth: i32 = 0;
     let mut struct_brace_depth: i32 = 0;
@@ -31,8 +29,7 @@ pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) 
         if trimmed.is_empty() || trimmed.starts_with("import ") {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -40,8 +37,7 @@ pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) 
         let code = code_part.trim();
 
         if let Some((_, type_name)) = find_type_keyword(code, &["struct", "class", "protocol"]) {
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             finish_struct(&mut current_struct, bundle);
             struct_brace_depth = brace_depth;
             current_struct = Some(ParsedStructOrClass {
@@ -56,8 +52,7 @@ pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) 
         }
 
         if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "func") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut args = parse_colon_style_args(&params_str, line_num);
             attach_arg_docs(&mut args, doc.as_deref());
             let func = ParsedFunction {
@@ -88,8 +83,7 @@ pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) 
                     .or_else(|| code.split("var ").nth(1))
                     .unwrap_or("");
                 if let Some((f_name, f_type)) = after_v.split_once(':') {
-                    let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                    doc_buf.clear();
+                    let doc = scanner.take_doc(inline_doc);
                     st.fields.push(ParsedField {
                         name: f_name.trim().to_string(),
                         type_annotation: Some(
@@ -111,7 +105,7 @@ pub(crate) fn parse_swift_source(source: &str, bundle: &mut ParsedSourceBundle) 
         update_brace_depth_ignoring_strings(code, &mut brace_depth);
         if current_struct.is_some() && had_close && brace_depth <= struct_brace_depth {
             finish_struct(&mut current_struct, bundle);
-            doc_buf.clear();
+            scanner.clear_doc();
         }
     }
 
@@ -192,8 +186,7 @@ fn parse_ts_struct_member(
 /// * `source` - Raw TypeScript source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
@@ -202,8 +195,7 @@ pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if trimmed.is_empty() || trimmed.starts_with("import ") {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -212,8 +204,7 @@ pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
 
         if let Some((_, type_name)) = find_type_keyword(code, &["interface", "class", "type"]) {
             if code.contains('{') {
-                let doc = join_doc_lines(&doc_buf);
-                doc_buf.clear();
+                let doc = scanner.take_doc(None);
                 finish_struct(&mut current_struct, bundle);
                 current_struct = Some(ParsedStructOrClass {
                     name: type_name,
@@ -227,8 +218,7 @@ pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
         }
 
         if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "function") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut args = parse_colon_style_args(&params_str, line_num);
             attach_arg_docs(&mut args, doc.as_deref());
             bundle.functions.push(ParsedFunction {
@@ -244,9 +234,9 @@ pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if let Some(ref mut st) = current_struct {
             if code.starts_with('}') {
                 finish_struct(&mut current_struct, bundle);
-                doc_buf.clear();
+                scanner.clear_doc();
             } else {
-                parse_ts_struct_member(code, line_num, &mut doc_buf, inline_doc, st);
+                parse_ts_struct_member(code, line_num, &mut scanner.doc_buf, inline_doc, st);
             }
         }
     }
@@ -261,7 +251,7 @@ pub(crate) fn parse_ts_source(source: &str, bundle: &mut ParsedSourceBundle) {
 /// * `source` - Raw Zig source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
@@ -270,8 +260,7 @@ pub(crate) fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.starts_with("//") {
-            doc_buf.push(clean_comment_line(trimmed));
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -287,8 +276,7 @@ pub(crate) fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             current_struct = Some(ParsedStructOrClass {
                 name,
                 doc_comment: doc,
@@ -300,8 +288,7 @@ pub(crate) fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
         }
 
         if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "fn") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut args = parse_colon_style_args(&params_str, line_num);
             attach_arg_docs(&mut args, doc.as_deref());
             let func = ParsedFunction {
@@ -322,14 +309,13 @@ pub(crate) fn parse_zig_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if let Some(ref mut st) = current_struct {
             if code.starts_with('}') {
                 finish_struct(&mut current_struct, bundle);
-                doc_buf.clear();
+                scanner.clear_doc();
             } else if let Some((left, right)) = code
                 .trim_end_matches(',')
                 .trim_end_matches(';')
                 .split_once(':')
             {
-                let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                doc_buf.clear();
+                let doc = scanner.take_doc(inline_doc);
                 st.fields.push(ParsedField {
                     name: left.trim().to_string(),
                     type_annotation: Some(

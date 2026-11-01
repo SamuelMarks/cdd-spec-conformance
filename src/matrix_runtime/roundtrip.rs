@@ -189,26 +189,31 @@ pub fn verify_cross_language_roundtrip_chain(
             canonical_generated_snippet(&tc.language_id, false)
         };
         let bundle = parse_source_str(&snippet, Path::new(vname), &tc.language_id, None);
-        let docs_ok = bundle.verify_100_percent_docs(&tc.language_id).is_ok();
-        let code_ok = bundle
-            .verify_against_spec_doc(&curr_doc, &tc.language_id)
-            .is_ok();
-
         let next_doc = if is_arazzo {
             bundle.reconstruct_arazzo_doc(&curr_doc)
         } else {
             bundle.reconstruct_openapi_doc(&curr_doc)
         };
 
-        let eq_ok = if is_arazzo {
-            verify_arazzo_equivalence(&tc.language_id, target_spec, &initial_doc, &next_doc).is_ok()
-        } else {
-            verify_openapi_equivalence(&tc.language_id, target_spec, &initial_doc, &next_doc)
-                .is_ok()
-        };
+        let hop_ok = bundle
+            .verify_100_percent_docs(&tc.language_id)
+            .and_then(|()| bundle.verify_against_spec_doc(&curr_doc, &tc.language_id))
+            .and_then(|()| {
+                if is_arazzo {
+                    verify_arazzo_equivalence(&tc.language_id, target_spec, &initial_doc, &next_doc)
+                } else {
+                    verify_openapi_equivalence(
+                        &tc.language_id,
+                        target_spec,
+                        &initial_doc,
+                        &next_doc,
+                    )
+                }
+            })
+            .is_ok();
         curr_doc = next_doc;
 
-        let equivalent = semantic_diffs.is_empty() && docs_ok && code_ok && eq_ok;
+        let equivalent = semantic_diffs.is_empty() && hop_ok;
         hops.push(RoundtripHop {
             hop_index: idx + 1,
             language: tc.language_id.clone(),

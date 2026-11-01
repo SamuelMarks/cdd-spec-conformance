@@ -183,30 +183,28 @@ pub(crate) fn parse_fortran_source(source: &str, bundle: &mut ParsedSourceBundle
                 .skip(1)
                 .collect::<Vec<_>>()
                 .join(" ");
-            let (fn_name, params_inside) = after_kw
-                .find('(')
-                .and_then(|idx| {
-                    split_first_paren(&after_kw[idx..])
-                        .map(|(p, _)| (after_kw[..idx].trim().to_string(), p))
-                })
-                .unwrap_or_default();
-            let mut args = Vec::new();
-            for raw_arg in split_top_level_params(&params_inside) {
-                args.push(ParsedArg {
-                    name: raw_arg.trim().to_string(),
-                    type_annotation: None,
-                    doc_comment: None,
+            if let Some((fn_name, params_inside)) = after_kw.find('(').and_then(|idx| {
+                split_first_paren(&after_kw[idx..])
+                    .map(|(p, _)| (after_kw[..idx].trim().to_string(), p))
+            }) {
+                let mut args = Vec::new();
+                for raw_arg in split_top_level_params(&params_inside) {
+                    args.push(ParsedArg {
+                        name: raw_arg.trim().to_string(),
+                        type_annotation: None,
+                        doc_comment: None,
+                        line: line_num,
+                    });
+                }
+                attach_arg_docs(&mut args, doc.as_deref());
+                bundle.functions.push(ParsedFunction {
+                    name: fn_name,
+                    doc_comment: doc,
+                    args,
+                    return_type: None,
                     line: line_num,
                 });
             }
-            attach_arg_docs(&mut args, doc.as_deref());
-            bundle.functions.push(ParsedFunction {
-                name: fn_name,
-                doc_comment: doc,
-                args,
-                return_type: None,
-                line: line_num,
-            });
         }
     }
 }

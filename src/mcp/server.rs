@@ -183,6 +183,81 @@ impl McpServer {
         }
     }
 
+    /// Validates JSON-RPC version `"2.0"` and strict MCP lifecycle ordering preconditions.
+    ///
+    /// # Arguments
+    ///
+    /// * `req` - Incoming `JsonRpcRequest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError` if `jsonrpc` is not `"2.0"` or lifecycle preconditions are violated.
+    fn check_request_preconditions(&self, req: &JsonRpcRequest) -> Result<(), ConformanceError> {
+        let method = req.method.as_str();
+        if req.jsonrpc != "2.0" {
+            return Err(ConformanceError::JsonRpcInvalidRequest {
+                message: format!("Invalid jsonrpc version '{}', expected '2.0'", req.jsonrpc),
+            });
+        }
+        if self.strict_lifecycle {
+            if !self.initialized && !matches!(method, "initialize" | "ping") {
+                return Err(ConformanceError::McpProtocolViolation {
+                    expected: "initialize".to_string(),
+                    received: method.to_string(),
+                });
+            }
+            if self.initialized && method == "initialize" {
+                return Err(ConformanceError::McpProtocolViolation {
+                    expected: "post-initialize request".to_string(),
+                    received: "initialize".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates a `completion/complete` request and returns matching specification or profile completions.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - JSON-RPC method name for error diagnostics.
+    /// * `params` - Optional JSON parameter payload.
+    ///
+    /// # Returns
+    ///
+    /// Populated `CompleteResult`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::JsonRpcInvalidParams` if `params` cannot be parsed.
+    fn handle_completion(
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<CompleteResult, ConformanceError> {
+        let comp = Self::parse_params::<CompleteRequestParams>(method, params)?;
+        let prefix = comp.argument.value.to_lowercase();
+        let candidates: Vec<String> = match comp.argument.name.as_str() {
+            "profile" => ProfileKind::standard_profiles()
+                .iter()
+                .map(|p| p.as_str().to_string())
+                .filter(|s| s.starts_with(&prefix))
+                .collect(),
+            _ => SpecId::all()
+                .iter()
+                .map(|s| s.as_str().to_string())
+                .filter(|s| s.starts_with(&prefix))
+                .collect(),
+        };
+        let total = candidates.len();
+        Ok(CompleteResult {
+            completion: CompletionValues {
+                values: candidates,
+                total: Some(total),
+                has_more: Some(false),
+            },
+        })
+    }
+
     /// Dispatches an actionable request to the appropriate handler.
     ///
     /// # Arguments
@@ -192,34 +267,12 @@ impl McpServer {
     /// # Returns
     ///
     /// Outbound `JsonRpcResponse`.
-    #[allow(clippy::too_many_lines)]
     fn dispatch_request(&mut self, req: JsonRpcRequest) -> JsonRpcResponse {
+        if let Err(err) = self.check_request_preconditions(&req) {
+            return JsonRpcResponse::from_conformance_error(req.id, &err);
+        }
         let id = req.id;
         let method = req.method.as_str();
-
-        if req.jsonrpc != "2.0" {
-            let err = ConformanceError::JsonRpcInvalidRequest {
-                message: format!("Invalid jsonrpc version '{}', expected '2.0'", req.jsonrpc),
-            };
-            return JsonRpcResponse::from_conformance_error(id, &err);
-        }
-
-        if self.strict_lifecycle {
-            if !self.initialized && !matches!(method, "initialize" | "ping") {
-                let err = ConformanceError::McpProtocolViolation {
-                    expected: "initialize".to_string(),
-                    received: method.to_string(),
-                };
-                return JsonRpcResponse::from_conformance_error(id, &err);
-            }
-            if self.initialized && method == "initialize" {
-                let err = ConformanceError::McpProtocolViolation {
-                    expected: "post-initialize request".to_string(),
-                    received: "initialize".to_string(),
-                };
-                return JsonRpcResponse::from_conformance_error(id, &err);
-            }
-        }
 
         let Ok(parsed_method) = McpMethodName::from_str(method) else {
             let err = ConformanceError::JsonRpcMethodNotFound {
@@ -306,31 +359,8 @@ impl McpServer {
             }
 
             McpMethodName::CompletionComplete => {
-                match Self::parse_params::<CompleteRequestParams>(method, req.params) {
-                    Ok(comp) => {
-                        let prefix = comp.argument.value.to_lowercase();
-                        let candidates: Vec<String> = match comp.argument.name.as_str() {
-                            "profile" => ProfileKind::standard_profiles()
-                                .iter()
-                                .map(|p| p.as_str().to_string())
-                                .filter(|s| s.starts_with(&prefix))
-                                .collect(),
-                            _ => SpecId::all()
-                                .iter()
-                                .map(|s| s.as_str().to_string())
-                                .filter(|s| s.starts_with(&prefix))
-                                .collect(),
-                        };
-                        let total = candidates.len();
-                        let res = CompleteResult {
-                            completion: CompletionValues {
-                                values: candidates,
-                                total: Some(total),
-                                has_more: Some(false),
-                            },
-                        };
-                        JsonRpcResponse::from_serializable(id, &res)
-                    }
+                match Self::handle_completion(method, req.params) {
+                    Ok(res) => JsonRpcResponse::from_serializable(id, &res),
                     Err(err) => JsonRpcResponse::from_conformance_error(id, &err),
                 }
             }
@@ -434,7 +464,7 @@ impl McpServer {
             path: PathBuf::from("stream_reader"),
         })? {
             if let Some(response) = self.handle_message(&line) {
-                let mut serialized = serde_json::to_string(&response).unwrap_or_default();
+                let mut serialized = response.to_json_value().to_string();
                 serialized.push(char::from(10));
 
                 writer.write_all(serialized.as_bytes()).await.map_err(|e| {
@@ -472,7 +502,6 @@ impl Default for McpServer {
 }
 
 #[cfg(test)]
-#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use crate::mcp::protocol::error_codes;
@@ -695,12 +724,12 @@ mod tests {
             .is_none());
 
         let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
-        let init_res = server.handle_message(init_req);
+        let init_response = server.handle_message(init_req);
         assert_eq!(
-            init_res.as_ref().map(|r| &r.id),
+            init_response.as_ref().map(|r| &r.id),
             Some(&RequestId::Number(1))
         );
-        let init_payload: Option<InitializeResult> = init_res
+        let init_payload: Option<InitializeResult> = init_response
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
         assert_eq!(
@@ -956,18 +985,18 @@ mod tests {
         assert_eq!(server.log_level, LoggingLevel::Debug);
 
         let comp_spec_req = r#"{"jsonrpc":"2.0","id":80,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"explain_checklist_row"},"argument":{"name":"spec","value":"openapi"}}}"#;
-        let comp_spec_res: Option<CompleteResult> = server
+        let comp_spec_out: Option<CompleteResult> = server
             .handle_message(comp_spec_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
-        assert!(comp_spec_res.is_some_and(|c| !c.completion.values.is_empty()));
+        assert!(comp_spec_out.is_some_and(|c| !c.completion.values.is_empty()));
 
         let comp_prof_req = r#"{"jsonrpc":"2.0","id":81,"method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"conformance://specs/{spec_id}/{profile}"},"argument":{"name":"profile","value":"client"}}}"#;
-        let comp_prof_res: Option<CompleteResult> = server
+        let comp_prof_out: Option<CompleteResult> = server
             .handle_message(comp_prof_req)
             .and_then(|r| r.result)
             .and_then(|v| serde_json::from_value(v).ok());
-        assert_eq!(comp_prof_res.map(|c| c.completion.values.len()), Some(2));
+        assert_eq!(comp_prof_out.map(|c| c.completion.values.len()), Some(2));
 
         let comp_bad_req = r#"{"jsonrpc":"2.0","id":82,"method":"completion/complete"}"#;
         assert_eq!(

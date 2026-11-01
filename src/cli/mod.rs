@@ -370,8 +370,7 @@ fn parse_runtime_subcommand(name: &str, sub: &ArgMatches) -> Commands {
             lang: sub.get_one::<String>("lang").cloned(),
             extra_langs: sub
                 .get_many::<String>("extra_langs")
-                .map(|v| v.cloned().collect())
-                .unwrap_or_default(),
+                .map_or_else(Vec::new, |v| v.cloned().collect()),
             spec: sub.get_one::<SpecId>("spec").copied(),
             mode: sub.get_one::<ServerOperatingMode>("mode").copied(),
         },
@@ -379,16 +378,14 @@ fn parse_runtime_subcommand(name: &str, sub: &ArgMatches) -> Commands {
             repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
             extra_langs: sub
                 .get_many::<String>("extra_langs")
-                .map(|v| v.cloned().collect())
-                .unwrap_or_default(),
+                .map_or_else(Vec::new, |v| v.cloned().collect()),
             roundtrip: sub.get_flag("roundtrip"),
         },
         "verify-roundtrip" => Commands::VerifyRoundtrip {
             repos_dir: sub.get_one::<PathBuf>("repos_dir").cloned(),
             extra_langs: sub
                 .get_many::<String>("extra_langs")
-                .map(|v| v.cloned().collect())
-                .unwrap_or_default(),
+                .map_or_else(Vec::new, |v| v.cloned().collect()),
             spec: sub.get_one::<SpecId>("spec").copied(),
         },
         _ => Commands::Mcp,
@@ -515,7 +512,7 @@ fn render_runtime_command(command: Commands) -> Result<String, ConformanceError>
                 spec_path,
                 include_tests,
             )?;
-            let mut s = crate::error::to_pretty_json(&bundle, "inspect-source").unwrap_or_default();
+            let mut s = crate::error::to_pretty_json(&bundle, "inspect-source");
             let _ = writeln!(s);
             Ok(s)
         }
@@ -538,7 +535,7 @@ fn render_runtime_command(command: Commands) -> Result<String, ConformanceError>
                 spec,
                 mode,
             )?;
-            let mut s = crate::error::to_pretty_json(&report, "verify-clients").unwrap_or_default();
+            let mut s = crate::error::to_pretty_json(&report, "verify-clients");
             let _ = writeln!(s);
             Ok(s)
         }
@@ -553,8 +550,7 @@ fn render_runtime_command(command: Commands) -> Result<String, ConformanceError>
                 report.roundtrip_report =
                     verify_cross_language_roundtrip_chain(&resolved_repos, &extra_langs, None).ok();
             }
-            let mut s =
-                crate::error::to_pretty_json(&report, "verify-backends").unwrap_or_default();
+            let mut s = crate::error::to_pretty_json(&report, "verify-backends");
             let _ = writeln!(s);
             Ok(s)
         }
@@ -566,8 +562,7 @@ fn render_runtime_command(command: Commands) -> Result<String, ConformanceError>
             let resolved_repos = default_repos_dir(repos_dir);
             let report =
                 verify_cross_language_roundtrip_chain(&resolved_repos, &extra_langs, spec)?;
-            let mut s =
-                crate::error::to_pretty_json(&report, "verify-roundtrip").unwrap_or_default();
+            let mut s = crate::error::to_pretty_json(&report, "verify-roundtrip");
             let _ = writeln!(s);
             Ok(s)
         }
@@ -1675,11 +1670,9 @@ mod tests {
         assert!(std::fs::metadata(&ro_readme).is_ok_and(|meta| {
             let mut perms = meta.permissions();
             perms.set_readonly(true);
-            let _ = std::fs::set_permissions(&ro_readme, perms.clone());
-            let is_err = update_readme_with_table(&ro_readme, "test").is_err();
-            #[allow(clippy::permissions_set_readonly_false)]
-            perms.set_readonly(false);
             let _ = std::fs::set_permissions(&ro_readme, perms);
+            let is_err = update_readme_with_table(&ro_readme, "test").is_err();
+            let _ = std::fs::remove_file(&ro_readme);
             is_err
         }));
         let _ = std::fs::remove_dir_all(&base_dir);

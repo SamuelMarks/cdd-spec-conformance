@@ -155,12 +155,12 @@ pub fn read_resource(
     registry: &CanonicalRegistry,
 ) -> Result<ReadResourceResult, ConformanceError> {
     if uri == "conformance://specs" {
-        let items: Vec<serde_json::Value> = registry
+        let items: Vec<String> = registry
             .list_specs()
             .iter()
-            .map(|s| serde_json::Value::String(s.as_str().to_string()))
+            .map(|s| format!("  \"{}\"", s.as_str()))
             .collect();
-        let json = crate::error::to_pretty_json(&items, "conformance://specs").unwrap_or_default();
+        let json = format!("[\n{}\n]", items.join(",\n"));
         return Ok(ReadResourceResult {
             contents: vec![ResourceContents {
                 uri: uri.to_string(),

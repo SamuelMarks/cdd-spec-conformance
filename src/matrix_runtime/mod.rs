@@ -585,12 +585,14 @@ name = "r"
         )
         .ok();
         assert_eq!(client_rep.as_ref().map(|r| r.results.len()), Some(14));
+        assert!(client_rep
+            .as_ref()
+            .is_some_and(|r| r.reference_backend_summary.wasm_target_supported));
         assert!(client_rep.as_ref().is_some_and(|r| {
-            r.reference_backend_summary.wasm_target_supported
-                && r.results.iter().any(|row| {
-                    row.client_language == LanguageId::Rust
-                        && row.verification_source == VerificationSource::Repository
-                })
+            r.results.iter().any(|row| {
+                row.client_language == LanguageId::Rust
+                    && row.verification_source == VerificationSource::Repository
+            })
         }));
         assert!(verify_clients_against_rust_backend(
             &base,

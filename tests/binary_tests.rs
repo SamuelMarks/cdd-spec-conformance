@@ -2,12 +2,18 @@
 
 #![deny(
     missing_docs,
+    clippy::missing_docs_in_private_items,
     rustdoc::broken_intra_doc_links,
     clippy::all,
     clippy::pedantic,
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic
+    clippy::panic,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unreachable,
+    clippy::dbg_macro,
+    unsafe_code
 )]
 
 use cdd_conformance::error::ConformanceError;

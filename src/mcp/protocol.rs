@@ -99,17 +99,30 @@ impl JsonRpcResponse {
     ///
     /// A `JsonRpcResponse` containing either the serialized `result` or an `-32603` error.
     #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
     pub fn from_serializable<T: Serialize>(id: RequestId, result: &T) -> Self {
-        serde_json::to_value(result).map_or_else(
-            |e| {
+        Self::from_value_result(id, serde_json::to_value(result))
+    }
+
+    /// Creates a response from a `serde_json::to_value` result.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Request identifier matching the incoming request.
+    /// * `res` - Result of `serde_json::to_value`.
+    ///
+    /// # Returns
+    ///
+    /// A `JsonRpcResponse` containing either the serialized value or an `-32603` error.
+    fn from_value_result(id: RequestId, res: Result<serde_json::Value, serde_json::Error>) -> Self {
+        match res {
+            Ok(val) => Self::success(id, val),
+            Err(e) => {
                 let err = crate::error::ConformanceError::JsonRpcInternal {
                     message: e.to_string(),
                 };
-                Self::from_conformance_error(id.clone(), &err)
-            },
-            |val| Self::success(id.clone(), val),
-        )
+                Self::from_conformance_error(id, &err)
+            }
+        }
     }
 
     /// Creates an error response from a `ConformanceError`.
@@ -151,6 +164,46 @@ impl JsonRpcResponse {
                 data: None,
             }),
         }
+    }
+
+    /// Converts this `JsonRpcResponse` directly into a `serde_json::Value` object.
+    ///
+    /// # Returns
+    ///
+    /// `serde_json::Value` representation of the JSON-RPC 2.0 response.
+    #[must_use]
+    pub fn to_json_value(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "jsonrpc".to_string(),
+            serde_json::Value::String(self.jsonrpc.clone()),
+        );
+        let id_val = match &self.id {
+            RequestId::Number(n) => serde_json::Value::Number((*n).into()),
+            RequestId::String(s) => serde_json::Value::String(s.clone()),
+        };
+        map.insert("id".to_string(), id_val);
+        let _ = self
+            .result
+            .as_ref()
+            .map(|res| map.insert("result".to_string(), res.clone()));
+        let _ = self.error.as_ref().map(|err| {
+            let mut err_map = serde_json::Map::new();
+            err_map.insert(
+                "code".to_string(),
+                serde_json::Value::Number(err.code.into()),
+            );
+            err_map.insert(
+                "message".to_string(),
+                serde_json::Value::String(err.message.clone()),
+            );
+            let _ = err
+                .data
+                .as_ref()
+                .map(|data| err_map.insert("data".to_string(), data.clone()));
+            map.insert("error".to_string(), serde_json::Value::Object(err_map))
+        });
+        serde_json::Value::Object(map)
     }
 }
 
@@ -274,13 +327,27 @@ mod tests {
             Some(error_codes::INTERNAL_ERROR)
         );
 
-        let error = JsonRpcResponse::error(
+        let mut error = JsonRpcResponse::error(
             RequestId::Number(42),
             error_codes::METHOD_NOT_FOUND,
             "Not found",
         );
         assert_eq!(error.id, RequestId::Number(42));
         assert!(error.result.is_none());
-        assert_eq!(error.error.map(|e| e.code), Some(-32601));
+        assert_eq!(error.error.as_ref().map(|e| e.code), Some(-32601));
+        assert_eq!(success.to_json_value()["id"], serde_json::json!("req-1"));
+        assert_eq!(
+            error.to_json_value()["error"]["code"],
+            serde_json::json!(-32601)
+        );
+        error.error = Some(JsonRpcError {
+            code: error_codes::METHOD_NOT_FOUND,
+            message: "Not found".to_string(),
+            data: Some(serde_json::json!({"detail": "extra"})),
+        });
+        assert_eq!(
+            error.to_json_value()["error"]["data"]["detail"],
+            serde_json::json!("extra")
+        );
     }
 }

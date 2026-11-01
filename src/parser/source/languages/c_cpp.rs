@@ -1,7 +1,7 @@
 //! Shallow C and C++ source-code and doc-comment extractor.
 
 use crate::parser::source::comments::{
-    attach_arg_docs, extract_comment_line, join_doc_lines, split_code_and_inline_comment,
+    attach_arg_docs, join_doc_lines, split_code_and_inline_comment, SourceLineScanner,
 };
 use crate::parser::source::lexer_helpers::{
     find_type_keyword, finish_struct, parse_c_like_function_header, parse_type_first_args,
@@ -70,8 +70,7 @@ fn parse_c_cpp_struct_member(
 /// * `source` - Raw C/C++ source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
     let mut brace_depth: i32 = 0;
 
@@ -81,8 +80,7 @@ pub(crate) fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) 
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
         if trimmed.starts_with('#') {
@@ -100,8 +98,7 @@ pub(crate) fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) 
         {
             let name = find_type_keyword(code, &["struct", "class"])
                 .map_or_else(|| "Anonymous".to_string(), |(_, n)| n);
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             current_struct = Some(ParsedStructOrClass {
                 name,
                 doc_comment: doc,
@@ -116,9 +113,9 @@ pub(crate) fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) 
                     st.name = after_brace.to_string();
                 }
                 finish_struct(&mut current_struct, bundle);
-                doc_buf.clear();
+                scanner.clear_doc();
             } else {
-                parse_c_cpp_struct_member(code, line_num, &mut doc_buf, inline_doc, st);
+                parse_c_cpp_struct_member(code, line_num, &mut scanner.doc_buf, inline_doc, st);
             }
         } else if brace_depth == 0
             && ![
@@ -129,8 +126,7 @@ pub(crate) fn parse_c_cpp_source(source: &str, bundle: &mut ParsedSourceBundle) 
             && !code.contains('=')
         {
             if let Some((fn_name, params, ret)) = parse_c_like_function_header(code) {
-                let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                doc_buf.clear();
+                let doc = scanner.take_doc(inline_doc);
                 let mut args = parse_type_first_args(&params, line_num);
                 attach_arg_docs(&mut args, doc.as_deref());
                 bundle.functions.push(ParsedFunction {

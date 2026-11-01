@@ -88,15 +88,12 @@ fn is_multiline_header_candidate(code: &str) -> bool {
     {
         return false;
     }
-    if lower.contains("fn ")
-        || lower.contains("func ")
-        || lower.contains("fun ")
-        || lower.contains("function ")
-        || lower.starts_with("def ")
-        || lower.starts_with("async def ")
-        || lower.starts_with("subroutine ")
-        || lower.contains("record ")
-        || lower.contains("class ")
+    if ["fn ", "func ", "fun ", "function ", "record ", "class "]
+        .iter()
+        .any(|kw| lower.contains(kw))
+        || ["def ", "async def ", "subroutine "]
+            .iter()
+            .any(|p| lower.starts_with(p))
     {
         return true;
     }

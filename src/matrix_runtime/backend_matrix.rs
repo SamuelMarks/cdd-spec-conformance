@@ -5,7 +5,7 @@ use crate::equivalence::{
     verify_database_table_count, verify_http_response_equivalence, verify_mcp_json_rpc_exchange,
     verify_source_bundle_equivalence, verify_strict_validation_pointer_equivalence,
 };
-use crate::error::{to_json_value, ConformanceError};
+use crate::error::ConformanceError;
 use crate::matrix_runtime::client_verifier::count_repo_signatures;
 use crate::matrix_runtime::fixtures::{
     canonical_arazzo_generated_snippet, canonical_generated_snippet, canonical_http_corpus,
@@ -15,7 +15,9 @@ use crate::matrix_runtime::{
     FixtureBackendHarness,
 };
 use crate::mcp::server::McpServer;
-use crate::model::{CompatibilityStatus, EquivalenceDimension, LanguageId, SignatureCount};
+use crate::model::{
+    CompatibilityStatus, CompilerCapability, EquivalenceDimension, LanguageId, SignatureCount,
+};
 use crate::parser::source::parse_source_str;
 use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
@@ -150,10 +152,7 @@ pub fn evaluate_backend_equivalence_with_harness(
     let init_resp = mcp_server.handle_message(
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"cdd-matrix","version":"0.1.0"}}}"#,
     );
-    let init_val = init_resp
-        .as_ref()
-        .and_then(|r| to_json_value(r, "initialize").ok())
-        .unwrap_or_default();
+    let init_val = init_resp.map_or(serde_json::Value::Null, |r| r.to_json_value());
 
     let mut mcp_pairs = 0usize;
     for client_tc in toolchains {
@@ -265,11 +264,21 @@ pub fn verify_backends_matrix(
             let server_present = repos_dir.join(&server_tc.repo_name).is_dir();
             let status = if client_present
                 && server_present
-                && client_tc.supported_targets.sdk
-                && server_tc.supported_targets.server
+                && client_tc
+                    .supported_targets
+                    .supports(CompilerCapability::Sdk)
+                && server_tc
+                    .supported_targets
+                    .supports(CompilerCapability::Server)
             {
                 CompatibilityStatus::Compatible
-            } else if client_tc.supported_targets.sdk && server_tc.supported_targets.server {
+            } else if client_tc
+                .supported_targets
+                .supports(CompilerCapability::Sdk)
+                && server_tc
+                    .supported_targets
+                    .supports(CompilerCapability::Server)
+            {
                 CompatibilityStatus::Configured
             } else {
                 CompatibilityStatus::Unsupported

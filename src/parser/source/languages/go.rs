@@ -1,7 +1,7 @@
 //! Shallow Go (`.go`) source-code signature and `GoDoc` extractor.
 
 use crate::parser::source::comments::{
-    attach_arg_docs, extract_comment_line, join_doc_lines, split_code_and_inline_comment,
+    attach_arg_docs, join_doc_lines, split_code_and_inline_comment, SourceLineScanner,
 };
 use crate::parser::source::lexer_helpers::{
     finish_struct, split_first_paren, split_top_level_params,
@@ -65,8 +65,7 @@ fn parse_go_struct_member(
 /// * `source` - Raw Go source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
@@ -75,8 +74,7 @@ pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -90,8 +88,7 @@ pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 .next()
                 .unwrap_or("")
                 .to_string();
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             current_struct = Some(ParsedStructOrClass {
                 name,
                 doc_comment: doc,
@@ -105,27 +102,27 @@ pub(crate) fn parse_go_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if let Some(ref mut st) = current_struct {
             if code.starts_with('}') {
                 finish_struct(&mut current_struct, bundle);
-                doc_buf.clear();
+                scanner.clear_doc();
             } else {
-                parse_go_struct_member(code, line_num, &mut doc_buf, inline_doc, st);
+                parse_go_struct_member(code, line_num, &mut scanner.doc_buf, inline_doc, st);
             }
             continue;
         }
 
         if let Some(after_func) = code.strip_prefix("func ") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut remainder = after_func.trim().to_string();
             let mut recv_struct: Option<String> = None;
             if remainder.starts_with('(') {
-                let (recv_inside, after_recv) = split_first_paren(&remainder).unwrap_or_default();
-                let recv_type = recv_inside
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or("")
-                    .trim_start_matches('*');
-                recv_struct = Some(recv_type.to_string());
-                remainder = after_recv.trim().to_string();
+                let _ = split_first_paren(&remainder).map(|(recv_inside, after_recv)| {
+                    let recv_type = recv_inside
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("")
+                        .trim_start_matches('*');
+                    recv_struct = Some(recv_type.to_string());
+                    remainder = after_recv.trim().to_string();
+                });
             }
             if let Some((fn_part, params_inside, after_params)) =
                 remainder.find('(').and_then(|idx| {

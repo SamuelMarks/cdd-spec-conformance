@@ -112,14 +112,12 @@ fn normalize_word_stem(word: &str) -> String {
         stem.push('y');
         stem
     } else if word.len() > 4
-        && (word.ends_with("ches")
-            || word.ends_with("shes")
-            || word.ends_with("xes")
-            || word.ends_with("zes")
-            || word.ends_with("ses"))
+        && ["ches", "shes", "xes", "zes", "ses"]
+            .iter()
+            .any(|sfx| word.ends_with(sfx))
     {
         word[..word.len() - 2].to_string()
-    } else if word.len() > 3 && word.ends_with('s') && !word.ends_with("ss") {
+    } else if word.len() > 3 && word.ends_with('s') {
         word[..word.len() - 1].to_string()
     } else {
         word.to_string()
@@ -167,7 +165,7 @@ fn matches_feature_tokens(claimed_key: &str, candidate_key: &str) -> bool {
         let claimed_stem = normalize_word_stem(claimed_tok);
         candidate_words.iter().any(|cand_tok| {
             let cand_stem = normalize_word_stem(cand_tok);
-            *cand_tok == claimed_tok || stems_match(&claimed_stem, &cand_stem)
+            stems_match(&claimed_stem, &cand_stem)
         })
     })
 }
@@ -380,19 +378,18 @@ fn evaluate_claim_feature(
     if base_without_parens.contains(['/', '&', ',']) {
         let mut found_any = false;
         let mut all_impl = true;
-        for part in base_without_parens.split(['/', '&', ',']) {
-            let trimmed = part.trim();
-            if !trimmed.is_empty()
-                && !strip_spec_prefix_and_filler(&split_camel_case_words(trimmed)).is_empty()
-            {
-                match evaluate_single_part(trimmed, implemented_features) {
-                    Some(true) => found_any = true,
-                    Some(false) => {
-                        found_any = true;
-                        all_impl = false;
-                    }
-                    None => all_impl = false,
+        for trimmed in base_without_parens
+            .split(['/', '&', ','])
+            .map(str::trim)
+            .filter(|t| !strip_spec_prefix_and_filler(&split_camel_case_words(t)).is_empty())
+        {
+            match evaluate_single_part(trimmed, implemented_features) {
+                Some(true) => found_any = true,
+                Some(false) => {
+                    found_any = true;
+                    all_impl = false;
                 }
+                None => all_impl = false,
             }
         }
         if found_any {
@@ -409,9 +406,7 @@ fn evaluate_claim_feature(
         if let Some((inside_parens, _)) = after_open.split_once(')') {
             for tok in inside_parens.split([',', '/', ';']) {
                 let cleaned = normalize_feature_key_with_parens(tok);
-                if !cleaned.is_empty()
-                    && evaluate_single_part(&cleaned, implemented_features) == Some(true)
-                {
+                if evaluate_single_part(&cleaned, implemented_features) == Some(true) {
                     return Some(true);
                 }
             }

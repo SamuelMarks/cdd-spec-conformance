@@ -75,6 +75,7 @@ impl fmt::Display for CustomLanguageSlug {
 }
 
 impl FromStr for CustomLanguageSlug {
+    /// Error type returned when language parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `CustomLanguageSlug` from a string slice.
@@ -88,6 +89,7 @@ impl FromStr for CustomLanguageSlug {
 }
 
 impl TryFrom<String> for CustomLanguageSlug {
+    /// Error type returned when language conversion fails.
     type Error = ConformanceError;
 
     /// Converts an owned `String` into a `CustomLanguageSlug`.
@@ -228,6 +230,7 @@ impl fmt::Display for LanguageId {
 }
 
 impl FromStr for LanguageId {
+    /// Error type returned when language parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `LanguageId` from a string slice.
@@ -258,6 +261,7 @@ impl FromStr for LanguageId {
 }
 
 impl TryFrom<String> for LanguageId {
+    /// Error type returned when language conversion fails.
     type Error = ConformanceError;
 
     /// Converts an owned `String` into a `LanguageId`.

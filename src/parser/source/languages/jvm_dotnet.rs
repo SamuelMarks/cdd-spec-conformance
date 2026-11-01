@@ -1,8 +1,8 @@
 //! Shallow C#, Java, and Kotlin source-code and doc-comment extractors.
 
 use crate::parser::source::comments::{
-    attach_arg_docs, attach_field_docs, extract_comment_line, join_doc_lines,
-    split_code_and_inline_comment,
+    attach_arg_docs, attach_field_docs, join_doc_lines, split_code_and_inline_comment,
+    SourceLineScanner,
 };
 use crate::parser::source::lexer_helpers::{
     extract_paren_segment, find_type_keyword, finish_struct, match_fn_decl,
@@ -94,8 +94,7 @@ fn parse_csharp_java_member(
 /// * `source` - Raw C# or Java source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
     let mut brace_depth: i32 = 0;
     let mut struct_brace_depth: i32 = 0;
@@ -106,8 +105,7 @@ pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBu
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
         if ["[", "@", "using ", "package ", "import ", "namespace "]
@@ -124,8 +122,7 @@ pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBu
         if let Some((kind_kw, type_name)) =
             find_type_keyword(code, &["record", "class", "struct", "interface"])
         {
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             finish_struct(&mut current_struct, bundle);
             let mut st = ParsedStructOrClass {
                 name: type_name,
@@ -135,17 +132,16 @@ pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBu
                 line: line_num,
             };
             if kind_kw == "record" {
-                let params_inside = extract_paren_segment(code)
-                    .map(|(_, p)| p)
-                    .unwrap_or_default();
-                for arg in parse_type_first_args(&params_inside, line_num) {
-                    st.fields.push(ParsedField {
-                        name: arg.name,
-                        type_annotation: arg.type_annotation,
-                        doc_comment: doc.clone(),
-                        line: line_num,
-                    });
-                }
+                let _ = extract_paren_segment(code).map(|(_, params_inside)| {
+                    for arg in parse_type_first_args(&params_inside, line_num) {
+                        st.fields.push(ParsedField {
+                            name: arg.name,
+                            type_annotation: arg.type_annotation,
+                            doc_comment: doc.clone(),
+                            line: line_num,
+                        });
+                    }
+                });
                 attach_field_docs(&mut st.fields, st.doc_comment.as_deref());
             }
             struct_brace_depth = brace_depth;
@@ -155,21 +151,21 @@ pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBu
         }
 
         if let Some(ref mut st) = current_struct {
-            parse_csharp_java_member(code, line_num, &mut doc_buf, inline_doc, st);
+            parse_csharp_java_member(code, line_num, &mut scanner.doc_buf, inline_doc, st);
         }
 
         let had_close = code.contains('}');
         update_brace_depth_ignoring_strings(code, &mut brace_depth);
         if current_struct.is_some() && had_close && brace_depth <= struct_brace_depth {
             finish_struct(&mut current_struct, bundle);
-            doc_buf.clear();
+            scanner.clear_doc();
         }
     }
 
     finish_struct(&mut current_struct, bundle);
 }
 
-/// Parses a Kotlin `class` / `data class` / `interface` declaration line.
+/// Builds a `ParsedStructOrClass` from a Kotlin `class` / `data class` / `interface` declaration line.
 ///
 /// # Arguments
 ///
@@ -177,22 +173,16 @@ pub(crate) fn parse_csharp_java_source(source: &str, bundle: &mut ParsedSourceBu
 /// * `class_name` - Extracted type name.
 /// * `line_num` - 1-based line number.
 /// * `doc` - Optional accumulated `KDoc` string.
-/// * `brace_depth` - Current brace depth before `code`.
-/// * `struct_brace_depth` - Mutable slot storing the struct's opening brace depth.
-/// * `current_struct` - Mutable optional `ParsedStructOrClass` slot.
-/// * `bundle` - Target `ParsedSourceBundle`.
-#[allow(clippy::too_many_arguments)]
-fn parse_kotlin_class_decl(
+///
+/// # Returns
+///
+/// Constructed `ParsedStructOrClass` with primary constructor properties attached.
+fn build_kotlin_class_decl(
     code: &str,
     class_name: String,
     line_num: usize,
     doc: Option<String>,
-    brace_depth: i32,
-    struct_brace_depth: &mut i32,
-    current_struct: &mut Option<ParsedStructOrClass>,
-    bundle: &mut ParsedSourceBundle,
-) {
-    finish_struct(current_struct, bundle);
+) -> ParsedStructOrClass {
     let mut st = ParsedStructOrClass {
         name: class_name,
         doc_comment: doc,
@@ -211,12 +201,7 @@ fn parse_kotlin_class_decl(
         }
     }
     attach_field_docs(&mut st.fields, st.doc_comment.as_deref());
-    if code.contains('{') && !code.ends_with('}') {
-        *struct_brace_depth = brace_depth;
-        *current_struct = Some(st);
-    } else {
-        bundle.structs.push(st);
-    }
+    st
 }
 
 /// Parses Kotlin source code (`.kt`) for `class` / `data class`, properties, `fun`, args, and `KDoc` comments.
@@ -226,8 +211,7 @@ fn parse_kotlin_class_decl(
 /// * `source` - Raw Kotlin source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
     let mut brace_depth: i32 = 0;
     let mut struct_brace_depth: i32 = 0;
@@ -238,8 +222,7 @@ pub(crate) fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle)
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
         if trimmed.starts_with('@')
@@ -253,25 +236,21 @@ pub(crate) fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle)
         let code = code_part.trim();
 
         if let Some((_, class_name)) = find_type_keyword(code, &["class", "interface"]) {
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
-            parse_kotlin_class_decl(
-                code,
-                class_name,
-                line_num,
-                doc,
-                brace_depth,
-                &mut struct_brace_depth,
-                &mut current_struct,
-                bundle,
-            );
+            let doc = scanner.take_doc(None);
+            finish_struct(&mut current_struct, bundle);
+            let st = build_kotlin_class_decl(code, class_name, line_num, doc);
+            if code.contains('{') {
+                struct_brace_depth = brace_depth;
+                current_struct = Some(st);
+            } else {
+                bundle.structs.push(st);
+            }
             update_brace_depth_ignoring_strings(code, &mut brace_depth);
             continue;
         }
 
         if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "fun") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut args = parse_colon_style_args(&params_str, line_num);
             attach_arg_docs(&mut args, doc.as_deref());
             let func = ParsedFunction {
@@ -302,8 +281,7 @@ pub(crate) fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle)
                     .or_else(|| code.split("var ").nth(1))
                     .unwrap_or("");
                 if let Some((f_name, f_type)) = after_v.split_once(':') {
-                    let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                    doc_buf.clear();
+                    let doc = scanner.take_doc(inline_doc);
                     st.fields.push(ParsedField {
                         name: f_name.trim().to_string(),
                         type_annotation: Some(
@@ -325,7 +303,7 @@ pub(crate) fn parse_kotlin_source(source: &str, bundle: &mut ParsedSourceBundle)
         update_brace_depth_ignoring_strings(code, &mut brace_depth);
         if current_struct.is_some() && had_close && brace_depth <= struct_brace_depth {
             finish_struct(&mut current_struct, bundle);
-            doc_buf.clear();
+            scanner.clear_doc();
         }
     }
 

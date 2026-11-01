@@ -75,7 +75,7 @@ impl PortAllocator {
                 port: 0,
                 reason: e.to_string(),
             })?;
-        let port = listener.local_addr().map(|a| a.port()).unwrap_or_default();
+        let port = listener.local_addr().map_or(0, |a| a.port());
         Ok((listener, port))
     }
 
@@ -459,7 +459,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(for_loops_over_fallibles)]
     async fn test_managed_process_and_local_http() {
         assert!(ManagedProcess::spawn(&LanguageId::Sh, &[], Path::new("."), 8080, &[]).is_err());
         assert!(ManagedProcess::spawn(
@@ -471,14 +470,17 @@ mod tests {
         )
         .is_err());
 
-        for mut p in ManagedProcess::spawn(
+        for mut proc in ManagedProcess::spawn(
             &LanguageId::Sh,
             &["sh".to_string(), "-c".to_string(), "sleep 5".to_string()],
             Path::new("."),
             9999,
             &[("EXTRA".to_string(), "1".to_string())],
-        ) {
-            assert!(p.stop().await.is_ok());
+        )
+        .into_iter()
+        .collect::<Vec<_>>()
+        {
+            assert!(proc.stop().await.is_ok());
         }
 
         assert!(wait_for_tcp_ready(&LanguageId::Rust, "stub", 0, 30)
@@ -488,23 +490,29 @@ mod tests {
             .await
             .is_err());
 
-        for listener in TokioListener::bind("127.0.0.1:0").await {
+        for listener in TokioListener::bind("127.0.0.1:0")
+            .await
+            .into_iter()
+            .collect::<Vec<_>>()
+        {
             let bound_port = listener.local_addr().map_or(0, |a| a.port());
 
-            tokio::spawn(async move {
-                for (sock, _) in listener.accept().await {
-                    let _ = sock.readable().await;
+            let server_task = tokio::spawn(async move {
+                for (sock, _) in listener.accept().await.into_iter().collect::<Vec<_>>() {
+                    drop(sock);
                 }
-                for (mut sock, _) in listener.accept().await {
+                for (mut s1, _) in listener.accept().await.into_iter().collect::<Vec<_>>() {
                     let mut buf = [0u8; 512];
-                    let _ = sock.read(&mut buf).await;
+                    let _ = s1.read(&mut buf).await;
                     let resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-No-Colon-Line\r\n\r\n{\"ok\":true}";
-                    let _ = sock.write_all(resp).await;
+                    let _ = s1.write_all(resp).await;
+                    let _ = s1.shutdown().await;
                 }
-                for (mut sock, _) in listener.accept().await {
+                for (mut s2, _) in listener.accept().await.into_iter().collect::<Vec<_>>() {
                     let mut buf = [0u8; 512];
-                    let _ = sock.read(&mut buf).await;
-                    let _ = sock.write_all(b"GARBAGE\n\n").await;
+                    let _ = s2.read(&mut buf).await;
+                    let _ = s2.write_all(b"GARBAGE\n\n").await;
+                    let _ = s2.shutdown().await;
                 }
             });
 
@@ -534,6 +542,7 @@ mod tests {
                     .await
                     .is_err()
             );
+            let _ = server_task.await;
         }
     }
 }

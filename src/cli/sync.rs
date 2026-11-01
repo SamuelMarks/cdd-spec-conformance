@@ -154,7 +154,7 @@ fn merge_table_row_line(
         .as_deref()
         .filter(|n| !n.trim().is_empty())
         .unwrap_or(default_note);
-    let note = if (clean_stat.is_to_skipped() || clean_stat.is_from_skipped())
+    let note = if (clean_stat.is_to_skipped() | clean_stat.is_from_skipped())
         && resolved_note.is_empty()
     {
         "Not applicable to this profile"
@@ -460,7 +460,7 @@ pub(crate) fn run_init_with_options(
     registry: &CanonicalRegistry,
 ) -> Result<String, ConformanceError> {
     let mut out = run_init(repo_path)?;
-    if sync || spec.is_some() {
+    if sync | spec.is_some() {
         let sync_out = run_sync(repo_path, spec, false, registry)?;
         out.push_str(&sync_out);
     }

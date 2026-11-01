@@ -2,7 +2,7 @@
 
 use crate::ecosystem::{discover_language_toolchains, LanguageToolchainSpec};
 use crate::equivalence::{verify_database_table_count, verify_mcp_json_rpc_exchange};
-use crate::error::{to_json_value, ConformanceError};
+use crate::error::ConformanceError;
 use crate::matrix_runtime::fixtures::{
     canonical_arazzo_generated_snippet, canonical_conformance_arazzo_doc,
     canonical_conformance_openapi_doc, canonical_generated_snippet,
@@ -14,10 +14,10 @@ use crate::matrix_runtime::{
 };
 use crate::mcp::server::McpServer;
 use crate::model::{
-    AuthFlowKind, CliOutputFormat, ClientVerificationStatus, EndpointPath, HttpMethod, LanguageId,
-    McpMethodName, MediaTypeKind, ParameterSerializationStyle, SchemaConstructKind,
-    ServerFramework, ServerOperatingMode, SignatureCount, SpecId, TopologicalCategory,
-    WireProtocol,
+    AuthFlowKind, CliOutputFormat, ClientVerificationStatus, CompilerCapability, EndpointPath,
+    HttpMethod, LanguageId, McpMethodName, MediaTypeKind, ParameterSerializationStyle,
+    SchemaConstructKind, ServerFramework, ServerOperatingMode, SignatureCount, SpecId,
+    TopologicalCategory, WireProtocol,
 };
 use crate::parser::source::{parse_source_path, parse_source_str};
 use std::path::Path;
@@ -191,7 +191,6 @@ pub fn evaluate_wire_edge_cases_with_harness(
 ///
 /// Vector of `McpMethodName` variants that succeeded end-to-end against `McpServer`.
 #[must_use]
-#[allow(for_loops_over_fallibles)]
 pub fn verify_mcp_cli_methods_against_server(
     client_lang: &LanguageId,
     server_lang: &LanguageId,
@@ -264,8 +263,8 @@ pub fn verify_mcp_cli_methods_against_server(
     for (method_enum, raw_req, expects_response) in requests {
         let maybe_resp = server.handle_message(raw_req);
         if expects_response {
-            for r in maybe_resp {
-                let v = to_json_value(&r, method_enum.as_str()).unwrap_or_default();
+            let _ = maybe_resp.map(|r| {
+                let v = r.to_json_value();
                 let _ = verify_mcp_json_rpc_exchange(
                     client_lang,
                     server_lang,
@@ -273,7 +272,7 @@ pub fn verify_mcp_cli_methods_against_server(
                     &v,
                 );
                 verified.push(method_enum);
-            }
+            });
         } else {
             verified.push(method_enum);
         }
@@ -316,17 +315,14 @@ pub fn evaluate_cli_verification(client_lang: &LanguageId) -> CliVerificationDet
 ///
 /// `true` if all discovered checklists parse cleanly without contradictory directional flags.
 pub(crate) fn repo_checklists_valid(repo_path: &Path) -> bool {
-    let tables = crate::discovery::scan_repository(repo_path)
+    crate::discovery::scan_repository(repo_path)
         .and_then(|proj| proj.parse_all_checklists())
-        .unwrap_or_default();
-    for table in &tables {
-        for row in &table.rows {
-            if row.status.has_to_contradiction() || row.status.has_from_contradiction() {
-                return false;
-            }
-        }
-    }
-    true
+        .is_ok_and(|tables| {
+            tables
+                .iter()
+                .flat_map(|t| &t.rows)
+                .all(|row| !row.status.has_any_contradiction())
+        })
 }
 
 /// Parses a repository's `src/` (or root) directory into an optional `ParsedSourceBundle`.
@@ -365,9 +361,9 @@ pub(crate) fn count_repo_signatures(
     repo_path: &Path,
     tc: &LanguageToolchainSpec,
 ) -> SignatureCount {
-    parse_repo_bundle(repo_path, tc)
-        .map(|b| SignatureCount::new(b.structs.len(), b.all_functions().len()))
-        .unwrap_or_default()
+    parse_repo_bundle(repo_path, tc).map_or_else(SignatureCount::default, |b| {
+        SignatureCount::new(b.structs.len(), b.all_functions().len())
+    })
 }
 
 /// Evaluates source signature and doc coverage for a single toolchain against `canonical_spec_doc`,
@@ -405,13 +401,13 @@ fn verify_client_signatures_for_toolchain(
         canonical_generated_snippet(&tc.language_id, false)
     };
     let generated_bundle = parse_source_str(&snippet, Path::new(virt_name), &tc.language_id, None);
-    let docs_ok = generated_bundle
+    let sigs_ok = generated_bundle
         .verify_100_percent_docs(&tc.language_id)
+        .and_then(|()| {
+            generated_bundle.verify_against_spec_doc(canonical_spec_doc, &tc.language_id)
+        })
         .is_ok();
-    let spec_ok = generated_bundle
-        .verify_against_spec_doc(canonical_spec_doc, &tc.language_id)
-        .is_ok();
-    (docs_ok && spec_ok, VerificationSource::SyntheticFixture)
+    (sigs_ok, VerificationSource::SyntheticFixture)
 }
 
 /// Verifies all 13+ language Client SDKs, Client CLIs, and generated frontends against the
@@ -474,8 +470,9 @@ pub fn verify_clients_against_rust_backend(
         };
         let sig_count = live_bundle
             .as_ref()
-            .map(|b| SignatureCount::new(b.structs.len(), b.all_functions().len()))
-            .unwrap_or_default();
+            .map_or_else(SignatureCount::default, |b| {
+                SignatureCount::new(b.structs.len(), b.all_functions().len())
+            });
         let checklists_ok = !repo_present || repo_checklists_valid(&repo_path);
         let (sigs_ok, verification_source) = verify_client_signatures_for_toolchain(
             live_bundle.as_ref(),
@@ -483,16 +480,16 @@ pub fn verify_clients_against_rust_backend(
             is_arazzo,
             &canonical_spec_doc,
         );
-        let generated_signatures_verified = sigs_ok && checklists_ok;
+        let generated_signatures_verified = checklists_ok && sigs_ok;
 
         let wire_edge_cases = evaluate_wire_edge_cases(&tc.language_id);
         let cli_verification = evaluate_cli_verification(&tc.language_id);
 
         let status = if repo_present && !checklists_ok {
             ClientVerificationStatus::FailedVerification
-        } else if repo_present && tc.supported_targets.sdk && generated_signatures_verified {
+        } else if repo_present && tc.supported_targets.supports(CompilerCapability::Sdk) {
             ClientVerificationStatus::Verified
-        } else if tc.supported_targets.sdk {
+        } else if tc.supported_targets.supports(CompilerCapability::Sdk) {
             ClientVerificationStatus::ReadyToGenerate
         } else {
             ClientVerificationStatus::MissingRepo

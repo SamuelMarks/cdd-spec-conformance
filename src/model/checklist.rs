@@ -474,7 +474,7 @@ impl ProfileScore {
         if status.is_from_absent() {
             self.absent_from += 1;
         }
-        if status.is_to_absent() || status.is_from_absent() {
+        if status.is_to_absent() | status.is_from_absent() {
             self.absent_count += 1;
         }
         if status.is_to_skipped() {

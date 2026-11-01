@@ -692,16 +692,16 @@ syntax:
         assert_eq!(spec.server_build_cmd, vec!["zig", "build", "server"]);
         assert_eq!(spec.server_start_cmd, vec!["./zig-out/bin/server"]);
         assert_eq!(spec.linter_cmd, vec!["zig", "fmt", "--check", "src/"]);
-        assert!(!spec.supported_targets.json_rpc);
-        assert!(!spec.supported_targets.arazzo);
-        assert!(spec.supported_targets.wasm);
+        assert!(!spec.supported_targets.supports(CompilerCapability::JsonRpc));
+        assert!(!spec.supported_targets.supports(CompilerCapability::Arazzo));
+        assert!(spec.supported_targets.supports(CompilerCapability::Wasm));
 
         let partial_caps = CapabilitiesOverride {
             arazzo: Some(true),
             ..CapabilitiesOverride::default()
         };
         partial_caps.apply_to(&mut spec.supported_targets);
-        assert!(spec.supported_targets.arazzo);
+        assert!(spec.supported_targets.supports(CompilerCapability::Arazzo));
 
         let empty_tc = ToolchainConfig::default();
         empty_tc.apply_to(&mut spec);

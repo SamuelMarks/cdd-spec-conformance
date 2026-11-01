@@ -3,6 +3,67 @@
 use crate::parser::source::model::{normalize_ident, ParsedArg, ParsedField};
 use std::collections::BTreeMap;
 
+///Stateful line-by-line comment and documentation accumulator shared across language parsers.
+#[derive(Debug, Default)]
+pub(crate) struct SourceLineScanner {
+    /// Accumulated documentation comment lines above the current declaration.
+    pub(crate) doc_buf: Vec<String>,
+    /// Whether the scanner is currently inside a multi-line `/* ... */` block comment.
+    pub(crate) in_block_comment: bool,
+}
+
+impl SourceLineScanner {
+    /// Creates a new `SourceLineScanner` with an empty documentation buffer.
+    ///
+    /// # Returns
+    ///
+    /// Initialized `SourceLineScanner`.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Processes a trimmed line; if it is a comment or block-comment continuation, appends the
+    /// cleaned comment text to `self.doc_buf` and returns `true`.
+    ///
+    /// # Arguments
+    ///
+    /// * `trimmed` - Trimmed source line.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `trimmed` was consumed as a comment line.
+    pub(crate) fn consume_comment_line(&mut self, trimmed: &str) -> bool {
+        if let Some(c) = extract_comment_line(trimmed, &mut self.in_block_comment) {
+            self.doc_buf.push(c);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Takes the accumulated documentation lines from `self.doc_buf` (clearing the buffer)
+    /// and returns the joined doc-comment string, falling back to `inline_doc` if empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `inline_doc` - Optional trailing inline doc comment from the declaration line.
+    ///
+    /// # Returns
+    ///
+    /// Combined documentation string if non-empty, or `None`.
+    pub(crate) fn take_doc(&mut self, inline_doc: Option<String>) -> Option<String> {
+        let doc = join_doc_lines(&self.doc_buf).or(inline_doc);
+        self.doc_buf.clear();
+        doc
+    }
+
+    /// Clears any accumulated documentation lines in `self.doc_buf`.
+    pub(crate) fn clear_doc(&mut self) {
+        self.doc_buf.clear();
+    }
+}
+
 /// Cleans a single comment line by stripping comment delimiters (`///`, `//!`, `/**`, `*/`, `*`, `//`, `#`, `*>`, `!>`).
 ///
 /// # Arguments
@@ -195,11 +256,9 @@ pub(crate) fn extract_doc_tags(doc: &str) -> BTreeMap<String, String> {
     for raw_line in doc.lines() {
         let line = raw_line.trim();
         if line.is_empty()
-            || line.starts_with('#')
-            || line.starts_with("@return")
-            || line.starts_with("@throws")
-            || line.starts_with(":return")
-            || line.starts_with("- Returns")
+            || ["#", "@return", "@throws", ":return", "- Returns"]
+                .iter()
+                .any(|p| line.starts_with(p))
         {
             last_tag_key = None;
             continue;

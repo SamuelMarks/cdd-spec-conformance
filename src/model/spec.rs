@@ -138,6 +138,7 @@ impl fmt::Display for SpecId {
 }
 
 impl FromStr for SpecId {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `SpecId` from a string slice.
@@ -275,6 +276,7 @@ impl fmt::Display for ProfileKind {
 }
 
 impl FromStr for ProfileKind {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `ProfileKind` from a string slice.
@@ -408,6 +410,7 @@ impl fmt::Display for ServerOperatingMode {
 }
 
 impl FromStr for ServerOperatingMode {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `ServerOperatingMode` from a string slice.
@@ -777,6 +780,7 @@ impl fmt::Display for SymbolKind {
 }
 
 impl FromStr for SymbolKind {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `SymbolKind` from a string slice.
@@ -846,6 +850,7 @@ impl fmt::Display for ServerFramework {
 }
 
 impl FromStr for ServerFramework {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `ServerFramework` from a string slice.
@@ -911,6 +916,7 @@ impl fmt::Display for ClientVerificationStatus {
 }
 
 impl FromStr for ClientVerificationStatus {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `ClientVerificationStatus` from a string slice.
@@ -990,6 +996,7 @@ impl fmt::Display for CompatibilityStatus {
 }
 
 impl FromStr for CompatibilityStatus {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `CompatibilityStatus` from a string slice.
@@ -1051,6 +1058,7 @@ impl fmt::Display for VerificationExecutionMode {
 }
 
 impl FromStr for VerificationExecutionMode {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `VerificationExecutionMode` from a string slice.
@@ -1153,6 +1161,7 @@ impl fmt::Display for CompilerCapability {
 }
 
 impl FromStr for CompilerCapability {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses a `CompilerCapability` from a string slice.
@@ -1734,6 +1743,7 @@ impl fmt::Display for McpMethodName {
 }
 
 impl FromStr for McpMethodName {
+    /// Error type returned when specification token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `McpMethodName` from a wire method string.
@@ -1898,37 +1908,18 @@ pub struct NormalizedOpenApiSpec {
 }
 
 impl NormalizedOpenApiSpec {
-    /// Extracts a `NormalizedOpenApiSpec` from a parsed `OpenAPI` 3.x or Swagger 2.0 JSON value.
+    /// Extracts normalized schema models from `components.schemas` or `definitions`.
     ///
     /// # Arguments
     ///
     /// * `doc` - Parsed `OpenAPI` or Swagger JSON value.
-    /// * `lang` - Language identifier for error attribution.
     ///
     /// # Returns
     ///
-    /// Normalized `NormalizedOpenApiSpec` containing operations and schema models.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ConformanceError::ArazzoSchemaViolation` if neither `openapi` nor `swagger` root version key is present.
-    #[allow(clippy::too_many_lines)]
-    pub fn from_json_value(
+    /// Ordered map of schema names to `NormalizedSchemaModel`.
+    fn extract_normalized_schemas(
         doc: &serde_json::Value,
-        lang: &LanguageId,
-    ) -> Result<Self, ConformanceError> {
-        let spec_version = doc
-            .get("openapi")
-            .or_else(|| doc.get("swagger"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
-                language: lang.clone(),
-                pointer: "/openapi".to_string(),
-                reason: "expected non-empty 'openapi' or 'swagger' version string".to_string(),
-            })?
-            .to_string();
-
+    ) -> BTreeMap<String, NormalizedSchemaModel> {
         let mut schemas = BTreeMap::new();
         let schemas_map = doc
             .get("components")
@@ -1970,7 +1961,21 @@ impl NormalizedOpenApiSpec {
                 },
             );
         }
+        schemas
+    }
 
+    /// Extracts normalized operations from `paths`.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - Parsed `OpenAPI` or Swagger JSON value.
+    ///
+    /// # Returns
+    ///
+    /// Ordered map of operation keys to `NormalizedOperation`.
+    fn extract_normalized_operations(
+        doc: &serde_json::Value,
+    ) -> BTreeMap<String, NormalizedOperation> {
         let mut operations = BTreeMap::new();
         for (raw_path, path_item) in doc
             .get("paths")
@@ -2041,11 +2046,43 @@ impl NormalizedOpenApiSpec {
                 );
             }
         }
+        operations
+    }
+
+    /// Extracts a `NormalizedOpenApiSpec` from a parsed `OpenAPI` 3.x or Swagger 2.0 JSON value.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - Parsed `OpenAPI` or Swagger JSON value.
+    /// * `lang` - Language identifier for error attribution.
+    ///
+    /// # Returns
+    ///
+    /// Normalized `NormalizedOpenApiSpec` containing operations and schema models.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::ArazzoSchemaViolation` if neither `openapi` nor `swagger` root version key is present.
+    pub fn from_json_value(
+        doc: &serde_json::Value,
+        lang: &LanguageId,
+    ) -> Result<Self, ConformanceError> {
+        let spec_version = doc
+            .get("openapi")
+            .or_else(|| doc.get("swagger"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| ConformanceError::ArazzoSchemaViolation {
+                language: lang.clone(),
+                pointer: "/openapi".to_string(),
+                reason: "expected non-empty 'openapi' or 'swagger' version string".to_string(),
+            })?
+            .to_string();
 
         Ok(Self {
             spec_version,
-            operations,
-            schemas,
+            operations: Self::extract_normalized_operations(doc),
+            schemas: Self::extract_normalized_schemas(doc),
         })
     }
 }

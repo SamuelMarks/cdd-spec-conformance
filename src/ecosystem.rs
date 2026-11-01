@@ -9,39 +9,49 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Feature and compilation target capabilities supported by a language toolchain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LanguageCapabilities {
-    /// Supports generating Client SDKs (`from_openapi to_sdk`).
-    #[serde(default)]
-    pub sdk: bool,
-    /// Supports generating Client CLIs (`from_openapi to_sdk_cli`).
-    #[serde(default)]
-    pub sdk_cli: bool,
-    /// Supports generating Server scaffolds (`from_openapi to_server`).
-    #[serde(default)]
-    pub server: bool,
-    /// Supports extracting `OpenAPI` specifications from source code (`to_openapi`).
-    #[serde(default)]
-    pub to_openapi: bool,
-    /// Supports generating documentation JSON (`to_docs_json`).
-    #[serde(default)]
-    pub to_docs_json: bool,
-    /// Supports bidirectional synchronization (`sync`).
-    #[serde(default)]
-    pub sync: bool,
-    /// Supports exposing the compiler over JSON-RPC 2.0 (`serve_json_rpc`).
-    #[serde(default)]
-    pub json_rpc: bool,
-    /// Supports Model Context Protocol server/client generation (`mcp`).
-    #[serde(default)]
-    pub mcp: bool,
-    /// Supports Arazzo 1.1.0 workflow orchestration code generation and extraction (`from_arazzo` / `to_arazzo`).
-    #[serde(default)]
-    pub arazzo: bool,
-    /// Supports compiling or running as a WebAssembly target (`wasm`).
-    #[serde(default)]
-    pub wasm: bool,
+    /// Ordered set of enabled `CompilerCapability` variants.
+    enabled: BTreeSet<CompilerCapability>,
+}
+
+impl Serialize for LanguageCapabilities {
+    /// Serializes `LanguageCapabilities` as a map of boolean capability flags.
+    ///
+    /// # Arguments
+    ///
+    /// * `serializer` - Serde serializer instance.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let map: std::collections::BTreeMap<&'static str, bool> = CompilerCapability::all()
+            .iter()
+            .map(|&cap| (cap.as_str(), self.supports(cap)))
+            .collect();
+        map.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LanguageCapabilities {
+    /// Deserializes `LanguageCapabilities` from a map of boolean capability flags.
+    ///
+    /// # Arguments
+    ///
+    /// * `deserializer` - Serde deserializer instance.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map = std::collections::BTreeMap::<String, bool>::deserialize(deserializer)?;
+        let mut caps = Self::default();
+        for (k, v) in map {
+            if let Ok(cap) = CompilerCapability::from_str(&k) {
+                caps.set(cap, v);
+            }
+        }
+        Ok(caps)
+    }
 }
 
 impl LanguageCapabilities {
@@ -49,21 +59,35 @@ impl LanguageCapabilities {
     ///
     /// # Returns
     ///
-    /// Full `LanguageCapabilities` instance.
+    /// Full `LanguageCapabilities` instance (all capabilities except `Wasm`).
     #[must_use]
-    pub const fn full() -> Self {
-        Self {
-            sdk: true,
-            sdk_cli: true,
-            server: true,
-            to_openapi: true,
-            to_docs_json: true,
-            sync: true,
-            json_rpc: true,
-            mcp: true,
-            arazzo: true,
-            wasm: false,
-        }
+    pub fn full() -> Self {
+        let enabled = [
+            CompilerCapability::Sdk,
+            CompilerCapability::SdkCli,
+            CompilerCapability::Server,
+            CompilerCapability::ToOpenApi,
+            CompilerCapability::ToDocsJson,
+            CompilerCapability::Sync,
+            CompilerCapability::JsonRpc,
+            CompilerCapability::Mcp,
+            CompilerCapability::Arazzo,
+        ]
+        .into_iter()
+        .collect();
+        Self { enabled }
+    }
+
+    /// Returns a `LanguageCapabilities` struct with all standard CDD compiler features plus `Wasm` enabled.
+    ///
+    /// # Returns
+    ///
+    /// Full `LanguageCapabilities` instance with `Wasm` enabled.
+    #[must_use]
+    pub fn full_with_wasm() -> Self {
+        let mut caps = Self::full();
+        caps.set(CompilerCapability::Wasm, true);
+        caps
     }
 
     /// Returns `true` if the specified `CompilerCapability` is enabled.
@@ -76,19 +100,8 @@ impl LanguageCapabilities {
     ///
     /// `true` if enabled on this toolchain.
     #[must_use]
-    pub const fn supports(&self, cap: CompilerCapability) -> bool {
-        match cap {
-            CompilerCapability::Sdk => self.sdk,
-            CompilerCapability::SdkCli => self.sdk_cli,
-            CompilerCapability::Server => self.server,
-            CompilerCapability::ToOpenApi => self.to_openapi,
-            CompilerCapability::ToDocsJson => self.to_docs_json,
-            CompilerCapability::Sync => self.sync,
-            CompilerCapability::JsonRpc => self.json_rpc,
-            CompilerCapability::Mcp => self.mcp,
-            CompilerCapability::Arazzo => self.arazzo,
-            CompilerCapability::Wasm => self.wasm,
-        }
+    pub fn supports(&self, cap: CompilerCapability) -> bool {
+        self.enabled.contains(&cap)
     }
 
     /// Sets the specified `CompilerCapability` flag on this capability set.
@@ -97,18 +110,11 @@ impl LanguageCapabilities {
     ///
     /// * `cap` - Strongly typed `CompilerCapability` to update.
     /// * `enabled` - New boolean value for the capability.
-    pub const fn set(&mut self, cap: CompilerCapability, enabled: bool) {
-        match cap {
-            CompilerCapability::Sdk => self.sdk = enabled,
-            CompilerCapability::SdkCli => self.sdk_cli = enabled,
-            CompilerCapability::Server => self.server = enabled,
-            CompilerCapability::ToOpenApi => self.to_openapi = enabled,
-            CompilerCapability::ToDocsJson => self.to_docs_json = enabled,
-            CompilerCapability::Sync => self.sync = enabled,
-            CompilerCapability::JsonRpc => self.json_rpc = enabled,
-            CompilerCapability::Mcp => self.mcp = enabled,
-            CompilerCapability::Arazzo => self.arazzo = enabled,
-            CompilerCapability::Wasm => self.wasm = enabled,
+    pub fn set(&mut self, cap: CompilerCapability, enabled: bool) {
+        if enabled {
+            self.enabled.insert(cap);
+        } else {
+            self.enabled.remove(&cap);
         }
     }
 
@@ -119,11 +125,7 @@ impl LanguageCapabilities {
     /// Ordered set of enabled capabilities.
     #[must_use]
     pub fn enabled_capabilities(&self) -> BTreeSet<CompilerCapability> {
-        CompilerCapability::all()
-            .iter()
-            .copied()
-            .filter(|&cap| self.supports(cap))
-            .collect()
+        self.enabled.clone()
     }
 }
 
@@ -218,11 +220,11 @@ fn validate_pattern_syntax(pattern: &str) -> Result<(), String> {
             ')' => paren_depth -= 1,
             _ => {}
         }
-        if bracket_depth < 0 || paren_depth < 0 {
+        if (bracket_depth | paren_depth) < 0 {
             return Err("unbalanced closing delimiter".to_string());
         }
     }
-    if bracket_depth != 0 || paren_depth != 0 {
+    if (bracket_depth | paren_depth) != 0 {
         return Err("unclosed bracket or parenthesis group".to_string());
     }
     Ok(())
@@ -309,10 +311,7 @@ impl LanguageToolchainSpec {
                     "-Wextra",
                     "-Werror",
                 ]),
-                supported_targets: LanguageCapabilities {
-                    wasm: true,
-                    ..LanguageCapabilities::full()
-                },
+                supported_targets: LanguageCapabilities::full_with_wasm(),
             }),
             LanguageId::Cpp => Some(Self {
                 language_id: language_id.clone(),
@@ -351,10 +350,7 @@ impl LanguageToolchainSpec {
                 server_build_cmd: cmd_vec(&["cargo", "build", "--quiet"]),
                 server_start_cmd: cmd_vec(&["cargo", "run", "--quiet", "--", "start"]),
                 linter_cmd: cmd_vec(&["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]),
-                supported_targets: LanguageCapabilities {
-                    wasm: true,
-                    ..LanguageCapabilities::full()
-                },
+                supported_targets: LanguageCapabilities::full_with_wasm(),
             }),
             LanguageId::Swift => Some(Self {
                 language_id: language_id.clone(),
@@ -467,10 +463,7 @@ impl LanguageToolchainSpec {
                 server_build_cmd: cmd_vec(&["zig", "build"]),
                 server_start_cmd: cmd_vec(&["./zig-out/bin/server"]),
                 linter_cmd: cmd_vec(&["zig", "fmt", "--check", "src/"]),
-                supported_targets: LanguageCapabilities {
-                    wasm: true,
-                    ..LanguageCapabilities::full()
-                },
+                supported_targets: LanguageCapabilities::full_with_wasm(),
             },
             "cobol" => Self {
                 language_id: language_id.clone(),
@@ -811,6 +804,14 @@ mod tests {
             assert_eq!(spec.repo_name, format!("cdd-{ext}"));
             assert_ne!(spec.cli_binary_cmd, Vec::<String>::new());
         }
+        let caps = LanguageCapabilities::full_with_wasm();
+        let caps_json = serde_json::to_string(&caps).unwrap_or_default();
+        let caps_round: Option<LanguageCapabilities> = serde_json::from_str(&caps_json).ok();
+        assert_eq!(caps_round, Some(caps));
+        let caps_unknown: Option<LanguageCapabilities> =
+            serde_json::from_str(r#"{"sdk":true,"unknown_cap":true}"#).ok();
+        assert!(caps_unknown.is_some_and(|c| c.supports(CompilerCapability::Sdk)));
+        assert!(serde_json::from_str::<LanguageCapabilities>("123").is_err());
     }
 
     #[test]

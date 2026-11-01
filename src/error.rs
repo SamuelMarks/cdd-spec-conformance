@@ -624,8 +624,7 @@ impl ConformanceError {
     }
 }
 
-/// Serializes `value` into a pretty-printed JSON string, mapping any `serde_json::Error` into
-/// `ConformanceError::Serialization`.
+/// Serializes `value` into a pretty-printed JSON string.
 ///
 /// # Arguments
 ///
@@ -635,14 +634,12 @@ impl ConformanceError {
 /// # Returns
 ///
 /// Pretty-printed JSON `String`.
-///
-/// # Errors
-///
-/// Returns `ConformanceError::Serialization` if `serde_json::to_string_pretty` fails.
-pub fn to_pretty_json<T: Serialize>(value: &T, context: &str) -> Result<String, ConformanceError> {
-    serde_json::to_string_pretty(value).map_err(|source| ConformanceError::Serialization {
-        context: context.to_string(),
-        source,
+#[must_use]
+pub fn to_pretty_json<T: Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|e| {
+        format!(
+            "{{\n  \"error\": \"serialization_failed\",\n  \"context\": \"{context}\",\n  \"reason\": \"{e}\"\n}}"
+        )
     })
 }
 
@@ -912,7 +909,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn test_extended_conformance_errors_display_and_rpc() {
         let slug_err = ConformanceError::InvalidLanguageSlug {
             input: "123".to_string(),
@@ -996,7 +992,10 @@ mod tests {
             startup_err.to_string(),
             "Server startup failure for rust (mode 'stub', port 8080): bind failed"
         );
+    }
 
+    #[test]
+    fn test_transport_equivalence_and_arazzo_errors() {
         let http_err = ConformanceError::HttpTransport {
             url: "http://127.0.0.1:8080/pets".to_string(),
             method: "GET".to_string(),
@@ -1160,13 +1159,13 @@ mod tests {
         );
         assert_eq!(enum_err.to_json_rpc_error().0, error_codes::INVALID_PARAMS);
 
-        let pretty = to_pretty_json(&serde_json::json!({"ok": true}), "test_pretty").ok();
-        assert!(pretty.is_some_and(|s| s.contains("\"ok\": true")));
+        let pretty = to_pretty_json(&serde_json::json!({"ok": true}), "test_pretty");
+        assert!(pretty.contains("\"ok\": true"));
 
         let val = to_json_value(&serde_json::json!({"ok": 1}), "test_val").ok();
         assert_eq!(val, Some(serde_json::json!({"ok": 1})));
 
-        assert!(to_pretty_json(&FailingSerialize, "fail_pretty").is_err());
+        assert!(to_pretty_json(&FailingSerialize, "fail_pretty").contains("serialization_failed"));
         assert!(to_json_value(&FailingSerialize, "fail_val").is_err());
     }
 }

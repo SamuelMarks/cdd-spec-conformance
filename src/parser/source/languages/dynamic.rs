@@ -1,8 +1,8 @@
 //! Shallow Python, Ruby, PHP, and POSIX Shell source-code and doc-comment extractors.
 
 use crate::parser::source::comments::{
-    attach_arg_docs, attach_field_docs, clean_comment_line, extract_comment_line, extract_doc_tags,
-    join_doc_lines, split_code_and_inline_comment,
+    attach_arg_docs, attach_field_docs, clean_comment_line, extract_doc_tags, join_doc_lines,
+    split_code_and_inline_comment, SourceLineScanner,
 };
 use crate::parser::source::lexer_helpers::{
     find_type_keyword, finish_struct, match_fn_decl, parse_colon_style_args, parse_type_first_args,
@@ -20,8 +20,7 @@ use crate::parser::source::model::{
 /// * `source` - Raw PHP source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
-    let mut in_block_comment = false;
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
@@ -34,8 +33,7 @@ pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
         {
             continue;
         }
-        if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
-            doc_buf.push(c);
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -43,8 +41,7 @@ pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
         let code = code_part.trim();
 
         if let Some((_, class_name)) = find_type_keyword(code, &["class", "interface"]) {
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             finish_struct(&mut current_struct, bundle);
             current_struct = Some(ParsedStructOrClass {
                 name: class_name,
@@ -57,8 +54,7 @@ pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
         }
 
         if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "function") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let mut args = parse_type_first_args(&params_str, line_num);
             attach_arg_docs(&mut args, doc.as_deref());
             let func = ParsedFunction {
@@ -96,8 +92,7 @@ pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 let var_tok = tokens.last().copied().unwrap_or("");
                 let type_toks = &tokens[..tokens.len().saturating_sub(1)];
                 let f_name = var_tok.trim_start_matches('$');
-                let doc = join_doc_lines(&doc_buf).or(inline_doc);
-                doc_buf.clear();
+                let doc = scanner.take_doc(inline_doc);
                 st.fields.push(ParsedField {
                     name: f_name.to_string(),
                     type_annotation: (!type_toks.is_empty()).then(|| type_toks.join(" ")),
@@ -111,38 +106,30 @@ pub(crate) fn parse_php_source(source: &str, bundle: &mut ParsedSourceBundle) {
     finish_struct(&mut current_struct, bundle);
 }
 
-/// Parses a single `def <name>(...):` statement in Python and appends the function/method.
+/// Builds a `ParsedFunction` from a Python `def <name>(...):` statement and returns the next line index.
 ///
 /// # Arguments
 ///
 /// * `lines` - All source lines in the Python file.
 /// * `i` - Current 0-based line index.
-/// * `fn_name` - Extracted function name.
-/// * `params_inside` - Parameter list inside `(...)`.
-/// * `ret` - Optional return type annotation.
+/// * `decl` - Tuple of `(fn_name, params_inside, ret)`.
 /// * `leading_comments` - Accumulated `#` comment lines above the `def`.
-/// * `current_class` - Mutable optional active class `(indent, ParsedStructOrClass)`.
-/// * `bundle` - Target `ParsedSourceBundle`.
 ///
 /// # Returns
 ///
-/// Next 0-based line index after consuming any docstring.
-#[allow(clippy::too_many_arguments)]
-fn handle_python_def(
+/// Tuple `(ParsedFunction, next_line_index)`.
+fn build_python_def(
     lines: &[&str],
     i: usize,
-    fn_name: String,
-    params_inside: &str,
-    ret: Option<String>,
+    decl: (String, String, Option<String>),
     leading_comments: &mut Vec<String>,
-    current_class: &mut Option<(usize, ParsedStructOrClass)>,
-    bundle: &mut ParsedSourceBundle,
-) -> usize {
+) -> (ParsedFunction, usize) {
+    let (fn_name, params_inside, ret) = decl;
     let line_num = i + 1;
     let (docstring, next_i) = consume_python_docstring(lines, i + 1);
     let doc = docstring.or_else(|| join_doc_lines(leading_comments));
     leading_comments.clear();
-    let mut args = parse_colon_style_args(params_inside, line_num);
+    let mut args = parse_colon_style_args(&params_inside, line_num);
     attach_arg_docs(&mut args, doc.as_deref());
     let func = ParsedFunction {
         name: fn_name,
@@ -151,12 +138,7 @@ fn handle_python_def(
         return_type: ret,
         line: line_num,
     };
-    if let Some((_, ref mut st)) = current_class {
-        st.methods.push(func);
-    } else {
-        bundle.functions.push(func);
-    }
-    next_i
+    (func, next_i)
 }
 
 /// Parses Python source code (`.py`) for `class`, fields, `def`, args, and `"""..."""` or `#` docstrings.
@@ -220,19 +202,14 @@ pub(crate) fn parse_python_source(source: &str, bundle: &mut ParsedSourceBundle)
             continue;
         }
 
-        if let Some((fn_name, params_inside, ret)) =
-            match_fn_decl(trimmed.trim_end_matches(':'), "def")
-        {
-            i = handle_python_def(
-                &lines,
-                i,
-                fn_name,
-                &params_inside,
-                ret,
-                &mut leading_comments,
-                &mut current_class,
-                bundle,
-            );
+        if let Some(decl) = match_fn_decl(trimmed.trim_end_matches(':'), "def") {
+            let (func, next_i) = build_python_def(&lines, i, decl, &mut leading_comments);
+            if let Some((_, ref mut st)) = current_class {
+                st.methods.push(func);
+            } else {
+                bundle.functions.push(func);
+            }
+            i = next_i;
             continue;
         }
 
@@ -338,7 +315,7 @@ fn consume_python_docstring(lines: &[&str], start_idx: usize) -> (Option<String>
 /// * `source` - Raw Ruby source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
+    let mut scanner = SourceLineScanner::new();
     let mut current_struct: Option<ParsedStructOrClass> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
@@ -347,8 +324,7 @@ pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.starts_with('#') {
-            doc_buf.push(clean_comment_line(trimmed));
+        if scanner.consume_comment_line(trimmed) {
             continue;
         }
 
@@ -362,8 +338,7 @@ pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let doc = join_doc_lines(&doc_buf);
-            doc_buf.clear();
+            let doc = scanner.take_doc(None);
             finish_struct(&mut current_struct, bundle);
             current_struct = Some(ParsedStructOrClass {
                 name: class_name,
@@ -378,8 +353,7 @@ pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
         if let Some(ref mut st) = current_struct {
             for kw in ["attr_accessor ", "attr_reader ", "attr_writer "] {
                 if let Some(rest) = code.strip_prefix(kw) {
-                    let doc = join_doc_lines(&doc_buf).or_else(|| inline_doc.clone());
-                    doc_buf.clear();
+                    let doc = scanner.take_doc(inline_doc.clone());
                     for sym in rest.split(',') {
                         let name = sym.trim().trim_start_matches(':');
                         if !name.is_empty() {
@@ -396,8 +370,7 @@ pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
         }
 
         if let Some(after_def) = code.strip_prefix("def ") {
-            let doc = join_doc_lines(&doc_buf).or(inline_doc);
-            doc_buf.clear();
+            let doc = scanner.take_doc(inline_doc);
             let clean_def = after_def.strip_prefix("self.").unwrap_or(after_def);
             let (fn_name, params_str) = clean_def.find('(').map_or_else(
                 || {
@@ -413,8 +386,7 @@ pub(crate) fn parse_ruby_source(source: &str, bundle: &mut ParsedSourceBundle) {
                 |open_idx| {
                     let name = clean_def[..open_idx].trim().to_string();
                     let params = split_first_paren(&clean_def[open_idx..])
-                        .map(|(p, _)| p)
-                        .unwrap_or_default();
+                        .map_or_else(String::new, |(p, _)| p);
                     (name, params)
                 },
             );
@@ -543,13 +515,15 @@ pub(crate) fn parse_shell_source(source: &str, bundle: &mut ParsedSourceBundle) 
             let doc = join_doc_lines(&doc_buf);
             doc_buf.clear();
             let mut args = Vec::new();
-            for (norm_name, desc) in doc.as_deref().map(extract_doc_tags).unwrap_or_default() {
-                args.push(ParsedArg {
-                    name: norm_name,
-                    type_annotation: Some("string".to_string()),
-                    doc_comment: Some(desc),
-                    line: line_num,
-                });
+            if let Some(ref d) = doc {
+                for (norm_name, desc) in extract_doc_tags(d) {
+                    args.push(ParsedArg {
+                        name: norm_name,
+                        type_annotation: Some("string".to_string()),
+                        doc_comment: Some(desc),
+                        line: line_num,
+                    });
+                }
             }
             current_fn = Some(ParsedFunction {
                 name: fn_name,

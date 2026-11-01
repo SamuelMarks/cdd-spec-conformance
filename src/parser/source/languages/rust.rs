@@ -61,7 +61,7 @@ fn parse_rust_struct_field(
     inline_doc: Option<String>,
     st: &mut ParsedStructOrClass,
 ) {
-    if !code.starts_with('}') && !code.contains("fn ") {
+    if !code.starts_with('}') {
         if let Some((left, right)) = code.trim_end_matches(',').trim().split_once(':') {
             let field_name = left.split_whitespace().last().unwrap_or(left).trim();
             let f_doc = join_doc_lines(doc_buf).or(inline_doc);
@@ -117,89 +117,92 @@ fn advance_cfg_test_state(
     None
 }
 
-/// Records a parsed Rust function or `impl` method into `bundle`.
-///
-/// # Arguments
-///
-/// * `fn_name` - Function or method name.
-/// * `params_str` - Raw parameter list inside `(...)`.
-/// * `ret_type` - Optional return type string.
-/// * `line_num` - 1-based line number.
-/// * `doc_buf` - Accumulated doc comment lines above the function.
-/// * `inline_doc` - Optional trailing inline doc comment.
-/// * `impl_target` - Optional active `impl` target struct name.
-/// * `bundle` - Target `ParsedSourceBundle`.
-#[allow(clippy::too_many_arguments)]
-fn record_rust_function(
-    fn_name: String,
-    params_str: &str,
-    ret_type: Option<String>,
-    line_num: usize,
-    doc_buf: &mut Vec<String>,
-    inline_doc: Option<String>,
-    impl_target: Option<&str>,
-    bundle: &mut ParsedSourceBundle,
-) {
-    let doc = join_doc_lines(doc_buf).or(inline_doc);
-    doc_buf.clear();
-    let mut args = parse_colon_style_args(params_str, line_num);
-    attach_arg_docs(&mut args, doc.as_deref());
-    let func = ParsedFunction {
-        name: fn_name,
-        doc_comment: doc,
-        args,
-        return_type: ret_type,
-        line: line_num,
-    };
-    if let Some(target) = impl_target {
-        if let Some(st) = bundle.structs.iter_mut().find(|s| s.name == target) {
-            st.methods.push(func);
+/// Tracks brace-scoped struct and `impl` state while scanning Rust source lines.
+struct RustBraceState {
+    /// Accumulated doc comment lines above the current declaration.
+    doc_buf: Vec<String>,
+    /// Active struct declaration being populated across lines.
+    current_struct: Option<ParsedStructOrClass>,
+    /// Active `impl` target struct name.
+    impl_target: Option<String>,
+    /// Current net `{` / `}` depth.
+    brace_depth: i32,
+    /// Opening brace depth of `current_struct`.
+    struct_brace_depth: i32,
+    /// Opening brace depth of `impl_target`.
+    impl_brace_depth: i32,
+}
+
+impl RustBraceState {
+    /// Records a parsed Rust function or `impl` method into `bundle`.
+    ///
+    /// # Arguments
+    ///
+    /// * `decl` - Tuple of `(fn_name, params_str, ret_type)`.
+    /// * `line_num` - 1-based line number.
+    /// * `inline_doc` - Optional trailing inline doc comment.
+    /// * `bundle` - Target `ParsedSourceBundle`.
+    fn record_function(
+        &mut self,
+        decl: (String, String, Option<String>),
+        line_num: usize,
+        inline_doc: Option<String>,
+        bundle: &mut ParsedSourceBundle,
+    ) {
+        let (fn_name, params_str, ret_type) = decl;
+        let doc = join_doc_lines(&self.doc_buf).or(inline_doc);
+        self.doc_buf.clear();
+        let mut args = parse_colon_style_args(&params_str, line_num);
+        attach_arg_docs(&mut args, doc.as_deref());
+        let func = ParsedFunction {
+            name: fn_name,
+            doc_comment: doc,
+            args,
+            return_type: ret_type,
+            line: line_num,
+        };
+        if let Some(ref target) = self.impl_target {
+            if let Some(st) = bundle.structs.iter_mut().find(|s| &s.name == target) {
+                st.methods.push(func);
+            } else {
+                bundle.functions.push(func);
+            }
         } else {
             bundle.functions.push(func);
         }
-    } else {
-        bundle.functions.push(func);
     }
-}
 
-/// Records a parsed Rust `struct` declaration into `current_struct` or `bundle.structs`.
-///
-/// # Arguments
-///
-/// * `code` - Trimmed code line containing the `struct` declaration.
-/// * `struct_name` - Extracted struct identifier.
-/// * `line_num` - 1-based line number.
-/// * `brace_depth` - Current brace depth before `code`.
-/// * `doc_buf` - Accumulated doc comment lines above the struct.
-/// * `struct_brace_depth` - Mutable slot storing the struct's opening brace depth.
-/// * `current_struct` - Mutable optional `ParsedStructOrClass` slot.
-/// * `bundle` - Target `ParsedSourceBundle`.
-#[allow(clippy::too_many_arguments)]
-fn record_rust_struct(
-    code: &str,
-    struct_name: String,
-    line_num: usize,
-    brace_depth: i32,
-    doc_buf: &mut Vec<String>,
-    struct_brace_depth: &mut i32,
-    current_struct: &mut Option<ParsedStructOrClass>,
-    bundle: &mut ParsedSourceBundle,
-) {
-    let doc = join_doc_lines(doc_buf);
-    doc_buf.clear();
-    let mut st = ParsedStructOrClass {
-        name: struct_name,
-        doc_comment: doc,
-        fields: Vec::new(),
-        methods: Vec::new(),
-        line: line_num,
-    };
-    if code.contains('{') && !code.contains('}') {
-        *struct_brace_depth = brace_depth;
-        *current_struct = Some(st);
-    } else {
-        attach_field_docs(&mut st.fields, st.doc_comment.as_deref());
-        bundle.structs.push(st);
+    /// Records a parsed Rust `struct` declaration into `self.current_struct` or `bundle.structs`.
+    ///
+    /// # Arguments
+    ///
+    /// * `code` - Trimmed code line containing the `struct` declaration.
+    /// * `struct_name` - Extracted struct identifier.
+    /// * `line_num` - 1-based line number.
+    /// * `bundle` - Target `ParsedSourceBundle`.
+    fn record_struct(
+        &mut self,
+        code: &str,
+        struct_name: String,
+        line_num: usize,
+        bundle: &mut ParsedSourceBundle,
+    ) {
+        let doc = join_doc_lines(&self.doc_buf);
+        self.doc_buf.clear();
+        let mut st = ParsedStructOrClass {
+            name: struct_name,
+            doc_comment: doc,
+            fields: Vec::new(),
+            methods: Vec::new(),
+            line: line_num,
+        };
+        if code.contains('{') && !code.contains('}') {
+            self.struct_brace_depth = self.brace_depth;
+            self.current_struct = Some(st);
+        } else {
+            attach_field_docs(&mut st.fields, st.doc_comment.as_deref());
+            bundle.structs.push(st);
+        }
     }
 }
 
@@ -210,14 +213,16 @@ fn record_rust_struct(
 /// * `source` - Raw Rust source code string.
 /// * `bundle` - Mutable `ParsedSourceBundle` to populate.
 pub(crate) fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
-    let mut doc_buf: Vec<String> = Vec::new();
+    let mut state = RustBraceState {
+        doc_buf: Vec::new(),
+        current_struct: None,
+        impl_target: None,
+        brace_depth: 0,
+        struct_brace_depth: 0,
+        impl_brace_depth: 0,
+    };
     let mut in_block_comment = false;
     let mut in_multiline_attr = false;
-    let mut current_struct: Option<ParsedStructOrClass> = None;
-    let mut impl_target: Option<String> = None;
-    let mut brace_depth: i32 = 0;
-    let mut struct_brace_depth: i32 = 0;
-    let mut impl_brace_depth: i32 = 0;
     let mut pending_cfg_test = false;
     let mut cfg_test_brace_depth: Option<i32> = None;
 
@@ -235,13 +240,13 @@ pub(crate) fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
         }
         if let Some(c) = extract_comment_line(trimmed, &mut in_block_comment) {
             if cfg_test_brace_depth.is_none() && !pending_cfg_test {
-                doc_buf.push(c);
+                state.doc_buf.push(c);
             }
             continue;
         }
         if trimmed == "#[cfg(test)]" {
             pending_cfg_test = true;
-            doc_buf.clear();
+            state.doc_buf.clear();
             continue;
         }
         if trimmed.starts_with("#[") {
@@ -256,7 +261,7 @@ pub(crate) fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
 
         match advance_cfg_test_state(
             code,
-            &mut brace_depth,
+            &mut state.brace_depth,
             &mut pending_cfg_test,
             &mut cfg_test_brace_depth,
         ) {
@@ -265,51 +270,33 @@ pub(crate) fn parse_rust_source(source: &str, bundle: &mut ParsedSourceBundle) {
             None => {}
         }
 
-        if current_struct.is_none() && code.starts_with("impl") && code.contains('{') {
+        if state.current_struct.is_none() && code.starts_with("impl") && code.contains('{') {
             if let Some(target_name) = extract_rust_impl_target(code) {
-                impl_target = Some(target_name);
-                impl_brace_depth = brace_depth;
+                state.impl_target = Some(target_name);
+                state.impl_brace_depth = state.brace_depth;
             }
-            doc_buf.clear();
+            state.doc_buf.clear();
         } else if let Some(struct_name) = match_keyword_decl(code, "struct") {
-            record_rust_struct(
-                code,
-                struct_name,
-                line_num,
-                brace_depth,
-                &mut doc_buf,
-                &mut struct_brace_depth,
-                &mut current_struct,
-                bundle,
-            );
-        } else if let Some(ref mut st) = current_struct {
-            parse_rust_struct_field(code, line_num, &mut doc_buf, inline_doc, st);
-        } else if let Some((fn_name, params_str, ret_type)) = match_fn_decl(code, "fn") {
-            record_rust_function(
-                fn_name,
-                &params_str,
-                ret_type,
-                line_num,
-                &mut doc_buf,
-                inline_doc,
-                impl_target.as_deref(),
-                bundle,
-            );
+            state.record_struct(code, struct_name, line_num, bundle);
+        } else if let Some(ref mut st) = state.current_struct {
+            parse_rust_struct_field(code, line_num, &mut state.doc_buf, inline_doc, st);
+        } else if let Some(decl) = match_fn_decl(code, "fn") {
+            state.record_function(decl, line_num, inline_doc, bundle);
         } else if !["pub", "async ", "const ", "unsafe ", "extern "]
             .iter()
             .any(|p| code.starts_with(p))
         {
-            doc_buf.clear();
+            state.doc_buf.clear();
         }
 
-        update_brace_depth_ignoring_strings(code, &mut brace_depth);
+        update_brace_depth_ignoring_strings(code, &mut state.brace_depth);
 
-        if current_struct.is_some() && brace_depth <= struct_brace_depth {
-            finish_struct(&mut current_struct, bundle);
-            doc_buf.clear();
+        if state.current_struct.is_some() && state.brace_depth <= state.struct_brace_depth {
+            finish_struct(&mut state.current_struct, bundle);
+            state.doc_buf.clear();
         }
-        if impl_target.is_some() && brace_depth <= impl_brace_depth {
-            impl_target = None;
+        if state.impl_target.is_some() && state.brace_depth <= state.impl_brace_depth {
+            state.impl_target = None;
         }
     }
 }

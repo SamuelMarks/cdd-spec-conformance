@@ -74,17 +74,7 @@ end subroutine list_pets
         _ => (
             "sdk.zig",
             format!(
-                "/// Pet model.
-pub const Pet = struct {{
-    /// ID.
-    id: i64,
-    /// Name.
-    name: []const u8,{extra_zig}
-}};
-/// List pets.
-/// @param limit Max items.
-pub fn listPets(limit: i32) void {{}}
-"
+                "/// Pet model.\npub const Pet = struct {{\n    /// ID.\n    id: i64,\n    /// Name.\n    name: []const u8,{extra_zig}\n}};\n/// List pets.\n/// @param limit Max items.\npub fn listPets(limit: i32) void {{}}\n"
             ),
         ),
     }
@@ -353,17 +343,7 @@ end subroutine purchase_pet_workflow
         _ => (
             "workflow.zig",
             format!(
-                "/// Purchase input.
-pub const PurchaseInput = struct {{
-    /// Pet ID.
-    petId: i64,
-    /// Coupon code.
-    couponCode: []const u8,{extra_zig}
-}};
-/// Purchase pet workflow.
-/// @param petId Pet ID.
-pub fn purchasePetWorkflow(petId: i64) void {{}}
-"
+                "/// Purchase input.\npub const PurchaseInput = struct {{\n    /// Pet ID.\n    petId: i64,\n    /// Coupon code.\n    couponCode: []const u8,{extra_zig}\n}};\n/// Purchase pet workflow.\n/// @param petId Pet ID.\npub fn purchasePetWorkflow(petId: i64) void {{}}\n"
             ),
         ),
     }

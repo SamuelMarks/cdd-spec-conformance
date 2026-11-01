@@ -34,7 +34,7 @@ def get_color(cov_str: str) -> str:
 
 
 def calculate_test_coverage() -> str:
-    """Calculates test coverage (minimum of lines, functions, and regions) via cargo-llvm-cov or cargo-tarpaulin.
+    """Calculates test coverage (minimum of lines, functions, regions, and branches) via cargo-llvm-cov or cargo-tarpaulin.
 
     Returns:
         Formatted percentage string (e.g. "100.00" or "98.50").
@@ -42,36 +42,56 @@ def calculate_test_coverage() -> str:
     Raises:
         SystemExit: If neither coverage tool succeeds.
     """
-    try:
-        res = subprocess.run(
-            ["cargo", "llvm-cov", "--all-targets", "--json", "--summary-only"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        data = json.loads(res.stdout)
-        totals = data["data"][0]["totals"]
-        line_pct = float(totals["lines"]["percent"])
-        fn_pct = float(totals["functions"]["percent"])
-        reg_pct = float(totals["regions"]["percent"])
-        metrics = [line_pct, fn_pct, reg_pct]
-        branches = totals.get("branches", {})
-        if branches.get("count", 0) > 0:
-            metrics.append(float(branches["percent"]))
-        pct = min(metrics)
-        if pct >= 99.995:
-            return "100.00"
-        return f"{pct:.2f}"
-    except (
-        subprocess.SubprocessError,
-        OSError,
-        json.JSONDecodeError,
-        KeyError,
-        IndexError,
-        ValueError,
-    ) as exc:
-        if os.environ.get("VERBOSE"):
-            print(f"cargo llvm-cov fallback triggered: {exc}", file=sys.stderr)
+    for cmd in [
+        [
+            "cargo",
+            "+nightly",
+            "llvm-cov",
+            "--all-targets",
+            "--workspace",
+            "--branch",
+            "--json",
+            "--summary-only",
+        ],
+        [
+            "cargo",
+            "llvm-cov",
+            "--all-targets",
+            "--workspace",
+            "--json",
+            "--summary-only",
+        ],
+    ]:
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            data = json.loads(res.stdout)
+            totals = data["data"][0]["totals"]
+            line_pct = float(totals["lines"]["percent"])
+            fn_pct = float(totals["functions"]["percent"])
+            reg_pct = float(totals["regions"]["percent"])
+            metrics = [line_pct, fn_pct, reg_pct]
+            branches = totals.get("branches", {})
+            if branches.get("count", 0) > 0:
+                metrics.append(float(branches["percent"]))
+            pct = min(metrics)
+            if pct >= 99.995:
+                return "100.00"
+            return f"{pct:.2f}"
+        except (
+            subprocess.SubprocessError,
+            OSError,
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+            ValueError,
+        ) as exc:
+            if os.environ.get("VERBOSE"):
+                print(f"cargo llvm-cov fallback triggered: {exc}", file=sys.stderr)
 
     try:
         res = subprocess.run(
@@ -116,8 +136,13 @@ def calculate_doc_coverage() -> str:
             check=False,
         )
         out = res.stdout + chr(10) + res.stderr
+        gen_match = re.search(r'Generated output into "([^"]+)"', out)
         target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
-        txt_path = os.path.join(target_dir, "doc", "cdd_conformance.txt")
+        txt_path = (
+            gen_match.group(1)
+            if gen_match
+            else os.path.join(target_dir, "doc", "cdd_conformance.txt")
+        )
         if os.path.exists(txt_path):
             with open(txt_path, "r", encoding="utf-8") as tf:
                 out += chr(10) + tf.read()
@@ -152,7 +177,7 @@ def count_documented_pub_items(src_dir: str) -> Tuple[int, int]:
     total_items = 0
     documented_items = 0
     item_pattern = re.compile(
-        r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|const\s+)?(?:fn|struct|enum|mod|trait|type|const)\s+"
+        r"^(?: {0,4})(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|const\s+)?(?:fn|struct|enum|mod|trait|type|const)\s+[A-Za-z_][A-Za-z0-9_]*"
     )
     for root, _, files in os.walk(src_dir):
         for file in files:

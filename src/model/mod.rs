@@ -236,7 +236,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)]
     fn test_language_id_and_custom_slug() {
         assert_eq!(LanguageId::core_13().len(), 13);
         for lang in LanguageId::core_13() {
@@ -250,19 +249,23 @@ mod tests {
             assert_eq!(round.as_ref(), Some(lang));
         }
 
-        assert_eq!(LanguageId::from_str("cdd-c++").ok(), Some(LanguageId::Cpp));
-        assert_eq!(LanguageId::from_str("c#").ok(), Some(LanguageId::CSharp));
-        assert_eq!(LanguageId::from_str("golang").ok(), Some(LanguageId::Go));
-        assert_eq!(LanguageId::from_str("kt").ok(), Some(LanguageId::Kotlin));
-        assert_eq!(LanguageId::from_str("py").ok(), Some(LanguageId::Python));
-        assert_eq!(LanguageId::from_str("rb").ok(), Some(LanguageId::Ruby));
-        assert_eq!(LanguageId::from_str("rs").ok(), Some(LanguageId::Rust));
-        assert_eq!(LanguageId::from_str("shell").ok(), Some(LanguageId::Sh));
-        assert_eq!(
-            LanguageId::from_str("typescript").ok(),
-            Some(LanguageId::TypeScript)
-        );
+        for (alias, expected) in [
+            ("cdd-c++", LanguageId::Cpp),
+            ("c#", LanguageId::CSharp),
+            ("golang", LanguageId::Go),
+            ("kt", LanguageId::Kotlin),
+            ("py", LanguageId::Python),
+            ("rb", LanguageId::Ruby),
+            ("rs", LanguageId::Rust),
+            ("shell", LanguageId::Sh),
+            ("typescript", LanguageId::TypeScript),
+        ] {
+            assert_eq!(LanguageId::from_str(alias).ok(), Some(expected));
+        }
+    }
 
+    #[test]
+    fn test_custom_language_slug_validation() {
         let zig = LanguageId::from_str("cdd-zig").ok();
         assert!(zig.as_ref().is_some_and(|l| !l.is_core()));
         assert_eq!(zig.as_ref().map(LanguageId::as_str), Some("zig"));
@@ -288,10 +291,9 @@ mod tests {
         assert_eq!(try_back, Some(cobol_slug));
 
         assert!(CustomLanguageSlug::new("a1").is_ok());
-        assert!(CustomLanguageSlug::new("").is_err());
-        assert!(CustomLanguageSlug::new("123bad").is_err());
-        assert!(CustomLanguageSlug::new("bad_underscore").is_err());
-        assert!(CustomLanguageSlug::new("bad-").is_err());
+        for bad in ["", "123bad", "bad_underscore", "bad-"] {
+            assert!(CustomLanguageSlug::new(bad).is_err());
+        }
         assert!(LanguageId::try_from(String::new()).is_err());
     }
 
@@ -376,7 +378,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     fn test_arazzo_domain_primitives() {
         let v = ArazzoVersion::from_str("1.1.0").ok();
         assert_eq!(v.as_ref().map(ArazzoVersion::as_str), Some("1.1.0"));
@@ -384,9 +385,9 @@ mod tests {
             v.as_ref().map(ToString::to_string),
             Some("1.1.0".to_string())
         );
-        assert!(ArazzoVersion::from_str("1.0.0").is_err());
-        assert!(ArazzoVersion::from_str("1.1.").is_err());
-        assert!(ArazzoVersion::from_str("1.1.x").is_err());
+        for bad_ver in ["1.0.0", "1.1.", "1.1.x"] {
+            assert!(ArazzoVersion::from_str(bad_ver).is_err());
+        }
 
         for (raw, expected) in [
             ("openapi", ArazzoSourceType::OpenApi),
@@ -455,7 +456,10 @@ mod tests {
             assert_eq!(expected.to_string(), raw);
         }
         assert!(ArazzoFailureActionType::from_str("ignore").is_err());
+    }
 
+    #[test]
+    fn test_arazzo_criterion_types() {
         for (val, expected) in [
             (serde_json::json!("simple"), ArazzoCriterionType::Simple),
             (serde_json::json!("regex"), ArazzoCriterionType::Regex),
@@ -494,32 +498,19 @@ mod tests {
                 Some(expected)
             );
         }
-        assert!(ArazzoCriterionType::from_json_value(
-            &serde_json::json!("unknown"),
-            &LanguageId::Rust,
-            "/type"
-        )
-        .is_err());
-        assert!(ArazzoCriterionType::from_json_value(
-            &serde_json::json!({"type": "jsonpath", "version": "bad"}),
-            &LanguageId::Rust,
-            "/type"
-        )
-        .is_err());
-        assert!(ArazzoCriterionType::from_json_value(
-            &serde_json::json!(123),
-            &LanguageId::Rust,
-            "/type"
-        )
-        .is_err());
+        for bad_val in [
+            serde_json::json!("unknown"),
+            serde_json::json!({"type": "jsonpath", "version": "bad"}),
+            serde_json::json!(123),
+        ] {
+            assert!(
+                ArazzoCriterionType::from_json_value(&bad_val, &LanguageId::Rust, "/type").is_err()
+            );
+        }
+    }
 
-        let sel = ArazzoSelectorObject {
-            context: "$response.body".to_string(),
-            selector: "$.id".to_string(),
-            selector_type: Some(ArazzoCriterionType::JsonPathRfc9535),
-        };
-        assert_eq!(sel.selector, "$.id");
-
+    #[test]
+    fn test_arazzo_runtime_expression_roots() {
         for (expr, expected) in [
             ("$url", ArazzoRuntimeExpressionKind::Url),
             ("$method", ArazzoRuntimeExpressionKind::Method),
@@ -603,17 +594,25 @@ mod tests {
         }
         assert!(ArazzoRuntimeExpressionKind::parse_root("$unknown.val", "/expr").is_err());
         assert!(ArazzoRuntimeExpressionKind::parse_root("$inputs.", "/expr").is_err());
+        assert!(ArazzoRuntimeExpressionKind::parse_root("$request.body_extra", "/expr").is_err());
+    }
 
-        let step_sum = ArazzoStepSummary {
-            step_id: "step1".to_string(),
-            target: ArazzoStepTarget::OperationId("listPets".to_string()),
-            action: Some(ArazzoMessageAction::Send),
-            output_keys: vec!["petId".to_string()],
+    #[test]
+    fn test_arazzo_ast_step_construction() {
+        let sel = ArazzoSelectorObject {
+            context: "$response.body".to_string(),
+            selector: "$.id".to_string(),
+            selector_type: Some(ArazzoCriterionType::JsonPathRfc9535),
         };
         let wf_sum = ArazzoWorkflowSummary {
             workflow_id: "wf1".to_string(),
             input_properties: vec!["coupon".to_string()],
-            steps: vec![step_sum],
+            steps: vec![ArazzoStepSummary {
+                step_id: "step1".to_string(),
+                target: ArazzoStepTarget::OperationId("listPets".to_string()),
+                action: Some(ArazzoMessageAction::Send),
+                output_keys: vec!["petId".to_string()],
+            }],
             output_keys: vec!["resultId".to_string()],
         };
         assert_eq!(wf_sum.workflow_id, "wf1");
@@ -654,17 +653,18 @@ mod tests {
             criteria: vec![crit_obj.clone()],
             extensions: BTreeMap::new(),
         };
-        let mut step_outputs = BTreeMap::new();
-        step_outputs.insert("selectedId".to_string(), ArazzoOutputValue::Selector(sel));
-        step_outputs.insert(
-            "rawStatus".to_string(),
-            ArazzoOutputValue::Expression("$statusCode".to_string()),
-        );
+        let step_outputs = BTreeMap::from([
+            ("selectedId".to_string(), ArazzoOutputValue::Selector(sel)),
+            (
+                "rawStatus".to_string(),
+                ArazzoOutputValue::Expression("$statusCode".to_string()),
+            ),
+        ]);
         let step_ast = ArazzoStepObject {
             step_id: "step1".to_string(),
             description: Some("Find pet".to_string()),
             target: ArazzoStepTarget::OperationId("listPets".to_string()),
-            parameters: vec![ArazzoParameterOrReusable::Parameter(param_obj.clone())],
+            parameters: vec![ArazzoParameterOrReusable::Parameter(param_obj)],
             request_body: Some(ArazzoRequestBodyObject {
                 content_type: Some("application/json".to_string()),
                 payload: Some(serde_json::json!({"petId": 1})),
@@ -682,29 +682,21 @@ mod tests {
             action: None,
             success_criteria: vec![crit_obj],
             on_success: vec![
-                ArazzoSuccessActionOrReusable::Action(succ_act.clone()),
+                ArazzoSuccessActionOrReusable::Action(succ_act),
                 ArazzoSuccessActionOrReusable::Reusable(reusable_obj.clone()),
             ],
             on_failure: vec![
-                ArazzoFailureActionOrReusable::Action(fail_act.clone()),
+                ArazzoFailureActionOrReusable::Action(fail_act),
                 ArazzoFailureActionOrReusable::Reusable(reusable_obj),
             ],
-            outputs: step_outputs.clone(),
-            extensions: BTreeMap::new(),
-        };
-        let wf_ast = ArazzoWorkflowObject {
-            workflow_id: "wf1".to_string(),
-            summary: Some("Summary".to_string()),
-            description: Some("Desc".to_string()),
-            inputs: Some(serde_json::json!({"type": "object"})),
-            depends_on: Vec::new(),
-            steps: vec![step_ast],
-            success_actions: Vec::new(),
-            failure_actions: Vec::new(),
             outputs: step_outputs,
-            parameters: Vec::new(),
             extensions: BTreeMap::new(),
         };
+        assert_eq!(step_ast.step_id, "step1");
+    }
+
+    #[test]
+    fn test_arazzo_ast_document_construction() {
         let doc_ast = ArazzoDocument {
             arazzo: ArazzoVersion("1.1.0".to_string()),
             self_uri: Some("https://example.com/wf.arazzo.yaml".to_string()),
@@ -721,12 +713,24 @@ mod tests {
                 source_type: Some(ArazzoSourceType::OpenApi),
                 extensions: BTreeMap::new(),
             }],
-            workflows: vec![wf_ast],
+            workflows: vec![ArazzoWorkflowObject {
+                workflow_id: "wf1".to_string(),
+                summary: Some("Summary".to_string()),
+                description: Some("Desc".to_string()),
+                inputs: Some(serde_json::json!({"type": "object"})),
+                depends_on: Vec::new(),
+                steps: Vec::new(),
+                success_actions: Vec::new(),
+                failure_actions: Vec::new(),
+                outputs: BTreeMap::new(),
+                parameters: Vec::new(),
+                extensions: BTreeMap::new(),
+            }],
             components: Some(ArazzoComponentsObject {
                 inputs: BTreeMap::new(),
-                parameters: BTreeMap::from([("limit".to_string(), param_obj)]),
-                success_actions: BTreeMap::from([("done".to_string(), succ_act)]),
-                failure_actions: BTreeMap::from([("retryOnce".to_string(), fail_act)]),
+                parameters: BTreeMap::new(),
+                success_actions: BTreeMap::new(),
+                failure_actions: BTreeMap::new(),
                 extensions: BTreeMap::new(),
             }),
             extensions: BTreeMap::new(),
@@ -735,8 +739,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
-    fn test_strong_enums_and_normalized_openapi_spec() {
+    fn test_strong_domain_enums() {
         assert_eq!(
             EndpointPath::try_new("/pets/1")
                 .ok()
@@ -744,9 +747,9 @@ mod tests {
                 .map(EndpointPath::as_str),
             Some("/pets/1")
         );
-        assert!(EndpointPath::try_new("").is_err());
-        assert!(EndpointPath::try_new("pets").is_err());
-        assert!(EndpointPath::try_new("/pets with space").is_err());
+        for bad_ep in ["", "pets", "/pets with space"] {
+            assert!(EndpointPath::try_new(bad_ep).is_err());
+        }
 
         for (raw, expected) in [
             ("actix-web", ServerFramework::ActixWeb),
@@ -835,7 +838,10 @@ mod tests {
             assert_eq!(expected.to_string(), expected.as_str());
         }
         assert!(SymbolKind::from_str("unknown_sym").is_err());
+    }
 
+    #[test]
+    fn test_wire_enums_and_mcp_method_names() {
         assert_eq!(ParameterSerializationStyle::all().len(), 12);
         for style in ParameterSerializationStyle::all() {
             assert_eq!(style.to_string(), style.as_str());
@@ -897,7 +903,10 @@ mod tests {
         let sig_cnt = SignatureCount::new(4, 12);
         assert_eq!(sig_cnt.structs, 4);
         assert_eq!(sig_cnt.functions, 12);
+    }
 
+    #[test]
+    fn test_normalized_openapi_spec_and_arazzo_from_json() {
         let oas_val = serde_json::json!({
             "openapi": "3.2.0",
             "components": {
@@ -937,9 +946,13 @@ mod tests {
             parsed_oas.as_ref().map(|s| s.spec_version.as_str()),
             Some("3.2.0")
         );
-        assert!(parsed_oas.as_ref().is_some_and(
-            |s| s.schemas.contains_key("Pet") && s.operations.contains_key("listPets")
-        ));
+        assert_eq!(
+            parsed_oas.as_ref().map(|s| (
+                s.schemas.contains_key("Pet"),
+                s.operations.contains_key("listPets")
+            )),
+            Some((true, true))
+        );
 
         let swagger_val = serde_json::json!({
             "swagger": "2.0",

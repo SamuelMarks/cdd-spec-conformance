@@ -68,6 +68,7 @@ impl fmt::Display for ArazzoVersion {
 }
 
 impl FromStr for ArazzoVersion {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoVersion` from a string slice.
@@ -120,6 +121,7 @@ impl fmt::Display for ArazzoSourceType {
 }
 
 impl FromStr for ArazzoSourceType {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoSourceType` from a string slice.
@@ -189,6 +191,7 @@ impl fmt::Display for ArazzoParameterIn {
 }
 
 impl FromStr for ArazzoParameterIn {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoParameterIn` from a string slice.
@@ -281,6 +284,7 @@ impl fmt::Display for ArazzoMessageAction {
 }
 
 impl FromStr for ArazzoMessageAction {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoMessageAction` from a string slice.
@@ -338,6 +342,7 @@ impl fmt::Display for ArazzoSuccessActionType {
 }
 
 impl FromStr for ArazzoSuccessActionType {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoSuccessActionType` from a string slice.
@@ -398,6 +403,7 @@ impl fmt::Display for ArazzoFailureActionType {
 }
 
 impl FromStr for ArazzoFailureActionType {
+    /// Error type returned when Arazzo token parsing fails.
     type Err = ConformanceError;
 
     /// Parses an `ArazzoFailureActionType` from a string slice.
@@ -578,73 +584,45 @@ impl ArazzoRuntimeExpressionKind {
     /// Returns `ConformanceError::ArazzoRuntimeExpressionError` if `expr` is not a valid Arazzo 1.1.0 runtime expression.
     pub fn parse_root(expr: &str, pointer: &str) -> Result<Self, ConformanceError> {
         let trimmed = expr.trim();
-        if trimmed == "$url" {
-            return Ok(Self::Url);
+        for (exact, kind) in [
+            ("$url", Self::Url),
+            ("$method", Self::Method),
+            ("$statusCode", Self::StatusCode),
+            ("$self", Self::SelfUri),
+        ] {
+            if trimmed == exact {
+                return Ok(kind);
+            }
         }
-        if trimmed == "$method" {
-            return Ok(Self::Method);
+        for (base, kind) in [
+            ("$request.body", Self::RequestBody),
+            ("$response.body", Self::ResponseBody),
+            ("$message.header", Self::MessageHeader),
+            ("$message.payload", Self::MessagePayload),
+        ] {
+            if let Some(rest) = trimmed.strip_prefix(base) {
+                if rest.is_empty() | rest.starts_with('#') | rest.starts_with('.') {
+                    return Ok(kind);
+                }
+            }
         }
-        if trimmed == "$statusCode" {
-            return Ok(Self::StatusCode);
-        }
-        if trimmed == "$self" {
-            return Ok(Self::SelfUri);
-        }
-        if trimmed == "$request.body"
-            || trimmed.starts_with("$request.body#")
-            || trimmed.starts_with("$request.body.")
-        {
-            return Ok(Self::RequestBody);
-        }
-        if trimmed.starts_with("$request.header.") && trimmed.len() > "$request.header.".len() {
-            return Ok(Self::RequestHeader);
-        }
-        if trimmed.starts_with("$request.query.") && trimmed.len() > "$request.query.".len() {
-            return Ok(Self::RequestQuery);
-        }
-        if trimmed.starts_with("$request.path.") && trimmed.len() > "$request.path.".len() {
-            return Ok(Self::RequestPath);
-        }
-        if trimmed == "$response.body"
-            || trimmed.starts_with("$response.body#")
-            || trimmed.starts_with("$response.body.")
-        {
-            return Ok(Self::ResponseBody);
-        }
-        if trimmed.starts_with("$response.header.") && trimmed.len() > "$response.header.".len() {
-            return Ok(Self::ResponseHeader);
-        }
-        if trimmed == "$message.header"
-            || trimmed.starts_with("$message.header#")
-            || trimmed.starts_with("$message.header.")
-        {
-            return Ok(Self::MessageHeader);
-        }
-        if trimmed == "$message.payload"
-            || trimmed.starts_with("$message.payload#")
-            || trimmed.starts_with("$message.payload.")
-        {
-            return Ok(Self::MessagePayload);
-        }
-        if trimmed.starts_with("$inputs.") && trimmed.len() > "$inputs.".len() {
-            return Ok(Self::Inputs);
-        }
-        if trimmed.starts_with("$outputs.") && trimmed.len() > "$outputs.".len() {
-            return Ok(Self::Outputs);
-        }
-        if trimmed.starts_with("$steps.") && trimmed.len() > "$steps.".len() {
-            return Ok(Self::Steps);
-        }
-        if trimmed.starts_with("$workflows.") && trimmed.len() > "$workflows.".len() {
-            return Ok(Self::Workflows);
-        }
-        if trimmed.starts_with("$sourceDescriptions.")
-            && trimmed.len() > "$sourceDescriptions.".len()
-        {
-            return Ok(Self::SourceDescriptions);
-        }
-        if trimmed.starts_with("$components.") && trimmed.len() > "$components.".len() {
-            return Ok(Self::Components);
+        for (prefix, kind) in [
+            ("$request.header.", Self::RequestHeader),
+            ("$request.query.", Self::RequestQuery),
+            ("$request.path.", Self::RequestPath),
+            ("$response.header.", Self::ResponseHeader),
+            ("$inputs.", Self::Inputs),
+            ("$outputs.", Self::Outputs),
+            ("$steps.", Self::Steps),
+            ("$workflows.", Self::Workflows),
+            ("$sourceDescriptions.", Self::SourceDescriptions),
+            ("$components.", Self::Components),
+        ] {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                if !rest.is_empty() {
+                    return Ok(kind);
+                }
+            }
         }
         Err(ConformanceError::ArazzoRuntimeExpressionError {
             expression: expr.to_string(),
@@ -1076,59 +1054,79 @@ fn parse_arazzo_criterion(
     })
 }
 
-/// Parses `onSuccess` and `onFailure` action arrays from a step JSON object.
+/// Extracts an optional string field from a JSON value.
+///
+/// # Arguments
+///
+/// * `val` - Parent JSON value.
+/// * `key` - Field key name.
+///
+/// # Returns
+///
+/// `Some(String)` if the field is a JSON string, or `None`.
+fn get_opt_str(val: &serde_json::Value, key: &str) -> Option<String> {
+    val.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Parses `onSuccess` and `onFailure` action lists from a step JSON object.
 ///
 /// # Arguments
 ///
 /// * `step` - Step JSON value.
+/// * `step_ptr` - JSON Pointer for this step.
+/// * `language` - Language identifier for error attribution.
 ///
 /// # Returns
 ///
 /// Tuple `(on_success, on_failure)`.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns `ConformanceError` if any action `type` token is unrecognized.
 fn parse_arazzo_step_actions(
     step: &serde_json::Value,
-) -> (
-    Vec<ArazzoSuccessActionOrReusable>,
-    Vec<ArazzoFailureActionOrReusable>,
-) {
+    step_ptr: &str,
+    language: &LanguageId,
+) -> Result<
+    (
+        Vec<ArazzoSuccessActionOrReusable>,
+        Vec<ArazzoFailureActionOrReusable>,
+    ),
+    ConformanceError,
+> {
     let mut on_success = Vec::new();
-    for act_val in step
+    for (idx, act_val) in step
         .get("onSuccess")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
-        if let Some(ref_str) = act_val.get("reference").and_then(serde_json::Value::as_str) {
+        if let Some(reference) = get_opt_str(act_val, "reference") {
             on_success.push(ArazzoSuccessActionOrReusable::Reusable(
                 ArazzoReusableObject {
-                    reference: ref_str.to_string(),
+                    reference,
                     value: act_val.get("value").cloned(),
                 },
             ));
         } else {
-            let t_str = act_val
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("end");
-            let action_type =
-                ArazzoSuccessActionType::from_str(t_str).unwrap_or(ArazzoSuccessActionType::End);
+            let t_str = get_opt_str(act_val, "type");
+            let t_raw = t_str.as_deref().unwrap_or("end");
+            let action_type = ArazzoSuccessActionType::from_str(t_raw).map_err(|_| {
+                ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/onSuccess/{idx}/type"),
+                    reason: format!("invalid success action type '{t_raw}'"),
+                }
+            })?;
             on_success.push(ArazzoSuccessActionOrReusable::Action(
                 ArazzoSuccessActionObject {
-                    name: act_val
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
+                    name: get_opt_str(act_val, "name").unwrap_or_default(),
                     action_type,
-                    workflow_id: act_val
-                        .get("workflowId")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
-                    step_id: act_val
-                        .get("stepId")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
+                    workflow_id: get_opt_str(act_val, "workflowId"),
+                    step_id: get_opt_str(act_val, "stepId"),
                     parameters: Vec::new(),
                     criteria: Vec::new(),
                     extensions: extract_extensions_map(act_val.as_object()),
@@ -1138,42 +1136,36 @@ fn parse_arazzo_step_actions(
     }
 
     let mut on_failure = Vec::new();
-    for act_val in step
+    for (idx, act_val) in step
         .get("onFailure")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
-        if let Some(ref_str) = act_val.get("reference").and_then(serde_json::Value::as_str) {
+        if let Some(reference) = get_opt_str(act_val, "reference") {
             on_failure.push(ArazzoFailureActionOrReusable::Reusable(
                 ArazzoReusableObject {
-                    reference: ref_str.to_string(),
+                    reference,
                     value: act_val.get("value").cloned(),
                 },
             ));
         } else {
-            let t_str = act_val
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("end");
-            let action_type =
-                ArazzoFailureActionType::from_str(t_str).unwrap_or(ArazzoFailureActionType::End);
+            let t_str = get_opt_str(act_val, "type");
+            let t_raw = t_str.as_deref().unwrap_or("end");
+            let action_type = ArazzoFailureActionType::from_str(t_raw).map_err(|_| {
+                ConformanceError::ArazzoSchemaViolation {
+                    language: language.clone(),
+                    pointer: format!("{step_ptr}/onFailure/{idx}/type"),
+                    reason: format!("invalid failure action type '{t_raw}'"),
+                }
+            })?;
             on_failure.push(ArazzoFailureActionOrReusable::Action(
                 ArazzoFailureActionObject {
-                    name: act_val
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
+                    name: get_opt_str(act_val, "name").unwrap_or_default(),
                     action_type,
-                    workflow_id: act_val
-                        .get("workflowId")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
-                    step_id: act_val
-                        .get("stepId")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
+                    workflow_id: get_opt_str(act_val, "workflowId"),
+                    step_id: get_opt_str(act_val, "stepId"),
                     parameters: Vec::new(),
                     retry_after: act_val
                         .get("retryAfter")
@@ -1187,7 +1179,7 @@ fn parse_arazzo_step_actions(
             ));
         }
     }
-    (on_success, on_failure)
+    Ok((on_success, on_failure))
 }
 
 /// Parses the mutually exclusive target (`operationId`, `operationPath`, `channelPath`, or `workflowId`) of an Arazzo step.
@@ -1255,7 +1247,7 @@ fn parse_arazzo_step_ast(
         .get("stepId")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    if step_id.trim().is_empty() || !seen_steps.insert(step_id.to_string()) {
+    if step_id.trim().is_empty() | !seen_steps.insert(step_id.to_string()) {
         return Err(ConformanceError::ArazzoSchemaViolation {
             language: language.clone(),
             pointer: format!("{step_ptr}/stepId"),
@@ -1326,7 +1318,7 @@ fn parse_arazzo_step_ast(
         success_criteria.push(parse_arazzo_criterion(crit, &c_ptr, language)?);
     }
 
-    let (on_success, on_failure) = parse_arazzo_step_actions(step);
+    let (on_success, on_failure) = parse_arazzo_step_actions(step, step_ptr, language)?;
     let depends_on: Vec<String> = step
         .get("dependsOn")
         .and_then(serde_json::Value::as_array)
@@ -1456,14 +1448,14 @@ fn validate_arazzo_component_ref(
     doc: &serde_json::Value,
     language: &LanguageId,
 ) -> Result<(), ConformanceError> {
-    let parts: Vec<&str> = ref_str.split('.').collect();
-    let resolved = if parts.len() == 3 && parts[0] == "$components" {
-        doc.get("components")
-            .and_then(|c| c.get(parts[1]))
-            .and_then(|sec| sec.get(parts[2]))
-    } else {
-        None
-    };
+    let resolved = ref_str
+        .strip_prefix("$components.")
+        .and_then(|rest| rest.split_once('.'))
+        .and_then(|(sec_name, item_name)| {
+            doc.get("components")
+                .and_then(|c| c.get(sec_name))
+                .and_then(|sec| sec.get(item_name))
+        });
     if resolved.is_none() {
         return Err(ConformanceError::ArazzoSchemaViolation {
             language: language.clone(),
@@ -1514,8 +1506,10 @@ fn parse_arazzo_source_descriptions(
             .get("url")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        if name.trim().is_empty() || url.trim().is_empty() || !seen_sources.insert(name.to_string())
-        {
+        let valid_entry = !name.trim().is_empty()
+            & !url.trim().is_empty()
+            & seen_sources.insert(name.to_string());
+        if !valid_entry {
             return Err(ConformanceError::ArazzoSchemaViolation {
                 language: language.clone(),
                 pointer: ptr,
@@ -1582,7 +1576,7 @@ fn parse_arazzo_workflows(
             .get("workflowId")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        if wf_id.trim().is_empty() || !seen_workflows.insert(wf_id.to_string()) {
+        if wf_id.trim().is_empty() | !seen_workflows.insert(wf_id.to_string()) {
             return Err(ConformanceError::ArazzoSchemaViolation {
                 language: language.clone(),
                 pointer: format!("{wf_ptr}/workflowId"),
@@ -1664,7 +1658,7 @@ impl ArazzoDocument {
 
         let self_uri = if let Some(self_str) = doc.get("$self").and_then(serde_json::Value::as_str)
         {
-            if self_str.is_empty() || self_str.contains('#') {
+            if self_str.is_empty() | self_str.contains('#') {
                 return Err(ConformanceError::ArazzoSchemaViolation {
                     language: language.clone(),
                     pointer: "/$self".to_string(),
@@ -1687,7 +1681,7 @@ impl ArazzoDocument {
             .and_then(|i| i.get("version"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        if info_title.trim().is_empty() || info_ver.trim().is_empty() {
+        if info_title.trim().is_empty() | info_ver.trim().is_empty() {
             return Err(ConformanceError::ArazzoSchemaViolation {
                 language: language.clone(),
                 pointer: "/info".to_string(),
@@ -1719,8 +1713,9 @@ impl ArazzoDocument {
                 let inputs = c_map
                     .get("inputs")
                     .and_then(serde_json::Value::as_object)
-                    .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                    .unwrap_or_default();
+                    .map_or_else(BTreeMap::new, |m| {
+                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                    });
                 ArazzoComponentsObject {
                     inputs,
                     parameters: BTreeMap::new(),

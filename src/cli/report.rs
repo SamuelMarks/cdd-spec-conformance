@@ -79,7 +79,7 @@ pub(crate) fn run_report_filtered(
                 "score": score,
             }));
         }
-        let mut out = crate::error::to_pretty_json(&scores, "report").unwrap_or_default();
+        let mut out = crate::error::to_pretty_json(&scores, "report");
         let _ = writeln!(out);
         return Ok(out);
     }

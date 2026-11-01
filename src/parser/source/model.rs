@@ -148,13 +148,31 @@ impl ParsedSourceBundle {
     ///
     /// Returns `ConformanceError::MissingSourceSymbol` if any expected struct, field, function, or
     /// argument is missing from the parsed source signatures.
-    #[allow(clippy::too_many_lines)]
     pub fn verify_against_openapi(
         &self,
         openapi_doc: &serde_json::Value,
         fallback_lang: &LanguageId,
     ) -> Result<(), ConformanceError> {
         let lang = self.language.as_ref().unwrap_or(fallback_lang);
+        self.verify_openapi_schemas(openapi_doc, lang)?;
+        self.verify_openapi_operations(openapi_doc, lang)
+    }
+
+    /// Verifies that all `components.schemas` or `definitions` models and their properties exist in `self`.
+    ///
+    /// # Arguments
+    ///
+    /// * `openapi_doc` - Parsed `OpenAPI` / Swagger JSON document.
+    /// * `lang` - Language identifier for error attribution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::MissingSourceSymbol` if any schema struct or property field is missing.
+    fn verify_openapi_schemas(
+        &self,
+        openapi_doc: &serde_json::Value,
+        lang: &LanguageId,
+    ) -> Result<(), ConformanceError> {
         let struct_map: BTreeMap<String, &ParsedStructOrClass> = self
             .structs
             .iter()
@@ -200,7 +218,24 @@ impl ParsedSourceBundle {
                 }
             }
         }
+        Ok(())
+    }
 
+    /// Verifies that all `paths` operations (`operationId`) and their parameters exist in `self`.
+    ///
+    /// # Arguments
+    ///
+    /// * `openapi_doc` - Parsed `OpenAPI` / Swagger JSON document.
+    /// * `lang` - Language identifier for error attribution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConformanceError::MissingSourceSymbol` if any operation function or parameter argument is missing.
+    fn verify_openapi_operations(
+        &self,
+        openapi_doc: &serde_json::Value,
+        lang: &LanguageId,
+    ) -> Result<(), ConformanceError> {
         let func_map: BTreeMap<String, &ParsedFunction> = self
             .all_functions()
             .into_iter()
@@ -338,8 +373,7 @@ impl ParsedSourceBundle {
                 .get("inputs")
                 .and_then(|i| i.get("properties"))
                 .and_then(serde_json::Value::as_object)
-                .map(|m| m.keys().collect())
-                .unwrap_or_default();
+                .map_or_else(Vec::new, |m| m.keys().collect());
 
             if let Some(parsed_fn) = func_map.get(&norm_wf) {
                 let arg_names: BTreeSet<String> = parsed_fn
@@ -479,7 +513,6 @@ impl ParsedSourceBundle {
     ///
     /// Reconstructed `serde_json::Value` reflecting the symbols extracted into `self`.
     #[must_use]
-    #[allow(for_loops_over_fallibles)]
     pub fn reconstruct_openapi_doc(&self, template_doc: &serde_json::Value) -> serde_json::Value {
         let mut out = template_doc.clone();
         let struct_map: BTreeMap<String, &ParsedStructOrClass> = self
@@ -501,57 +534,61 @@ impl ParsedSourceBundle {
             out.get_mut("definitions")
                 .and_then(serde_json::Value::as_object_mut)
         };
-        for schemas in schemas_opt {
+        let _ = schemas_opt.map(|schemas| {
             schemas.retain(|schema_name, schema_val| {
                 let st_opt = struct_map.get(&normalize_ident(schema_name)).copied();
                 let field_names: BTreeSet<String> = st_opt
                     .into_iter()
                     .flat_map(|st| st.fields.iter().map(|f| normalize_ident(&f.name)))
                     .collect();
-                for props in schema_val
+                let _ = schema_val
                     .get_mut("properties")
                     .and_then(serde_json::Value::as_object_mut)
-                {
-                    props.retain(|prop_name, _| field_names.contains(&normalize_ident(prop_name)));
-                }
+                    .map(|props| {
+                        props.retain(|prop_name, _| {
+                            field_names.contains(&normalize_ident(prop_name))
+                        });
+                    });
                 st_opt.is_some()
             });
-        }
+        });
 
-        for paths in out
+        let _ = out
             .get_mut("paths")
             .and_then(serde_json::Value::as_object_mut)
-        {
-            for path_item in paths.values_mut() {
-                for ops in path_item.as_object_mut() {
-                    ops.retain(|_verb, op_val| {
-                        let Some(op_id) = op_val
-                            .get("operationId")
-                            .and_then(serde_json::Value::as_str)
-                        else {
-                            return true;
-                        };
-                        let fn_opt = func_map.get(&normalize_ident(op_id)).copied();
-                        let arg_names: BTreeSet<String> = fn_opt
-                            .into_iter()
-                            .flat_map(|f| f.args.iter().map(|a| normalize_ident(&a.name)))
-                            .collect();
-                        for params in op_val
-                            .get_mut("parameters")
-                            .and_then(serde_json::Value::as_array_mut)
-                        {
-                            params.retain(|p| {
-                                p.get("name")
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_none_or(|n| arg_names.contains(&normalize_ident(n)))
-                            });
-                        }
-                        fn_opt.is_some()
+            .map(|paths| {
+                for path_item in paths.values_mut() {
+                    let _ = path_item.as_object_mut().map(|ops| {
+                        ops.retain(|_verb, op_val| {
+                            let Some(op_id) = op_val
+                                .get("operationId")
+                                .and_then(serde_json::Value::as_str)
+                            else {
+                                return true;
+                            };
+                            let fn_opt = func_map.get(&normalize_ident(op_id)).copied();
+                            let arg_names: BTreeSet<String> = fn_opt
+                                .into_iter()
+                                .flat_map(|f| f.args.iter().map(|a| normalize_ident(&a.name)))
+                                .collect();
+                            let _ = op_val
+                                .get_mut("parameters")
+                                .and_then(serde_json::Value::as_array_mut)
+                                .map(|params| {
+                                    params.retain(|p| {
+                                        p.get("name")
+                                            .and_then(serde_json::Value::as_str)
+                                            .is_none_or(|n| arg_names.contains(&normalize_ident(n)))
+                                    });
+                                });
+                            fn_opt.is_some()
+                        });
                     });
                 }
-            }
-            paths.retain(|_, path_item| path_item.as_object().is_some_and(|ops| !ops.is_empty()));
-        }
+                paths.retain(|_, path_item| {
+                    path_item.as_object().is_some_and(|ops| !ops.is_empty())
+                });
+            });
 
         out
     }
@@ -568,13 +605,12 @@ impl ParsedSourceBundle {
     ///
     /// Reconstructed `serde_json::Value` reflecting the symbols extracted into `self`.
     #[must_use]
-    #[allow(for_loops_over_fallibles)]
     pub fn reconstruct_arazzo_doc(&self, template_doc: &serde_json::Value) -> serde_json::Value {
         let mut out = template_doc.clone();
         let lang = self.language.as_ref().unwrap_or(&LanguageId::Rust);
-        for ast in ArazzoDocument::from_json_value(template_doc, lang) {
+        let _ = ArazzoDocument::from_json_value(template_doc, lang).map(|ast| {
             out["arazzo"] = serde_json::Value::String(ast.arazzo.as_str().to_string());
-        }
+        });
 
         let struct_map: BTreeMap<String, &ParsedStructOrClass> = self
             .structs
@@ -587,68 +623,73 @@ impl ParsedSourceBundle {
             .map(|f| (normalize_ident(&f.name), f))
             .collect();
 
-        for inputs in out
+        let _ = out
             .get_mut("components")
             .and_then(|c| c.get_mut("inputs"))
             .and_then(serde_json::Value::as_object_mut)
-        {
-            inputs.retain(|schema_name, schema_val| {
-                let st_opt = struct_map.get(&normalize_ident(schema_name)).copied();
-                let field_names: BTreeSet<String> = st_opt
-                    .into_iter()
-                    .flat_map(|st| st.fields.iter().map(|f| normalize_ident(&f.name)))
-                    .collect();
-                for props in schema_val
-                    .get_mut("properties")
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    props.retain(|prop_name, _| field_names.contains(&normalize_ident(prop_name)));
-                }
-                st_opt.is_some()
+            .map(|inputs| {
+                inputs.retain(|schema_name, schema_val| {
+                    let st_opt = struct_map.get(&normalize_ident(schema_name)).copied();
+                    let field_names: BTreeSet<String> = st_opt
+                        .into_iter()
+                        .flat_map(|st| st.fields.iter().map(|f| normalize_ident(&f.name)))
+                        .collect();
+                    let _ = schema_val
+                        .get_mut("properties")
+                        .and_then(serde_json::Value::as_object_mut)
+                        .map(|props| {
+                            props.retain(|prop_name, _| {
+                                field_names.contains(&normalize_ident(prop_name))
+                            });
+                        });
+                    st_opt.is_some()
+                });
             });
-        }
 
-        for workflows in out
+        let _ = out
             .get_mut("workflows")
             .and_then(serde_json::Value::as_array_mut)
-        {
-            workflows.retain_mut(|wf_val| {
-                let Some(wf_id) = wf_val
-                    .get("workflowId")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-                else {
-                    return false;
-                };
-                let norm_wf = normalize_ident(&wf_id);
-                let allowed_props: Option<BTreeSet<String>> = func_map.get(&norm_wf).map_or_else(
-                    || {
-                        struct_map
-                            .get(&norm_wf)
-                            .map(|st| st.fields.iter().map(|f| normalize_ident(&f.name)).collect())
-                    },
-                    |parsed_fn| {
-                        Some(
-                            parsed_fn
-                                .args
-                                .iter()
-                                .map(|a| normalize_ident(&a.name))
-                                .collect(),
-                        )
-                    },
-                );
-                let flat_allowed: BTreeSet<String> =
-                    allowed_props.iter().flatten().cloned().collect();
-                for props in wf_val
-                    .get_mut("inputs")
-                    .and_then(|i| i.get_mut("properties"))
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    props.retain(|prop_name, _| flat_allowed.contains(&normalize_ident(prop_name)));
-                }
-                allowed_props.is_some()
+            .map(|workflows| {
+                workflows.retain_mut(|wf_val| {
+                    let Some(wf_id) = wf_val
+                        .get("workflowId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                    else {
+                        return false;
+                    };
+                    let norm_wf = normalize_ident(&wf_id);
+                    let allowed_props: Option<BTreeSet<String>> =
+                        func_map.get(&norm_wf).map_or_else(
+                            || {
+                                struct_map.get(&norm_wf).map(|st| {
+                                    st.fields.iter().map(|f| normalize_ident(&f.name)).collect()
+                                })
+                            },
+                            |parsed_fn| {
+                                Some(
+                                    parsed_fn
+                                        .args
+                                        .iter()
+                                        .map(|a| normalize_ident(&a.name))
+                                        .collect(),
+                                )
+                            },
+                        );
+                    let flat_allowed: BTreeSet<String> =
+                        allowed_props.iter().flatten().cloned().collect();
+                    let _ = wf_val
+                        .get_mut("inputs")
+                        .and_then(|i| i.get_mut("properties"))
+                        .and_then(serde_json::Value::as_object_mut)
+                        .map(|props| {
+                            props.retain(|prop_name, _| {
+                                flat_allowed.contains(&normalize_ident(prop_name))
+                            });
+                        });
+                    allowed_props.is_some()
+                });
             });
-        }
 
         out
     }
