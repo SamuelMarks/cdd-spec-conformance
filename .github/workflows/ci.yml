@@ -1056,8 +1056,4 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            cdd-spec-conformance/release-assets/*.tar.gz
-            cdd-spec-conformance/release-assets/*.zip
-            cdd-spec-conformance/release-assets/cdd-conformance-*
-            cdd-spec-conformance/release-assets/*.sha256
-            cdd-spec-conformance/release-assets/SHA256SUMS.txt
+            cdd-spec-conformance/release-assets/*

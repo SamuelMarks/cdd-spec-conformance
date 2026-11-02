@@ -899,6 +899,8 @@ toolchain:
 
         let ignored_dir = base.join("cdd-spec-conformance");
         let _ = std::fs::create_dir_all(&ignored_dir);
+        let harness_dir = base.join("cdd-openapi-test-harness");
+        let _ = std::fs::create_dir_all(&harness_dir);
         let non_cdd = base.join("other-dir");
         let _ = std::fs::create_dir_all(&non_cdd);
         let file_entry = base.join("some-file.txt");

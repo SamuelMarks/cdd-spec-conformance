@@ -1334,6 +1334,7 @@ def broken_def(
         let _ = std::fs::create_dir_all(test_filter_dir.join("src"));
         let _ = std::fs::create_dir_all(test_filter_dir.join("tests"));
         let _ = std::fs::create_dir_all(test_filter_dir.join("CMakeFiles"));
+        let _ = std::fs::create_dir_all(test_filter_dir.join(".hidden"));
         let _ = std::fs::write(
             test_filter_dir.join("src").join("lib.rs"),
             b"/// Lib.\npub fn lib_fn() {}\n",
@@ -1525,5 +1526,97 @@ mod trailing_tests {
             parse_source_str(cfg_test_rs, Path::new("cfg.rs"), &LanguageId::Rust, None);
         assert_eq!(cfg_bundle.functions.len(), 1);
         assert_eq!(cfg_bundle.functions[0].name, "after_cfg_test");
+    }
+
+    #[test]
+    fn test_comment_tag_and_lexer_branch_independence() {
+        let tags = extract_doc_tags(
+            "@param $direct Direct PHP param\n\n@param empty_first\nContinued description\n\n* colon_arg: Colon bullet\n\n* non-ident! - ignored bullet",
+        );
+        assert_eq!(
+            tags.get("direct").map(String::as_str),
+            Some("Direct PHP param")
+        );
+        assert_eq!(
+            tags.get("emptyfirst").map(String::as_str),
+            Some("Continued description")
+        );
+        assert_eq!(
+            tags.get("colonarg").map(String::as_str),
+            Some("Colon bullet")
+        );
+
+        let mut blank_arg = [ParsedArg {
+            name: "_".to_string(),
+            type_annotation: None,
+            doc_comment: None,
+            line: 1,
+        }];
+        crate::parser::source::comments::attach_arg_docs(&mut blank_arg, Some("Some function doc"));
+        assert!(blank_arg[0].doc_comment.is_none());
+
+        let (code_bs, cmt_bs) =
+            split_code_and_inline_comment(r#"char q = '"'; int x = a \ b; // trailing"#);
+        assert!(code_bs.contains('\\'));
+        assert_eq!(cmt_bs.as_deref(), Some("trailing"));
+        assert_eq!(
+            crate::parser::source::lexer_helpers::count_parens_ignoring_strings(
+                r#"foo('"') \ bar"#
+            ),
+            (1, 0)
+        );
+        let mut bd = 0;
+        crate::parser::source::lexer_helpers::update_brace_depth_ignoring_strings(
+            r#"{ '"' \ }"#,
+            &mut bd,
+        );
+        assert_eq!(bd, 0);
+        assert!(parse_c_like_function_header("int *()").is_none());
+
+        let collapsed_comments = crate::parser::source::lexer_helpers::collapse_multiline_fn_headers(
+            "fn multi(\n    /* c1 */\n    * c2\n    # c3\n    a: i32\n) {}\nif (\n    true\n) {}\nint x = foo(\n    1\n);\nobj.foo(\n    1\n);\n",
+        );
+        assert!(collapsed_comments.contains("fn multi( a: i32 ) {}"));
+
+        let c_extra = "struct ForwardOnly;\ntypedef int my_int_t;\n/** Doc. */\nint body_fn(void) {\n    int local = 1;\n    return local;\n}\n";
+        let c_extra_bundle = parse_source_str(c_extra, Path::new("extra.c"), &LanguageId::C, None);
+        assert_eq!(c_extra_bundle.functions.len(), 1);
+
+        let sh_extra = "# Doc\nfoo()\n{\n    echo hi\n}\n";
+        let sh_extra_bundle =
+            parse_source_str(sh_extra, Path::new("extra.sh"), &LanguageId::Sh, None);
+        assert_eq!(sh_extra_bundle.functions.len(), 0);
+
+        let go_extra = "type PetID int64\n";
+        let go_extra_bundle =
+            parse_source_str(go_extra, Path::new("extra.go"), &LanguageId::Go, None);
+        assert_eq!(go_extra_bundle.structs.len(), 0);
+
+        let csharp_extra = "/// Box.\npublic class Box {\n    /// Count.\n    public int Count = 0;\n    broken(\n    return 0;\n}\n";
+        let csharp_extra_bundle =
+            parse_source_str(csharp_extra, Path::new("Box.cs"), &LanguageId::CSharp, None);
+        assert_eq!(csharp_extra_bundle.structs.len(), 1);
+        assert_eq!(csharp_extra_bundle.structs[0].fields.len(), 1);
+
+        let kt_extra = "@Serializable\n/** Doc. */\nclass Box {\n    /** A. */\n    private val a: Int = 1\n    /** B. */\n    public var b: String = \"\"\n}\n";
+        let kt_extra_bundle =
+            parse_source_str(kt_extra, Path::new("Box.kt"), &LanguageId::Kotlin, None);
+        assert_eq!(kt_extra_bundle.structs.len(), 1);
+        assert_eq!(kt_extra_bundle.structs[0].fields.len(), 2);
+
+        let rs_extra = "impl Pet\n{\n}\n";
+        let rs_extra_bundle =
+            parse_source_str(rs_extra, Path::new("extra.rs"), &LanguageId::Rust, None);
+        assert_eq!(rs_extra_bundle.structs.len(), 0);
+
+        let swift_extra = "/// Box.\nstruct Box {\n    /// Tag.\n    var tag: String\n    /// Helper.\n    func helper() {\n        if true {\n        }\n    }\n}\n";
+        let swift_extra_bundle = parse_source_str(
+            swift_extra,
+            Path::new("Box.swift"),
+            &LanguageId::Swift,
+            None,
+        );
+        assert_eq!(swift_extra_bundle.structs.len(), 1);
+        assert_eq!(swift_extra_bundle.structs[0].fields.len(), 1);
     }
 }
